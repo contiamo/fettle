@@ -329,6 +329,7 @@ func analyzeOne(ctx context.Context, rp *run.Path, spec agent.Spec, promptBody, 
 
 	stageSpec := spec
 	stageSpec.AddDirs = []string{rp.RawDir()}
+	stageSpec.Env = []string{"FETTLE_RUN=" + rp.Dir()}
 
 	res, err := agent.Run(ctx, stageSpec, prompt)
 	if res != nil {

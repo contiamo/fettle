@@ -32,5 +32,6 @@ func runCodex(ctx context.Context, spec Spec, prompt string) (*Result, error) {
 	}
 	cmd := exec.CommandContext(ctx, "codex", args...)
 	cmd.Dir = spec.WorkDir
+	cmd.Env = buildEnv(spec)
 	return runCmd(ctx, cmd, prompt)
 }

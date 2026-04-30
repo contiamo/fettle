@@ -11,7 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -24,6 +26,7 @@ type Spec struct {
 	WorkDir string        // process CWD (typically the target repo root)
 	AddDirs []string      // additional dirs the agent may write to (codex sandbox)
 	Timeout time.Duration // per-invocation timeout; 0 = no override
+	Env     []string      // extra "KEY=VALUE" entries; appended after os.Environ() so they win on key conflict
 }
 
 // Result captures the raw outcome of one agent invocation.
@@ -76,3 +79,18 @@ func runCmd(ctx context.Context, cmd *exec.Cmd, stdinPrompt string) (*Result, er
 // nilReader is an explicit empty stdin so CLI prompts that read from stdin
 // don't block forever waiting on the parent's terminal.
 var nilReader io.Reader = strings.NewReader("")
+
+// buildEnv constructs the env for an agent subprocess: os.Environ() with
+// PATH prepended by the running fettle binary's directory (so the agent
+// can shell out to `fettle finding add` and find this exact build), plus
+// spec.Env appended so caller-supplied vars win on key conflict.
+func buildEnv(spec Spec) []string {
+	env := os.Environ()
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		existing := os.Getenv("PATH")
+		env = append(env, "PATH="+dir+string(os.PathListSeparator)+existing)
+	}
+	env = append(env, spec.Env...)
+	return env
+}

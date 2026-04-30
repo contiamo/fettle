@@ -16,7 +16,7 @@ func runClaude(ctx context.Context, spec Spec, prompt string) (*Result, error) {
 	args := []string{
 		"-p", prompt,
 		"--dangerously-skip-permissions",
-		"--allowed-tools", "Read,Grep,Glob,Write",
+		"--allowed-tools", "Read,Grep,Glob,Write,Bash",
 		"--output-format", "json",
 	}
 	if spec.Model != "" {
@@ -24,5 +24,6 @@ func runClaude(ctx context.Context, spec Spec, prompt string) (*Result, error) {
 	}
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = spec.WorkDir
+	cmd.Env = buildEnv(spec)
 	return runCmd(ctx, cmd, "")
 }
