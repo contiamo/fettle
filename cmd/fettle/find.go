@@ -294,6 +294,8 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 		Effort:  findFlags.effort,
 		WorkDir: targetRepo,
 		Timeout: findFlags.timeout,
+		Command: cfg.Agent.Command,
+		Args:    cfg.Agent.Args,
 	}
 
 	promptBody, err := os.ReadFile(filepath.Join(projectDir, cfg.Instructions.Find))

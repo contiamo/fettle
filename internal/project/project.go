@@ -38,9 +38,19 @@ type Config struct {
 }
 
 // AgentRef names a default agent + model for stages that don't override.
+//
+// For built-in agents (claude, codex), set Name; fettle handles the CLI
+// invocation. For custom setups — different binaries, custom flags,
+// running tests via the agent — set Command (and optionally Args) to
+// point at a script. fettle then pipes the prompt to that script's
+// stdin and inherits FETTLE_RUN / FETTLE_AGENT env. When Command is
+// set, Name is informational (used for the per-finding created_by
+// stamp) and Model is unused unless the script reads it from env.
 type AgentRef struct {
-	Name  string `json:"name"`
-	Model string `json:"model,omitempty"`
+	Name    string   `json:"name,omitempty"`
+	Model   string   `json:"model,omitempty"`
+	Command string   `json:"command,omitempty"`
+	Args    []string `json:"args,omitempty"`
 }
 
 // Instructions points at the editable prompt templates, relative to the

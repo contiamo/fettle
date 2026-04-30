@@ -19,14 +19,20 @@ import (
 )
 
 // Spec identifies which agent to invoke and how.
+//
+// Dispatch order: if Command is set, Run executes that as a custom
+// script (stdin = prompt). Otherwise it dispatches by Name to the
+// built-in claude or codex implementations.
 type Spec struct {
-	Name    string        // "claude" | "codex"
+	Name    string        // "claude" | "codex" (built-in) — also used for created_by stamping when Command is set
 	Model   string        // model alias or id; empty uses the CLI's default
-	Effort  string        // codex reasoning effort (low|medium|high|xhigh|max); ignored for other agents
+	Effort  string        // codex reasoning effort (low|medium|high|xhigh|max); ignored elsewhere
 	WorkDir string        // process CWD (typically the target repo root)
-	AddDirs []string      // additional dirs the agent may write to (codex sandbox)
+	AddDirs []string      // additional dirs the agent may write to (codex sandbox; ignored for custom commands)
 	Timeout time.Duration // per-invocation timeout; 0 = no override
 	Env     []string      // extra "KEY=VALUE" entries; appended after os.Environ() so they win on key conflict
+	Command string        // optional path to a custom agent script; takes precedence over Name when set
+	Args    []string      // optional args to pass to Command before fettle's own additions
 }
 
 // Result captures the raw outcome of one agent invocation.
@@ -35,15 +41,18 @@ type Result struct {
 	Duration time.Duration // wall-clock
 }
 
-// Run invokes the named agent CLI with the given prompt. Variable
-// substitution (TARGET_FILE, OUTPUT_PATH, etc.) must already be done by
-// the caller. Output is always returned, even on error, so the harness
-// can persist the raw log regardless of outcome.
+// Run invokes the agent with the given prompt. The caller has already
+// composed the prompt (template substitution, frame, etc.). Output is
+// always returned, even on error, so the harness can persist the raw
+// log regardless of outcome.
 func Run(ctx context.Context, spec Spec, prompt string) (*Result, error) {
 	if spec.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, spec.Timeout)
 		defer cancel()
+	}
+	if spec.Command != "" {
+		return runCustom(ctx, spec, prompt)
 	}
 	switch spec.Name {
 	case "claude":
@@ -51,7 +60,7 @@ func Run(ctx context.Context, spec Spec, prompt string) (*Result, error) {
 	case "codex":
 		return runCodex(ctx, spec, prompt)
 	default:
-		return nil, fmt.Errorf("unknown agent %q (supported: claude, codex)", spec.Name)
+		return nil, fmt.Errorf("unknown agent %q (supported: claude, codex; or set agent.command for a custom script)", spec.Name)
 	}
 }
 
