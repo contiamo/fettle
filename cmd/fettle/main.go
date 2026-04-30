@@ -31,9 +31,19 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&rootFlags.dir, "dir", "", "fettle project directory (default: current directory)")
 }
 
+// exitCoder is implemented by errors that want a specific process exit
+// code. Used by `fettle finding add` to distinguish validation (1) from
+// internal failures (2).
+type exitCoder interface {
+	ExitCode() int
+}
+
 func main() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "fettle: "+err.Error())
+		if ec, ok := err.(exitCoder); ok {
+			os.Exit(ec.ExitCode())
+		}
 		os.Exit(1)
 	}
 }
