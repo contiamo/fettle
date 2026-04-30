@@ -37,25 +37,10 @@ type Config struct {
 	Instructions  Instructions `json:"instructions"`
 }
 
-// AgentRef names a default agent + model for stages that don't override.
-//
-// For built-in agents (claude, codex), set Name; fettle handles the CLI
-// invocation. For custom setups — different binaries, custom flags,
-// running tests via the agent — set Script to point at an executable.
-// fettle pipes the prompt to that script's stdin and exports the
-// following env vars (which the script can read and pass through to
-// whatever it shells out to):
-//
-//   FETTLE_RUN     absolute path to the active run folder
-//   FETTLE_AGENT   the configured agent name (used as the source label
-//                  on findings; the script can also use it to dispatch)
-//   FETTLE_MODEL   the configured model, when set
-//   FETTLE_EFFORT  the configured reasoning effort, when set
-//
-// The script gets no fettle-supplied positional arguments; bake any
-// flags you need into a wrapper. When Script is set, Name is the
-// source label, and Model/Effort are informational unless the wrapper
-// reads them from env and forwards.
+// AgentRef points at the agent fettle invokes for a stage. Set Name to
+// "claude" or "codex" for built-in dispatch, or set Script to a path
+// for a custom wrapper (see internal/agent.runCustom for the env
+// contract scripts can rely on).
 type AgentRef struct {
 	Name   string `json:"name,omitempty"`
 	Model  string `json:"model,omitempty"`
