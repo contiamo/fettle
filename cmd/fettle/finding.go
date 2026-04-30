@@ -12,7 +12,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const fettleRunEnv = "FETTLE_RUN"
+const (
+	fettleRunEnv   = "FETTLE_RUN"
+	fettleAgentEnv = "FETTLE_AGENT"
+)
 
 // findingCmd is the parent of `fettle finding ...` subcommands.
 var findingCmd = &cobra.Command{
@@ -111,6 +114,7 @@ func runFindingAdd(cmd *cobra.Command, args []string) error {
 		references = []schema.Reference{}
 	}
 
+	createdBy := os.Getenv(fettleAgentEnv)
 	finding := schema.Finding{
 		ID:          schema.NewFindingID(),
 		File:        findingAddFlags.file,
@@ -121,10 +125,8 @@ func runFindingAdd(cmd *cobra.Command, args []string) error {
 		Severity:    severity,
 		Labels:      labels,
 		References:  references,
+		CreatedBy:   createdBy,
 		CreatedAt:   time.Now().UTC(),
-		// CreatedBy is not set here — the harness records agent identity
-		// in run.json's stages.find entry, and the per-finding field is
-		// less useful than per-stage identity. Keep empty for now.
 	}
 	if err := rp.AppendFinding(finding); err != nil {
 		return internalError(fmt.Errorf("append finding: %w", err))

@@ -16,7 +16,7 @@ func runClaude(ctx context.Context, spec Spec, prompt string) (*Result, error) {
 	args := []string{
 		"-p", prompt,
 		"--dangerously-skip-permissions",
-		"--allowed-tools", "Read,Grep,Glob,Write,Bash",
+		"--allowed-tools", "Read,Grep,Glob,Bash",
 		"--output-format", "json",
 	}
 	if spec.Model != "" {

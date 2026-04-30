@@ -139,6 +139,39 @@ func (p *Path) AppendFileStatus(s schema.FileStatus) error {
 	return appendJSONL(filepath.Join(p.dir, "files.jsonl"), s)
 }
 
+// CountFindingsForFile scans findings.jsonl and returns how many rows
+// have file == f. Used by the find harness to derive a per-file ledger
+// row from the delta of "before vs after the agent ran". Tolerates
+// malformed lines (skips them) so a partial-write under SIGKILL doesn't
+// poison the count.
+func (p *Path) CountFindingsForFile(f string) (int, error) {
+	fh, err := os.Open(filepath.Join(p.dir, "findings.jsonl"))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	defer fh.Close()
+
+	sc := bufio.NewScanner(fh)
+	sc.Buffer(make([]byte, 1<<16), 1<<20)
+	var row struct {
+		File string `json:"file"`
+	}
+	count := 0
+	for sc.Scan() {
+		row.File = ""
+		if err := json.Unmarshal(sc.Bytes(), &row); err != nil {
+			continue
+		}
+		if row.File == f {
+			count++
+		}
+	}
+	return count, sc.Err()
+}
+
 // LoadDoneFiles returns the set of repo-relative paths whose latest entry
 // in files.jsonl is `ok` or `empty`. `error` rows are excluded so they
 // retry on resume.

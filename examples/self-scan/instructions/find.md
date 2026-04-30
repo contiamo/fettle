@@ -6,7 +6,6 @@ code smells. Be specific; skip vague advice.
 ## Inputs (substituted by fettle)
 
 - `TARGET_FILE` — absolute path to the .go file under analysis
-- `OUTPUT_PATH` — write findings here, one JSON object per line (may be empty)
 - `REPO_ROOT` — absolute path to the repo root
 
 ## Method
@@ -14,12 +13,14 @@ code smells. Be specific; skip vague advice.
 1. Read `TARGET_FILE` fully.
 2. For each candidate finding, decide whether it meets the bar in the
    "What to flag" section below. Skip noise.
-3. Write findings as JSONL to `OUTPUT_PATH`. Empty file is a valid
-   "nothing to report."
+3. Record each finding by running `fettle finding add` (see "Recording
+   findings" below). Do not write anything to disk yourself; do not
+   print findings to stdout. The CLI handles persistence.
+4. When done, exit. fettle reads findings.jsonl directly.
 
 ## What to flag
 
-Flag concrete, evidence-backed instances of:
+Concrete, evidence-backed instances of:
 
 - **Modern stdlib gaps.** `sort.Slice` where `slices.SortFunc` fits;
   manual loops where `slices.Contains`/`slices.Index` would do; manual
@@ -56,41 +57,54 @@ Flag concrete, evidence-backed instances of:
 - Imagined future-proofing.
 - Generated files (skip with zero findings).
 
-## Output schema (one JSON object per line)
+## Recording findings
 
-```json
-{
-  "file": "<repo-relative path>",
-  "line": 42,
-  "title": "<short imperative title, no trailing period, ≤80 chars>",
-  "description": "<2-5 sentences: what's wrong and where>",
-  "suggestion": "<concrete fix in 1-3 sentences>",
-  "severity": "low" | "medium" | "high",
-  "labels": ["category:<one-word category>"],
-  "references": [
-    {"file": "internal/foo/bar.go", "line": 12},
-    {"file": "internal/baz/qux.go"}
-  ]
-}
+For each finding, run a single shell command:
+
+```bash
+fettle finding add \
+  --file 'internal/foo/bar.go' \
+  --line 42 \
+  --title 'Replace sort.Strings with slices.Sort' \
+  --description '...' \
+  --suggestion '...' \
+  --severity medium \
+  --label 'category:convention' \
+  --label 'confidence:high' \
+  --reference 'internal/baz/qux.go:33'
 ```
 
-Use `severity`:
-- `high` — bug, swallowed error with concrete impact, unsafe assumption
-- `medium` — solid improvement; idiomatic gap with material reader cost
-- `low` — nice-to-have
+**Required**: `--file`, `--line`, `--title`, `--description`,
+`--suggestion`. Use repo-relative paths for `--file`.
 
-For `labels`, always include at least one `category:<word>` tag from
-this set: `convention`, `error-handling`, `logging`, `magic-literal`,
-`smell`, `context`. Add others as you see fit (`severity:high`,
-`confidence:high`, etc.).
+**Optional**: `--severity` (`low` / `medium` / `high`), `--label` (any
+number of `prefix:value` strings — repeatable), `--reference` (any
+number of `PATH` or `PATH:LINE` strings — repeatable, used for grouping).
 
-For `references`, list any *other* code locations the issue points at —
-e.g. duplicate sites of the same pattern, related callers. Each entry
-**must be a JSON object** with a `file` field (repo-relative path) and
-an optional `line` field (integer). **Never emit references as plain
-strings** like `"path:line"` — strings will fail to parse. Empty array
-`[]` is fine if there are no other locations. fettle uses these for
-grouping; overlap across findings clusters them together.
+**Severity guide**:
+- `high` — bug, swallowed error with concrete impact, unsafe assumption.
+- `medium` — solid improvement; idiomatic gap with material reader cost.
+- `low` — nice-to-have.
+
+**Label convention**: always include at least one `category:<word>` tag
+from `convention`, `error-handling`, `logging`, `magic-literal`,
+`smell`, `context`. Add others freely.
+
+**Shell quoting**:
+- Wrap every string flag in single quotes so shell metacharacters and
+  whitespace pass through unchanged.
+- For literal single quotes inside the value, end the quote, escape the
+  apostrophe, and re-open: `'doesn'\''t'` (which the shell sees as
+  `doesn't`).
+- Multi-line descriptions are fine — newlines inside single quotes are
+  literal.
+
+**Error handling**: if `fettle finding add` exits non-zero, read its
+stderr message and try again with the corrections. Do not silently move
+on. Exit codes:
+- `0` — finding recorded.
+- `1` — validation error (your fault: missing or malformed flag).
+- `2` — internal error (likely fettle itself; surface and stop).
 
 ## Quality bar
 
@@ -98,9 +112,8 @@ grouping; overlap across findings clusters them together.
 - Prefer fewer, higher-quality findings. 0–5 per file is normal.
 - Don't invent issues to fill quota.
 - For trivial files (type-only, generated, tiny wrappers): emit zero
-  findings.
+  findings (record nothing, just exit).
 
 ## When done
 
-Stop. Don't summarize, don't explain, don't ask follow-ups. fettle
-reads `OUTPUT_PATH` directly.
+Stop. Don't summarize, don't explain, don't ask follow-ups.

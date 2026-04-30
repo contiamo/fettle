@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -309,28 +308,31 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 	}, nil
 }
 
-// analyzeOne runs the agent against a single file, parses the resulting
-// JSONL, and appends each finding. Returns a FileStatus for files.jsonl.
+// analyzeOne runs the agent against a single file. The agent writes
+// findings by shelling out to `fettle finding add`, which appends to
+// findings.jsonl under flock(2). The harness derives the per-file
+// ledger row from the count of this file's findings before/after the
+// agent ran.
 func analyzeOne(ctx context.Context, rp *run.Path, spec agent.Spec, promptBody, repoRoot, absFile, relFile string) schema.FileStatus {
 	started := time.Now().UTC()
 	hash := run.FileHash(relFile)
-	outputPath := filepath.Join(rp.RawDir(), hash+".jsonl")
 	logPath := filepath.Join(rp.RawDir(), hash+".log")
-	// Best-effort: clear any stale output from a prior run of this file
-	// before invoking the agent. ENOENT is the expected case on a fresh
-	// run; any other error here will surface when we try to read back.
-	_ = os.Remove(outputPath)
 
 	prompt := buildFindPrompt(promptBody, map[string]string{
 		"TARGET_FILE": absFile,
-		"OUTPUT_PATH": outputPath,
 		"REPO_ROOT":   repoRoot,
 	})
 
 	stageSpec := spec
-	stageSpec.AddDirs = []string{rp.RawDir()}
-	stageSpec.Env = []string{"FETTLE_RUN=" + rp.Dir()}
+	// AddDirs covers codex's sandbox: the spawned `fettle finding add`
+	// subprocess writes findings.jsonl in the run directory.
+	stageSpec.AddDirs = []string{rp.Dir()}
+	stageSpec.Env = []string{
+		"FETTLE_RUN=" + rp.Dir(),
+		"FETTLE_AGENT=" + formatCreatedBy(spec),
+	}
 
+	before, _ := rp.CountFindingsForFile(relFile)
 	res, err := agent.Run(ctx, stageSpec, prompt)
 	if res != nil {
 		// Best-effort log capture — the structured findings live in
@@ -338,35 +340,25 @@ func analyzeOne(ctx context.Context, rp *run.Path, spec agent.Spec, promptBody, 
 		_ = os.WriteFile(logPath, res.Output, 0o644)
 	}
 	ended := time.Now().UTC()
+	after, _ := rp.CountFindingsForFile(relFile)
+	delta := after - before
+
 	if err != nil {
+		// Even if the agent partially appended findings before failing,
+		// status is `error` — resume re-runs the file. Random ids mean
+		// retries surface as additional rows that humans can dismiss in
+		// the UI; we don't try to roll back partial commits.
 		return schema.FileStatus{
 			File: relFile, Status: schema.StatusError, Error: err.Error(),
-			Started: started, Ended: ended,
+			FindingCount: delta, Started: started, Ended: ended,
 		}
 	}
-
-	findings, parseErr := readFindings(outputPath, relFile, started, formatCreatedBy(spec))
-	if parseErr != nil {
-		return schema.FileStatus{
-			File: relFile, Status: schema.StatusError, Error: parseErr.Error(),
-			Started: started, Ended: ended,
-		}
-	}
-	for _, f := range findings {
-		if appendErr := rp.AppendFinding(f); appendErr != nil {
-			return schema.FileStatus{
-				File: relFile, Status: schema.StatusError, Error: "append finding: " + appendErr.Error(),
-				Started: started, Ended: ended,
-			}
-		}
-	}
-
 	status := schema.StatusOK
-	if len(findings) == 0 {
+	if delta == 0 {
 		status = schema.StatusEmpty
 	}
 	return schema.FileStatus{
-		File: relFile, Status: status, FindingCount: len(findings),
+		File: relFile, Status: status, FindingCount: delta,
 		Started: started, Ended: ended,
 	}
 }
@@ -425,61 +417,3 @@ func pendingFiles(absFiles []string, repoRoot string, done map[string]bool) []st
 	return pending
 }
 
-// readFindings parses one agent-written JSONL file and stamps each finding
-// with stable id, source file, and timestamp. The file MUST exist (even
-// if empty) — a missing OUTPUT_PATH means the agent failed to follow the
-// contract and we surface it as an error so coverage isn't silently lost.
-//
-// Bad lines are tolerated: any line that fails to JSON-decode is skipped
-// with a slog warning and the rest of the file is salvaged. Only when
-// every line fails do we return an error, so a single mis-formatted
-// finding doesn't sink the rest of a file's coverage.
-func readFindings(outputPath, sourceFile string, analyzedAt time.Time, createdBy string) ([]schema.Finding, error) {
-	data, err := os.ReadFile(outputPath)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("agent did not write OUTPUT_PATH: %s", outputPath)
-		}
-		return nil, fmt.Errorf("read findings: %w", err)
-	}
-	if len(data) == 0 {
-		return nil, nil
-	}
-	var out []schema.Finding
-	var parseErrs []string
-	for ln, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var f schema.Finding
-		if err := json.Unmarshal([]byte(line), &f); err != nil {
-			parseErrs = append(parseErrs, fmt.Sprintf("line %d: %v", ln+1, err))
-			continue
-		}
-		if f.File == "" {
-			f.File = sourceFile
-		}
-		f.ID = schema.NewFindingID()
-		f.CreatedBy = createdBy
-		f.CreatedAt = analyzedAt
-		if f.Labels == nil {
-			f.Labels = []string{}
-		}
-		if f.References == nil {
-			f.References = []schema.Reference{}
-		}
-		out = append(out, f)
-	}
-	if len(out) == 0 && len(parseErrs) > 0 {
-		return nil, fmt.Errorf("no findings parsed: %s", strings.Join(parseErrs, "; "))
-	}
-	if len(parseErrs) > 0 {
-		slog.Warn("partial parse failures",
-			"file", sourceFile,
-			"salvaged", len(out),
-			"errors", strings.Join(parseErrs, "; "),
-		)
-	}
-	return out, nil
-}
