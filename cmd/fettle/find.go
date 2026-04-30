@@ -83,10 +83,10 @@ func init() {
 	findCmd.Flags().IntVar(&findFlags.limit, "limit", 0, "scan at most N files this invocation (0 = all)")
 	findCmd.Flags().StringSliceVar(&findFlags.include, "include", nil, "include globs (overrides project config; not allowed with --resume)")
 	findCmd.Flags().StringSliceVar(&findFlags.exclude, "exclude", nil, "exclude globs (overrides project config; not allowed with --resume)")
-	findCmd.Flags().StringVar(&findFlags.agent, "agent", "", "agent name override: claude or codex (overrides project config; not allowed with --resume)")
+	findCmd.Flags().StringVar(&findFlags.agent, "agent", "", "select a built-in agent (claude or codex); mutually exclusive with --command")
 	findCmd.Flags().StringVar(&findFlags.model, "model", "", "agent model override (overrides project config; not allowed with --resume)")
-	findCmd.Flags().StringVar(&findFlags.command, "command", "", "custom agent script path; takes precedence over --agent (not allowed with --resume)")
-	findCmd.Flags().StringArrayVar(&findFlags.agentArgs, "agent-arg", nil, "extra arg to pass to --command (repeatable; not allowed with --resume)")
+	findCmd.Flags().StringVar(&findFlags.command, "command", "", "run a custom agent script (path); mutually exclusive with --agent")
+	findCmd.Flags().StringArrayVar(&findFlags.agentArgs, "agent-arg", nil, "extra arg to pass to --command (repeatable; requires --command)")
 	findCmd.Flags().StringVar(&findFlags.effort, "effort", "", "codex reasoning effort; not allowed with --resume")
 	findCmd.Flags().DurationVar(&findFlags.timeout, "timeout", defaultFindTimeout, "per-file agent timeout")
 	rootCmd.AddCommand(findCmd)
@@ -310,29 +310,53 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 		exclude = findFlags.exclude
 	}
 
+	// --agent and --command both pick the agent, so allowing both is
+	// ambiguous. Each does exactly one thing:
+	//   --agent NAME      pick a built-in (claude or codex)
+	//   --command PATH    run a custom script
+	if findFlags.agent != "" && findFlags.command != "" {
+		return nil, fmt.Errorf("--agent and --command are mutually exclusive: --agent picks a built-in (claude|codex), --command runs a custom script")
+	}
+	if findFlags.agent != "" {
+		switch findFlags.agent {
+		case "claude", "codex":
+			// supported
+		default:
+			return nil, fmt.Errorf("--agent must be claude or codex (use --command for custom scripts); got %q", findFlags.agent)
+		}
+	}
+
 	agentName := cfg.Agent.Name
 	agentModel := cfg.Agent.Model
 	agentCommand := cfg.Agent.Command
 	agentArgs := cfg.Agent.Args
 
+	if findFlags.agent != "" {
+		// Built-in dispatch: clear any custom-command config so we
+		// don't accidentally take the runCustom path with a built-in
+		// label.
+		agentName = findFlags.agent
+		agentCommand = ""
+		agentArgs = nil
+	}
 	if findFlags.command != "" {
 		agentCommand = findFlags.command
-		// A CLI --command without explicit --agent shouldn't claim the
-		// config's name (typically "claude"); that would mislead the
-		// manifest and per-finding created_by. Default to "custom"
-		// unless the user explicitly named the agent.
-		if findFlags.agent == "" && cfg.Agent.Command == "" {
+		// Default the label to "custom" unless the user already named
+		// it via cfg (e.g. agent.name = "security-pass" alongside
+		// agent.command in .fettle.json). Mutex above prevents
+		// --agent overriding here.
+		if cfg.Agent.Command == "" {
 			agentName = "custom"
 		}
-	}
-	if findFlags.agent != "" {
-		agentName = findFlags.agent
 	}
 	if findFlags.model != "" {
 		agentModel = findFlags.model
 	}
 	if len(findFlags.agentArgs) > 0 {
 		agentArgs = findFlags.agentArgs
+	}
+	if len(findFlags.agentArgs) > 0 && agentCommand == "" {
+		return nil, fmt.Errorf("--agent-arg requires --command (or agent.command in .fettle.json)")
 	}
 	// Resolve a relative agent command to absolute now so the manifest
 	// records a path that's still valid on resume from a different cwd.
