@@ -1,0 +1,90 @@
+version: "3"
+
+tasks:
+  default:
+    desc: Show available tasks
+    silent: true
+    cmds:
+      - task --list
+
+  setup:
+    desc: Verify the runtime tools fettle expects are on PATH
+    cmds:
+      - task: setup:check
+
+  setup:check:
+    desc: Check for required tools (go + at least one agent CLI)
+    silent: true
+    cmds:
+      - |
+        missing=0
+        check() {
+          if command -v "$1" &>/dev/null; then
+            printf "  ✓ %-12s %s\n" "$1" "$(eval "$2" 2>/dev/null || echo 'found')"
+          else
+            printf "  ✗ %-12s %s\n" "$1" "$3"
+            missing=$((missing + 1))
+          fi
+        }
+        echo "Checking required tools..."
+        echo ""
+        check "go"     "go version | sed 's/go version //'" "https://go.dev/dl/"
+        echo ""
+        echo "At least one agent CLI is required (or set agent.command to a custom script):"
+        echo ""
+        check "claude" "claude --version 2>&1 | head -1" "https://docs.claude.com/claude-code"
+        check "codex"  "codex --version 2>&1 | head -1" "https://github.com/openai/codex"
+        echo ""
+        if [ "$missing" -gt 0 ]; then
+          echo "$missing tool(s) missing — install them or configure agent.command."
+          exit 1
+        fi
+        echo "All checked tools available."
+
+  # ---------------------------------------------------------------------------
+  # Go
+  # ---------------------------------------------------------------------------
+  go:build:
+    desc: Build the fettle binary into bin/
+    cmds:
+      - go build -o bin/fettle ./cmd/fettle
+
+  go:install:
+    desc: Install fettle to GOPATH/bin
+    cmds:
+      - go install ./cmd/fettle
+
+  go:test:
+    desc: Run Go tests
+    cmds:
+      - go test ./...
+
+  go:lint:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  go:check:
+    desc: Build, lint, and test everything
+    cmds:
+      - task: go:build
+      - task: go:lint
+      - task: go:test
+
+  # ---------------------------------------------------------------------------
+  # Dogfooding
+  # ---------------------------------------------------------------------------
+  selfscan:
+    desc: Scan fettle's own Go source via examples/self-scan (extra args via -- ARGS)
+    deps: [go:build]
+    cmds:
+      - bin/fettle --dir examples/self-scan find {{.CLI_ARGS}}
+
+  # ---------------------------------------------------------------------------
+  # Utilities
+  # ---------------------------------------------------------------------------
+  clean:
+    desc: Remove build artifacts and self-scan runs
+    cmds:
+      - rm -rf bin/
+      - rm -rf examples/self-scan/runs/
