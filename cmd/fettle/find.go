@@ -435,7 +435,13 @@ func analyzeOne(ctx context.Context, rp *run.Path, spec agent.Spec, promptBody, 
 	stageSpec.AddDirs = []string{rp.Dir()}
 	stageSpec.Env = []string{
 		"FETTLE_RUN=" + rp.Dir(),
-		"FETTLE_AGENT=" + formatCreatedBy(spec),
+		"FETTLE_AGENT=" + spec.Name,
+	}
+	if spec.Model != "" {
+		stageSpec.Env = append(stageSpec.Env, "FETTLE_MODEL="+spec.Model)
+	}
+	if spec.Effort != "" {
+		stageSpec.Env = append(stageSpec.Env, "FETTLE_EFFORT="+spec.Effort)
 	}
 
 	before, countErr := rp.CountFindingsForFile(relFile)
@@ -484,14 +490,6 @@ func analyzeOne(ctx context.Context, rp *run.Path, spec agent.Spec, promptBody, 
 		File: relFile, Status: status, FindingCount: delta,
 		Started: started, Ended: ended,
 	}
-}
-
-// formatCreatedBy returns "agent:<name>" or "agent:<name>/<model>".
-func formatCreatedBy(spec agent.Spec) string {
-	if spec.Model == "" {
-		return "agent:" + spec.Name
-	}
-	return "agent:" + spec.Name + "/" + spec.Model
 }
 
 // renderFindPrompt fills the embedded find frame template with the

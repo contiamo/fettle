@@ -8,13 +8,18 @@ import (
 
 // runCustom invokes a user-provided agent script. The contract:
 //
-//   - stdin: the fully composed prompt
-//   - env:   FETTLE_RUN, FETTLE_AGENT (and PATH prepended with fettle's
-//            binary dir, so the script can shell out to `fettle finding add`
-//            without further setup)
-//   - cwd:   spec.WorkDir (typically the target repo root)
-//   - exit:  0 on success; non-zero is treated as an agent failure and the
-//            run records status=error for the file
+//   - stdin:  the fully composed prompt
+//   - env:    FETTLE_RUN     absolute path to the active run folder
+//             FETTLE_AGENT   the configured agent name
+//             FETTLE_MODEL   the configured model, when set
+//             FETTLE_EFFORT  the configured reasoning effort, when set
+//             PATH           prepended with fettle's binary dir, so the
+//                            script can `fettle finding add` directly
+//   - cwd:    spec.WorkDir (typically the target repo root)
+//   - args:   none — fettle never adds positional arguments. Bake any
+//             flags you need into a wrapper.
+//   - exit:   0 on success; non-zero is treated as an agent failure and
+//             the run records status=error for the file
 //
 // fettle does not interpret the script's stdout/stderr beyond capturing
 // it for the per-file raw/<hash>.log. The script is responsible for

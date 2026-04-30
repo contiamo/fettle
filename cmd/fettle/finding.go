@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	fettleRunEnv   = "FETTLE_RUN"
-	fettleAgentEnv = "FETTLE_AGENT"
+	fettleRunEnv    = "FETTLE_RUN"
+	fettleAgentEnv  = "FETTLE_AGENT"
+	fettleModelEnv  = "FETTLE_MODEL"
 )
 
 // findingCmd is the parent of `fettle finding ...` subcommands.
@@ -114,7 +115,7 @@ func runFindingAdd(cmd *cobra.Command, args []string) error {
 		references = []schema.Reference{}
 	}
 
-	createdBy := os.Getenv(fettleAgentEnv)
+	createdBy := composeCreatedBy(os.Getenv(fettleAgentEnv), os.Getenv(fettleModelEnv))
 	finding := schema.Finding{
 		ID:          schema.NewFindingID(),
 		File:        findingAddFlags.file,
@@ -135,6 +136,21 @@ func runFindingAdd(cmd *cobra.Command, args []string) error {
 		fmt.Println(finding.ID)
 	}
 	return nil
+}
+
+// composeCreatedBy reassembles the per-finding `created_by` field from
+// the FETTLE_AGENT (name) and FETTLE_MODEL (optional) env vars. Splitting
+// these into two env vars keeps the script-facing surface clean — a
+// custom agent script can read FETTLE_MODEL directly to pass to its
+// underlying CLI without parsing a composite "agent:name/model" string.
+func composeCreatedBy(name, model string) string {
+	if name == "" {
+		return ""
+	}
+	if model == "" {
+		return "agent:" + name
+	}
+	return "agent:" + name + "/" + model
 }
 
 // parseReferences turns each "PATH" or "PATH:LINE" string into a Reference.
