@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -9,11 +10,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"text/template"
 	"time"
 
 	"github.com/contiamo/fettle/internal/agent"
@@ -25,6 +26,24 @@ import (
 )
 
 const defaultFindTimeout = 10 * time.Minute
+
+// findPromptFrame is the harness-owned wrapper around the user's find
+// instructions. It captures the agent contract — variable values, the
+// `fettle finding add` recording protocol, and exit-code handling — so
+// the user's own find.md can stay scoped to "what to look for".
+//
+//go:embed prompts/find.md
+var findPromptFrame string
+
+// findPromptTmpl is the parsed template, computed once at startup.
+var findPromptTmpl = template.Must(template.New("find").Parse(findPromptFrame))
+
+// findPromptVars carries the placeholders the find frame interpolates.
+type findPromptVars struct {
+	TargetFile       string
+	RepoRoot         string
+	UserInstructions string
+}
 
 var findFlags struct {
 	name        string
@@ -318,10 +337,18 @@ func analyzeOne(ctx context.Context, rp *run.Path, spec agent.Spec, promptBody, 
 	hash := run.FileHash(relFile)
 	logPath := filepath.Join(rp.RawDir(), hash+".log")
 
-	prompt := buildFindPrompt(promptBody, map[string]string{
-		"TARGET_FILE": absFile,
-		"REPO_ROOT":   repoRoot,
+	prompt, err := renderFindPrompt(findPromptVars{
+		TargetFile:       absFile,
+		RepoRoot:         repoRoot,
+		UserInstructions: promptBody,
 	})
+	if err != nil {
+		return schema.FileStatus{
+			File: relFile, Status: schema.StatusError,
+			Error: "render find prompt: " + err.Error(),
+			Started: started, Ended: time.Now().UTC(),
+		}
+	}
 
 	stageSpec := spec
 	// AddDirs covers codex's sandbox: the spawned `fettle finding add`
@@ -388,29 +415,14 @@ func formatCreatedBy(spec agent.Spec) string {
 	return "agent:" + spec.Name + "/" + spec.Model
 }
 
-// buildFindPrompt prepends a key=value header so the agent reads the
-// substituted variables at the top of its prompt without us mangling the
-// template body.
-func buildFindPrompt(body string, vars map[string]string) string {
+// renderFindPrompt fills the embedded find frame template with the
+// per-file values the agent needs and the user's instructions verbatim.
+func renderFindPrompt(vars findPromptVars) (string, error) {
 	var b strings.Builder
-	for _, k := range sortedKeys(vars) {
-		b.WriteString(k)
-		b.WriteString("=")
-		b.WriteString(vars[k])
-		b.WriteByte('\n')
+	if err := findPromptTmpl.Execute(&b, vars); err != nil {
+		return "", err
 	}
-	b.WriteByte('\n')
-	b.WriteString(body)
-	return b.String()
-}
-
-func sortedKeys(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	slices.Sort(out)
-	return out
+	return b.String(), nil
 }
 
 func pendingFiles(absFiles []string, repoRoot string, done map[string]bool) []string {

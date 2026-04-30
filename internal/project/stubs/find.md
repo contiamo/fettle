@@ -1,62 +1,40 @@
-# Find — instructions for the agent
+<!--
+  This file is the "what to look for" half of fettle's find-stage prompt.
+  fettle wraps it in a frozen frame that handles variable values, the
+  `fettle finding add` recording protocol, exit-code handling, and output
+  discipline. You don't need to repeat any of that here — just describe
+  the analysis you want.
 
-You are analyzing **one file** for issues. Replace this stub with what
-you actually want fettle to find — convention violations, security
-smells, missing docs, license-header gaps, anything.
+  Replace everything below with your domain.
+-->
 
-## Inputs (substituted by fettle)
+Identify issues in the file under analysis. Replace this paragraph with
+the patterns you actually want fettle to find — convention violations,
+security smells, missing docs, license-header gaps, anything you can
+state in concrete terms.
 
-- `TARGET_FILE` — absolute path to the file under analysis
-- `REPO_ROOT` — absolute path to the target repo root
+Be specific in your criteria; vague advice produces noisy findings.
 
-## Method
+## Severity guidance
 
-1. Read `TARGET_FILE` fully.
-2. For each candidate finding, decide whether it meets your bar.
-   Skip noise.
-3. Record each finding via `fettle finding add` (see below). Do not
-   write anything to disk yourself; do not print findings to stdout.
-4. When done, exit.
+If you tell the agent to use `--severity`, name the scale here. For
+example:
 
-Replace the rest of this section with your domain — the patterns you
-want flagged, what's out of scope, severity guidance, etc.
+- `high` — bug, swallowed error with concrete impact, unsafe assumption
+- `medium` — solid improvement; idiomatic gap with material reader cost
+- `low` — nice-to-have
 
-## Recording findings
+## Labels
 
-For each finding, run a single shell command:
+If you use `--label`, document the conventions here. For example:
 
-```bash
-fettle finding add \
-  --file 'path/relative/to/repo.go' \
-  --line 42 \
-  --title 'short imperative title' \
-  --description '2-5 sentences describing the issue' \
-  --suggestion '1-3 sentences with a concrete fix' \
-  --severity medium \
-  --label 'category:something' \
-  --reference 'other/file.go:12'
-```
+- Always include one `category:<word>` tag from the set you define.
+- Add `confidence:high` / `confidence:low` when uncertain.
 
-**Required**: `--file`, `--line`, `--title`, `--description`,
-`--suggestion`.
+## What NOT to flag
 
-**Optional**: `--severity` (free-form string; you choose the scale),
-`--label` (repeatable, prefix:value convention), `--reference`
-(repeatable, `PATH` or `PATH:LINE` — used for grouping).
+List what's out of scope, so the agent doesn't churn:
 
-**Shell quoting**: wrap every string flag in single quotes so spaces
-and shell metacharacters pass through unchanged. For literal single
-quotes inside the value, end the quote, escape the apostrophe, and
-re-open: `'don'\''t'` (the shell sees `don't`). Newlines inside single
-quotes are literal.
-
-**Error handling**: if `fettle finding add` exits non-zero, read the
-stderr message and try again with corrections. Exit codes:
-- `0` — finding recorded
-- `1` — validation error (your fault: missing or malformed flag)
-- `2` — internal error (likely fettle itself; surface and stop)
-
-## When done
-
-Stop. Don't summarize, don't print findings to stdout, don't ask
-follow-ups. fettle reads findings.jsonl directly.
+- Stylistic preferences not documented here.
+- Imagined future-proofing.
+- Generated files (skip them with zero findings).
