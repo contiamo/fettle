@@ -1,0 +1,21 @@
+{
+  "fettle_version": "0.1.0",
+  "created_at": "2026-04-30T00:00:00Z",
+  "target_repo": "../..",
+  "agent": {
+    "name": "claude"
+  },
+  "include": [
+    "**/*.go"
+  ],
+  "exclude": [
+    "old/**",
+    "examples/**",
+    "**/*_test.go"
+  ],
+  "instructions": {
+    "find": "instructions/find.md",
+    "review": "instructions/review.md",
+    "group": "instructions/group.md"
+  }
+}

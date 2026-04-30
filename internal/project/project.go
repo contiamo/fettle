@@ -111,6 +111,21 @@ func Load(dir string) (Config, error) {
 	return cfg, nil
 }
 
+// ResolveTargetRepo returns the target repo as an absolute path, treating
+// a relative `target_repo` as relative to projectDir. This lets a
+// committed .fettle.json portably reference a target via "../.." (or
+// similar) without baking in machine-specific absolute paths.
+func (c Config) ResolveTargetRepo(projectDir string) (string, error) {
+	if filepath.IsAbs(c.TargetRepo) {
+		return c.TargetRepo, nil
+	}
+	abs, err := filepath.Abs(filepath.Join(projectDir, c.TargetRepo))
+	if err != nil {
+		return "", fmt.Errorf("resolve target_repo %q: %w", c.TargetRepo, err)
+	}
+	return abs, nil
+}
+
 var stubs = map[string]string{
 	"find.md":   findStub,
 	"review.md": reviewStub,

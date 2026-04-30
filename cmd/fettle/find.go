@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -144,7 +145,20 @@ func runFind(cmd *cobra.Command, args []string) error {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			rel, _ := filepath.Rel(in.targetRepo, file)
+			rel, relErr := filepath.Rel(in.targetRepo, file)
+			if relErr != nil {
+				fileLogger := logger.With("file", file, "n", i+1, "total", len(pending))
+				fileLogger.Error("compute repo-relative path", "error", relErr)
+				_ = in.rp.AppendFileStatus(schema.FileStatus{
+					File:    file,
+					Status:  schema.StatusError,
+					Error:   "filepath.Rel: " + relErr.Error(),
+					Started: time.Now().UTC(),
+					Ended:   time.Now().UTC(),
+				})
+				fail.Add(1)
+				return
+			}
 			rel = filepath.ToSlash(rel)
 			fileLogger := logger.With("file", rel, "n", i+1, "total", len(pending))
 			fileLogger.Info("analyzing")
@@ -242,6 +256,10 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 		}
 		return nil, fmt.Errorf("load project: %w", err)
 	}
+	targetRepo, err := cfg.ResolveTargetRepo(projectDir)
+	if err != nil {
+		return nil, err
+	}
 
 	include := cfg.Include
 	if len(findFlags.include) > 0 {
@@ -256,7 +274,7 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 		Name:    cfg.Agent.Name,
 		Model:   cfg.Agent.Model,
 		Effort:  findFlags.effort,
-		WorkDir: cfg.TargetRepo,
+		WorkDir: targetRepo,
 		Timeout: findFlags.timeout,
 	}
 
@@ -267,7 +285,7 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 	rp, err := run.CreateForFind(run.CreateFindOpts{
 		ProjectDir:     projectDir,
 		Slug:           findFlags.name,
-		TargetRepo:     cfg.TargetRepo,
+		TargetRepo:     targetRepo,
 		Include:        include,
 		Exclude:        exclude,
 		FindPrompt:     string(promptBody),
@@ -284,7 +302,7 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 	}
 	return &findInputs{
 		rp:         rp,
-		targetRepo: cfg.TargetRepo,
+		targetRepo: targetRepo,
 		include:    include,
 		exclude:    exclude,
 		spec:       spec,
@@ -298,6 +316,9 @@ func analyzeOne(ctx context.Context, rp *run.Path, spec agent.Spec, promptBody, 
 	hash := run.FileHash(relFile)
 	outputPath := filepath.Join(rp.RawDir(), hash+".jsonl")
 	logPath := filepath.Join(rp.RawDir(), hash+".log")
+	// Best-effort: clear any stale output from a prior run of this file
+	// before invoking the agent. ENOENT is the expected case on a fresh
+	// run; any other error here will surface when we try to read back.
 	_ = os.Remove(outputPath)
 
 	prompt := buildFindPrompt(promptBody, map[string]string{
@@ -311,6 +332,8 @@ func analyzeOne(ctx context.Context, rp *run.Path, spec agent.Spec, promptBody, 
 
 	res, err := agent.Run(ctx, stageSpec, prompt)
 	if res != nil {
+		// Best-effort log capture — the structured findings live in
+		// findings.jsonl; this file is for post-mortem debugging only.
 		_ = os.WriteFile(logPath, res.Output, 0o644)
 	}
 	ended := time.Now().UTC()
@@ -376,11 +399,7 @@ func sortedKeys(m map[string]string) []string {
 	for k := range m {
 		out = append(out, k)
 	}
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j] < out[j-1]; j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
+	slices.Sort(out)
 	return out
 }
 
@@ -389,6 +408,11 @@ func pendingFiles(absFiles []string, repoRoot string, done map[string]bool) []st
 	for _, f := range absFiles {
 		rel, err := filepath.Rel(repoRoot, f)
 		if err != nil {
+			// Path can't be made relative (cross-volume on Windows,
+			// for example). Keep it in the pending list so the
+			// per-file goroutine surfaces the error explicitly via
+			// FileStatus rather than silently dropping coverage.
+			pending = append(pending, f)
 			continue
 		}
 		rel = filepath.ToSlash(rel)
@@ -404,6 +428,11 @@ func pendingFiles(absFiles []string, repoRoot string, done map[string]bool) []st
 // with stable id, source file, and timestamp. The file MUST exist (even
 // if empty) — a missing OUTPUT_PATH means the agent failed to follow the
 // contract and we surface it as an error so coverage isn't silently lost.
+//
+// Bad lines are tolerated: any line that fails to JSON-decode is skipped
+// with a slog warning and the rest of the file is salvaged. Only when
+// every line fails do we return an error, so a single mis-formatted
+// finding doesn't sink the rest of a file's coverage.
 func readFindings(outputPath, sourceFile string, analyzedAt time.Time, createdBy string) ([]schema.Finding, error) {
 	data, err := os.ReadFile(outputPath)
 	if err != nil {
@@ -416,6 +445,7 @@ func readFindings(outputPath, sourceFile string, analyzedAt time.Time, createdBy
 		return nil, nil
 	}
 	var out []schema.Finding
+	var parseErrs []string
 	for ln, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -423,7 +453,8 @@ func readFindings(outputPath, sourceFile string, analyzedAt time.Time, createdBy
 		}
 		var f schema.Finding
 		if err := json.Unmarshal([]byte(line), &f); err != nil {
-			return nil, fmt.Errorf("parse line %d: %w", ln+1, err)
+			parseErrs = append(parseErrs, fmt.Sprintf("line %d: %v", ln+1, err))
+			continue
 		}
 		if f.File == "" {
 			f.File = sourceFile
@@ -438,6 +469,16 @@ func readFindings(outputPath, sourceFile string, analyzedAt time.Time, createdBy
 			f.References = []schema.Reference{}
 		}
 		out = append(out, f)
+	}
+	if len(out) == 0 && len(parseErrs) > 0 {
+		return nil, fmt.Errorf("no findings parsed: %s", strings.Join(parseErrs, "; "))
+	}
+	if len(parseErrs) > 0 {
+		slog.Warn("partial parse failures",
+			"file", sourceFile,
+			"salvaged", len(out),
+			"errors", strings.Join(parseErrs, "; "),
+		)
 	}
 	return out, nil
 }
