@@ -332,7 +332,14 @@ func analyzeOne(ctx context.Context, rp *run.Path, spec agent.Spec, promptBody, 
 		"FETTLE_AGENT=" + formatCreatedBy(spec),
 	}
 
-	before, _ := rp.CountFindingsForFile(relFile)
+	before, countErr := rp.CountFindingsForFile(relFile)
+	if countErr != nil {
+		return schema.FileStatus{
+			File: relFile, Status: schema.StatusError,
+			Error:   "count findings before agent: " + countErr.Error(),
+			Started: started, Ended: time.Now().UTC(),
+		}
+	}
 	res, err := agent.Run(ctx, stageSpec, prompt)
 	if res != nil {
 		// Best-effort log capture — the structured findings live in
@@ -340,7 +347,17 @@ func analyzeOne(ctx context.Context, rp *run.Path, spec agent.Spec, promptBody, 
 		_ = os.WriteFile(logPath, res.Output, 0o644)
 	}
 	ended := time.Now().UTC()
-	after, _ := rp.CountFindingsForFile(relFile)
+	after, countErr := rp.CountFindingsForFile(relFile)
+	if countErr != nil {
+		// findings may have been committed by the agent; we just can't
+		// count. Surface as error so the file retries; random ids mean
+		// the retry produces additional rows that humans dismiss.
+		return schema.FileStatus{
+			File: relFile, Status: schema.StatusError,
+			Error:   "count findings after agent: " + countErr.Error(),
+			Started: started, Ended: ended,
+		}
+	}
 	delta := after - before
 
 	if err != nil {
