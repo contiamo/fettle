@@ -72,9 +72,7 @@ status is appended to files.jsonl for resume.
 On --resume, the run's manifest (run.json) is authoritative — target
 repo, include/exclude globs, and agent/model/effort all come from there,
 not from .fettle.json. Flags that would change those values are
-rejected.
-
-` + agent.CustomScriptDoc,
+rejected.`,
 	RunE: runFind,
 }
 
