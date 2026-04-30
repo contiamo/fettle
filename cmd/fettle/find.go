@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -54,8 +55,7 @@ var findFlags struct {
 	exclude     []string
 	agent       string
 	model       string
-	command     string
-	agentArgs   []string
+	script      string
 	effort      string
 	timeout     time.Duration
 }
@@ -83,11 +83,10 @@ func init() {
 	findCmd.Flags().IntVar(&findFlags.limit, "limit", 0, "scan at most N files this invocation (0 = all)")
 	findCmd.Flags().StringSliceVar(&findFlags.include, "include", nil, "include globs (overrides project config; not allowed with --resume)")
 	findCmd.Flags().StringSliceVar(&findFlags.exclude, "exclude", nil, "exclude globs (overrides project config; not allowed with --resume)")
-	findCmd.Flags().StringVar(&findFlags.agent, "agent", "", "select a built-in agent (claude or codex); mutually exclusive with --command")
+	findCmd.Flags().StringVar(&findFlags.agent, "agent", "", "select a built-in agent (claude or codex); mutually exclusive with --agent-script")
 	findCmd.Flags().StringVar(&findFlags.model, "model", "", "agent model override (overrides project config; not allowed with --resume)")
-	findCmd.Flags().StringVar(&findFlags.command, "command", "", "run a custom agent script (path); mutually exclusive with --agent")
-	findCmd.Flags().StringArrayVar(&findFlags.agentArgs, "agent-arg", nil, "extra arg to pass to --command (repeatable; requires --command)")
-	findCmd.Flags().StringVar(&findFlags.effort, "effort", "", "codex reasoning effort; not allowed with --resume")
+	findCmd.Flags().StringVar(&findFlags.script, "agent-script", "", "run a custom agent script (path to executable); mutually exclusive with --agent")
+	findCmd.Flags().StringVar(&findFlags.effort, "effort", "", "agent reasoning effort: low|medium|high|xhigh|max (not allowed with --resume)")
 	findCmd.Flags().DurationVar(&findFlags.timeout, "timeout", defaultFindTimeout, "per-file agent timeout")
 	rootCmd.AddCommand(findCmd)
 }
@@ -246,11 +245,8 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 		if findFlags.model != "" {
 			conflicts = append(conflicts, "--model")
 		}
-		if findFlags.command != "" {
-			conflicts = append(conflicts, "--command")
-		}
-		if len(findFlags.agentArgs) > 0 {
-			conflicts = append(conflicts, "--agent-arg")
+		if findFlags.script != "" {
+			conflicts = append(conflicts, "--agent-script")
 		}
 		if len(conflicts) > 0 {
 			return nil, fmt.Errorf("cannot combine --resume with %s; the run's manifest is authoritative", strings.Join(conflicts, ", "))
@@ -281,7 +277,7 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 				Name:    findStage.Agent,
 				Model:   findStage.Model,
 				Effort:  findStage.Effort,
-				Command: findStage.Command,
+				Script:  findStage.Script,
 				Args:    findStage.Args,
 				WorkDir: m.TargetRepo,
 				Timeout: findFlags.timeout,
@@ -310,62 +306,68 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 		exclude = findFlags.exclude
 	}
 
-	// --agent and --command both pick the agent, so allowing both is
-	// ambiguous. Each does exactly one thing:
-	//   --agent NAME      pick a built-in (claude or codex)
-	//   --command PATH    run a custom script
-	if findFlags.agent != "" && findFlags.command != "" {
-		return nil, fmt.Errorf("--agent and --command are mutually exclusive: --agent picks a built-in (claude|codex), --command runs a custom script")
+	// --agent and --agent-script both pick the agent, so allowing both
+	// is ambiguous. Each does exactly one thing:
+	//   --agent NAME           pick a built-in (claude or codex)
+	//   --agent-script PATH    run a custom script
+	if findFlags.agent != "" && findFlags.script != "" {
+		return nil, fmt.Errorf("--agent and --agent-script are mutually exclusive: --agent picks a built-in (claude|codex), --agent-script runs a custom script")
 	}
 	if findFlags.agent != "" {
 		switch findFlags.agent {
 		case "claude", "codex":
 			// supported
 		default:
-			return nil, fmt.Errorf("--agent must be claude or codex (use --command for custom scripts); got %q", findFlags.agent)
+			return nil, fmt.Errorf("--agent must be claude or codex (use --agent-script for custom scripts); got %q", findFlags.agent)
 		}
 	}
 
 	agentName := cfg.Agent.Name
 	agentModel := cfg.Agent.Model
-	agentCommand := cfg.Agent.Command
+	agentScript := cfg.Agent.Script
 	agentArgs := cfg.Agent.Args
 
 	if findFlags.agent != "" {
-		// Built-in dispatch: clear any custom-command config so we
+		// Built-in dispatch: clear any custom-script config so we
 		// don't accidentally take the runCustom path with a built-in
 		// label.
 		agentName = findFlags.agent
-		agentCommand = ""
+		agentScript = ""
 		agentArgs = nil
 	}
-	if findFlags.command != "" {
-		agentCommand = findFlags.command
+	if findFlags.script != "" {
+		agentScript = findFlags.script
 		// Default the label to "custom" unless the user already named
 		// it via cfg (e.g. agent.name = "security-pass" alongside
-		// agent.command in .fettle.json). Mutex above prevents
-		// --agent overriding here.
-		if cfg.Agent.Command == "" {
+		// agent.script in .fettle.json). Mutex above prevents --agent
+		// overriding here.
+		if cfg.Agent.Script == "" {
 			agentName = "custom"
 		}
 	}
 	if findFlags.model != "" {
 		agentModel = findFlags.model
 	}
-	if len(findFlags.agentArgs) > 0 {
-		agentArgs = findFlags.agentArgs
-	}
-	if len(findFlags.agentArgs) > 0 && agentCommand == "" {
-		return nil, fmt.Errorf("--agent-arg requires --command (or agent.command in .fettle.json)")
-	}
-	// Resolve a relative agent command to absolute now so the manifest
+	// Resolve a relative agent script to absolute now so the manifest
 	// records a path that's still valid on resume from a different cwd.
-	if agentCommand != "" && !filepath.IsAbs(agentCommand) {
-		abs, err := filepath.Abs(agentCommand)
+	if agentScript != "" && !filepath.IsAbs(agentScript) {
+		abs, err := filepath.Abs(agentScript)
 		if err != nil {
-			return nil, fmt.Errorf("resolve agent.command %q: %w", agentCommand, err)
+			return nil, fmt.Errorf("resolve agent.script %q: %w", agentScript, err)
 		}
-		agentCommand = abs
+		agentScript = abs
+	}
+	// Validate the script is executable now, at startup — not per-file
+	// at agent run time. Errors here mean no run folder gets created.
+	if agentScript != "" {
+		if _, err := exec.LookPath(agentScript); err != nil {
+			if strings.ContainsAny(agentScript, " \t") {
+				return nil, fmt.Errorf(`--agent-script takes a single path, not a command-with-args.
+For arguments, write a small wrapper script with the args baked in, or set agent.args in .fettle.json.
+Got: %q`, agentScript)
+			}
+			return nil, fmt.Errorf("agent script %q not executable: %w", agentScript, err)
+		}
 	}
 	spec := agent.Spec{
 		Name:    agentName,
@@ -373,7 +375,7 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 		Effort:  findFlags.effort,
 		WorkDir: targetRepo,
 		Timeout: findFlags.timeout,
-		Command: agentCommand,
+		Script:  agentScript,
 		Args:    agentArgs,
 	}
 

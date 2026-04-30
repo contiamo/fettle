@@ -23,7 +23,7 @@ func TestRun_customCommand(t *testing.T) {
 	}
 	const marker = "hello-from-prompt-9f3c"
 	res, err := Run(context.Background(), Spec{
-		Command: cat,
+		Script: cat,
 		// Name is intentionally something that would error in the
 		// switch fallback; the Command-takes-precedence rule must fire
 		// before the switch.
@@ -39,7 +39,7 @@ func TestRun_customCommand(t *testing.T) {
 
 func TestRun_customCommand_missingBinary(t *testing.T) {
 	_, err := Run(context.Background(), Spec{
-		Command: "/nonsense/path/never/exists/agent.sh",
+		Script: "/nonsense/path/never/exists/agent.sh",
 	}, "hi")
 	if err == nil || !strings.Contains(err.Error(), "not executable") {
 		t.Fatalf("want not-executable error, got %v", err)

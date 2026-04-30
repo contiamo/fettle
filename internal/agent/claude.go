@@ -30,6 +30,9 @@ func runClaude(ctx context.Context, spec Spec, prompt string) (*Result, error) {
 	if spec.Model != "" {
 		args = append(args, "--model", spec.Model)
 	}
+	if spec.Effort != "" {
+		args = append(args, "--effort", spec.Effort)
+	}
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = spec.WorkDir
 	cmd.Env = buildEnv(spec)

@@ -71,7 +71,7 @@ type StageEntry struct {
 	Agent        string   `json:"agent"`
 	Model        string   `json:"model,omitempty"`
 	Effort       string   `json:"effort,omitempty"`
-	Command      string   `json:"command,omitempty"`
+	Script       string   `json:"script,omitempty"`
 	Args         []string `json:"args,omitempty"`
 	SourcePath   string   `json:"source_path"`
 	SnapshotPath string   `json:"snapshot_path"`
