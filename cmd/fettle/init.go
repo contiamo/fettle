@@ -1,48 +1,49 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/contiamo/fettle/internal/project"
+	"github.com/spf13/cobra"
 )
 
-type initCmd struct{}
+var initFlags struct {
+	target string
+	agent  string
+	model  string
+}
 
-func (initCmd) Name() string     { return "init" }
-func (initCmd) Synopsis() string { return "Create a new fettle project in the current directory" }
+var initCmd = &cobra.Command{
+	Use:   "init",
+	Short: "Create a new fettle project in the current directory",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		wd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		target := initFlags.target
+		if target == "" {
+			target = wd
+		}
+		absTarget, err := filepath.Abs(target)
+		if err != nil {
+			return fmt.Errorf("resolve target: %w", err)
+		}
+		cfg := project.NewConfig(absTarget, initFlags.agent, initFlags.model)
+		if err := project.Init(wd, cfg); err != nil {
+			return err
+		}
+		fmt.Printf("Initialized fettle project in %s\n", wd)
+		fmt.Println("Edit instructions/find.md to describe what to look for, then run `fettle find`.")
+		return nil
+	},
+}
 
-func (initCmd) Run(args []string) error {
-	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	target := fs.String("target", "", "target repository path (default: current directory)")
-	agent := fs.String("agent", "claude", "default agent: claude, codex, or gemini")
-	model := fs.String("model", "sonnet", "default model")
-	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "usage: fettle init [flags]")
-		fmt.Fprintln(fs.Output())
-		fs.PrintDefaults()
-	}
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	wd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	if *target == "" {
-		*target = wd
-	}
-	absTarget, err := filepath.Abs(*target)
-	if err != nil {
-		return fmt.Errorf("resolve target: %w", err)
-	}
-	cfg := project.NewConfig(absTarget, *agent, *model)
-	if err := project.Init(wd, cfg); err != nil {
-		return err
-	}
-	fmt.Printf("Initialized fettle project in %s\n", wd)
-	fmt.Println("Edit instructions/find.md to describe what to look for, then run `fettle find`.")
-	return nil
+func init() {
+	initCmd.Flags().StringVar(&initFlags.target, "target", "", "target repository path (default: current directory)")
+	initCmd.Flags().StringVar(&initFlags.agent, "agent", "claude", "default agent: claude, codex, or gemini")
+	initCmd.Flags().StringVar(&initFlags.model, "model", "sonnet", "default model")
+	rootCmd.AddCommand(initCmd)
 }
