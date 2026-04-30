@@ -21,8 +21,9 @@ import (
 // Spec identifies which agent to invoke and how.
 //
 // Dispatch order: if Script is set, Run executes that as a custom
-// agent script (stdin = prompt). Otherwise it dispatches by Name to
-// the built-in claude or codex implementations.
+// agent script (stdin = prompt, no fettle-supplied args). Otherwise
+// it dispatches by Name to the built-in claude or codex
+// implementations.
 type Spec struct {
 	Name    string        // "claude" | "codex" (built-in) — also used for created_by stamping when Script is set
 	Model   string        // model alias or id; empty uses the CLI's default
@@ -32,7 +33,6 @@ type Spec struct {
 	Timeout time.Duration // per-invocation timeout; 0 = no override
 	Env     []string      // extra "KEY=VALUE" entries; appended after os.Environ() so they win on key conflict
 	Script  string        // optional path to a custom agent script; takes precedence over Name when set
-	Args    []string      // optional args to pass to Script before fettle's own additions
 }
 
 // Result captures the raw outcome of one agent invocation.

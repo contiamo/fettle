@@ -278,7 +278,6 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 				Model:   findStage.Model,
 				Effort:  findStage.Effort,
 				Script:  findStage.Script,
-				Args:    findStage.Args,
 				WorkDir: m.TargetRepo,
 				Timeout: findFlags.timeout,
 			},
@@ -325,7 +324,6 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 	agentName := cfg.Agent.Name
 	agentModel := cfg.Agent.Model
 	agentScript := cfg.Agent.Script
-	agentArgs := cfg.Agent.Args
 
 	if findFlags.agent != "" {
 		// Built-in dispatch: clear any custom-script config so we
@@ -333,7 +331,6 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 		// label.
 		agentName = findFlags.agent
 		agentScript = ""
-		agentArgs = nil
 	}
 	if findFlags.script != "" {
 		agentScript = findFlags.script
@@ -376,7 +373,6 @@ Got: %q`, agentScript)
 		WorkDir: targetRepo,
 		Timeout: findFlags.timeout,
 		Script:  agentScript,
-		Args:    agentArgs,
 	}
 
 	promptBody, err := os.ReadFile(filepath.Join(projectDir, cfg.Instructions.Find))

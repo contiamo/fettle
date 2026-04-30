@@ -41,16 +41,16 @@ type Config struct {
 //
 // For built-in agents (claude, codex), set Name; fettle handles the CLI
 // invocation. For custom setups — different binaries, custom flags,
-// running tests via the agent — set Script (and optionally Args) to
-// point at an executable. fettle then pipes the prompt to that script's
-// stdin and inherits FETTLE_RUN / FETTLE_AGENT env. When Script is set,
-// Name is informational (used for the per-finding created_by stamp)
-// and Model is unused unless the script reads it from env.
+// running tests via the agent — set Script to point at an executable.
+// fettle pipes the prompt to that script's stdin and inherits
+// FETTLE_RUN / FETTLE_AGENT env. The script gets no fettle-supplied
+// arguments; bake any flags you need into a wrapper. When Script is
+// set, Name is informational (used for the per-finding created_by
+// stamp) and Model is unused unless the script reads it from env.
 type AgentRef struct {
-	Name   string   `json:"name,omitempty"`
-	Model  string   `json:"model,omitempty"`
-	Script string   `json:"script,omitempty"`
-	Args   []string `json:"args,omitempty"`
+	Name   string `json:"name,omitempty"`
+	Model  string `json:"model,omitempty"`
+	Script string `json:"script,omitempty"`
 }
 
 // Instructions points at the editable prompt templates, relative to the

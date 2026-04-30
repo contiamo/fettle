@@ -90,7 +90,6 @@ func CreateForFind(opts CreateFindOpts) (*Path, error) {
 				Model:        opts.FindSpec.Model,
 				Effort:       opts.FindSpec.Effort,
 				Script:       opts.FindSpec.Script,
-				Args:         opts.FindSpec.Args,
 				SourcePath:   opts.FindSourcePath,
 				SnapshotPath: snap,
 			},
