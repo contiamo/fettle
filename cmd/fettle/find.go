@@ -82,12 +82,12 @@ func runFind(cmd *cobra.Command, args []string) error {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	projectDir, err := os.Getwd()
+	dir, err := projectDir()
 	if err != nil {
 		return err
 	}
 
-	in, err := resolveFindInputs(projectDir)
+	in, err := resolveFindInputs(dir)
 	if err != nil {
 		return err
 	}

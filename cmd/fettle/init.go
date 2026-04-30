@@ -25,23 +25,26 @@ var initCmd = &cobra.Command{
 		default:
 			return fmt.Errorf("unsupported agent %q (supported: claude, codex)", initFlags.agent)
 		}
-		wd, err := os.Getwd()
+		dir, err := projectDir()
 		if err != nil {
 			return err
 		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create project dir: %w", err)
+		}
 		target := initFlags.target
 		if target == "" {
-			target = wd
+			target = dir
 		}
 		absTarget, err := filepath.Abs(target)
 		if err != nil {
 			return fmt.Errorf("resolve target: %w", err)
 		}
 		cfg := project.NewConfig(absTarget, initFlags.agent, initFlags.model)
-		if err := project.Init(wd, cfg); err != nil {
+		if err := project.Init(dir, cfg); err != nil {
 			return err
 		}
-		fmt.Printf("Initialized fettle project in %s\n", wd)
+		fmt.Printf("Initialized fettle project in %s\n", dir)
 		fmt.Println("Edit instructions/find.md to describe what to look for, then run `fettle find`.")
 		return nil
 	},
