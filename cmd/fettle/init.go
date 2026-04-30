@@ -19,6 +19,12 @@ var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Create a new fettle project in the current directory",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		switch initFlags.agent {
+		case "claude", "codex":
+			// supported
+		default:
+			return fmt.Errorf("unsupported agent %q (supported: claude, codex)", initFlags.agent)
+		}
 		wd, err := os.Getwd()
 		if err != nil {
 			return err
@@ -43,7 +49,7 @@ var initCmd = &cobra.Command{
 
 func init() {
 	initCmd.Flags().StringVar(&initFlags.target, "target", "", "target repository path (default: current directory)")
-	initCmd.Flags().StringVar(&initFlags.agent, "agent", "claude", "default agent: claude, codex, or gemini")
-	initCmd.Flags().StringVar(&initFlags.model, "model", "sonnet", "default model")
+	initCmd.Flags().StringVar(&initFlags.agent, "agent", "claude", "default agent: claude or codex")
+	initCmd.Flags().StringVar(&initFlags.model, "model", "", "default model (empty = agent CLI default)")
 	rootCmd.AddCommand(initCmd)
 }

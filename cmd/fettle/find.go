@@ -41,10 +41,15 @@ var findCmd = &cobra.Command{
 	Use:   "find",
 	Short: "Run the find agent on every matching file in the target repo",
 	Long: `find creates a new run folder under runs/ (or resumes one with
---resume), snapshots the find prompt into it, walks the target repo,
-and runs the configured agent on every file that matches the project's
+--resume), snapshots the find prompt into it, walks the target repo, and
+runs the configured agent on every file that matches the project's
 include/exclude globs. Findings are appended to findings.jsonl; per-file
-status is appended to files.jsonl for resume.`,
+status is appended to files.jsonl for resume.
+
+On --resume, the run's manifest (run.json) is authoritative — target
+repo, include/exclude globs, and agent/model/effort all come from there,
+not from .fettle.json. Flags that would change those values are
+rejected.`,
 	RunE: runFind,
 }
 
@@ -52,84 +57,71 @@ func init() {
 	findCmd.Flags().StringVar(&findFlags.name, "name", "", "human label appended to the run folder timestamp (default: random hex)")
 	findCmd.Flags().StringVar(&findFlags.resume, "resume", "", "path to an existing run folder to resume")
 	findCmd.Flags().IntVarP(&findFlags.concurrency, "concurrency", "c", 4, "max concurrent agent invocations")
-	findCmd.Flags().IntVar(&findFlags.limit, "limit", 0, "scan at most N files (0 = all)")
-	findCmd.Flags().StringSliceVar(&findFlags.include, "include", nil, "include globs (overrides project config)")
-	findCmd.Flags().StringSliceVar(&findFlags.exclude, "exclude", nil, "exclude globs (overrides project config)")
-	findCmd.Flags().StringVar(&findFlags.effort, "effort", "", "codex reasoning effort (low|medium|high|xhigh|max); ignored for other agents")
+	findCmd.Flags().IntVar(&findFlags.limit, "limit", 0, "scan at most N files this invocation (0 = all)")
+	findCmd.Flags().StringSliceVar(&findFlags.include, "include", nil, "include globs (overrides project config; not allowed with --resume)")
+	findCmd.Flags().StringSliceVar(&findFlags.exclude, "exclude", nil, "exclude globs (overrides project config; not allowed with --resume)")
+	findCmd.Flags().StringVar(&findFlags.effort, "effort", "", "codex reasoning effort; not allowed with --resume")
 	findCmd.Flags().DurationVar(&findFlags.timeout, "timeout", defaultFindTimeout, "per-file agent timeout")
 	rootCmd.AddCommand(findCmd)
 }
 
+// findInputs is the resolved set of values used to drive a run, regardless
+// of whether the run is new or being resumed.
+type findInputs struct {
+	rp         *run.Path
+	targetRepo string
+	include    []string
+	exclude    []string
+	spec       agent.Spec
+}
+
 func runFind(cmd *cobra.Command, args []string) error {
+	if findFlags.concurrency < 1 {
+		findFlags.concurrency = 1
+	}
+
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	projectDir, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	cfg, err := project.Load(projectDir)
+
+	in, err := resolveFindInputs(projectDir)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("no .fettle.json in %s — run `fettle init` first", projectDir)
-		}
-		return fmt.Errorf("load project: %w", err)
+		return err
 	}
 
-	include := cfg.Include
-	if len(findFlags.include) > 0 {
-		include = findFlags.include
-	}
-	exclude := cfg.Exclude
-	if len(findFlags.exclude) > 0 {
-		exclude = findFlags.exclude
-	}
-
-	files, err := walk.Walk(cfg.TargetRepo, include, exclude)
+	files, err := walk.Walk(in.targetRepo, in.include, in.exclude)
 	if err != nil {
 		return fmt.Errorf("walk target repo: %w", err)
 	}
 
-	spec := agent.Spec{
-		Name:    cfg.Agent.Name,
-		Model:   cfg.Agent.Model,
-		Effort:  findFlags.effort,
-		WorkDir: cfg.TargetRepo,
-		Timeout: findFlags.timeout,
-	}
-
-	rp, err := openOrCreateRun(projectDir, cfg, spec, include, exclude)
-	if err != nil {
-		return err
-	}
-	manifest, _ := rp.Manifest()
-	rp.AddDirsForRun(manifest)
-
-	done, err := rp.LoadDoneFiles()
+	done, err := in.rp.LoadDoneFiles()
 	if err != nil {
 		return fmt.Errorf("load resume state: %w", err)
 	}
-	pending := pendingFiles(files, cfg.TargetRepo, done)
+	pending := pendingFiles(files, in.targetRepo, done)
 	if findFlags.limit > 0 && len(pending) > findFlags.limit {
 		pending = pending[:findFlags.limit]
 	}
 
 	logger.Info("plan",
-		"run", rp.Dir(),
+		"run", in.rp.Dir(),
 		"discovered", len(files),
 		"already_done", len(done),
 		"pending", len(pending),
 		"concurrency", findFlags.concurrency,
-		"agent", spec.Name,
-		"model", spec.Model,
+		"agent", in.spec.Name,
+		"model", in.spec.Model,
 	)
 	if len(pending) == 0 {
-		fmt.Println(rp.Dir())
+		fmt.Println(in.rp.Dir())
 		return nil
 	}
 
-	// Re-read the snapshotted find prompt so resume always uses the run's
-	// frozen copy, not the editable template.
-	promptBody, err := os.ReadFile(filepath.Join(rp.Dir(), "instructions", "find.md"))
+	// Always read the snapshotted prompt — never the editable template.
+	promptBody, err := os.ReadFile(filepath.Join(in.rp.Dir(), "instructions", "find.md"))
 	if err != nil {
 		return fmt.Errorf("read snapshotted find prompt: %w", err)
 	}
@@ -152,47 +144,66 @@ func runFind(cmd *cobra.Command, args []string) error {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			rel, _ := filepath.Rel(cfg.TargetRepo, file)
+			rel, _ := filepath.Rel(in.targetRepo, file)
 			rel = filepath.ToSlash(rel)
 			fileLogger := logger.With("file", rel, "n", i+1, "total", len(pending))
 			fileLogger.Info("analyzing")
 
-			res := analyzeOne(ctx, rp, spec, string(promptBody), cfg.TargetRepo, file, rel)
-			if appendErr := rp.AppendFileStatus(res.status); appendErr != nil {
+			status := analyzeOne(ctx, in.rp, in.spec, string(promptBody), in.targetRepo, file, rel)
+			if appendErr := in.rp.AppendFileStatus(status); appendErr != nil {
 				fileLogger.Error("write file status", "error", appendErr)
 			}
 
-			switch res.status.Status {
+			switch status.Status {
 			case schema.StatusOK:
 				ok.Add(1)
-				total.Add(int64(res.status.FindingCount))
-				fileLogger.Info("done", "findings", res.status.FindingCount, "duration", res.status.Ended.Sub(res.status.Started).Round(time.Second))
+				total.Add(int64(status.FindingCount))
+				fileLogger.Info("done", "findings", status.FindingCount, "duration", status.Ended.Sub(status.Started).Round(time.Second))
 			case schema.StatusEmpty:
 				empty.Add(1)
-				fileLogger.Info("done (empty)", "duration", res.status.Ended.Sub(res.status.Started).Round(time.Second))
+				fileLogger.Info("done (empty)", "duration", status.Ended.Sub(status.Started).Round(time.Second))
 			case schema.StatusError:
 				fail.Add(1)
-				fileLogger.Warn("failed", "error", res.status.Error, "duration", res.status.Ended.Sub(res.status.Started).Round(time.Second))
+				fileLogger.Warn("failed", "error", status.Error, "duration", status.Ended.Sub(status.Started).Round(time.Second))
 			}
 		}(i, file)
 	}
 	wg.Wait()
 
 	logger.Info("complete",
-		"run", rp.Dir(),
+		"run", in.rp.Dir(),
 		"with_findings", ok.Load(),
 		"empty", empty.Load(),
 		"failed", fail.Load(),
 		"total_findings", total.Load(),
 		"elapsed", time.Since(startAll).Round(time.Second),
 	)
-	fmt.Println(rp.Dir())
+	fmt.Println(in.rp.Dir())
 	return nil
 }
 
-// openOrCreateRun returns the run folder, creating it if --resume wasn't passed.
-func openOrCreateRun(projectDir string, cfg project.Config, spec agent.Spec, include, exclude []string) (*runPath, error) {
+// resolveFindInputs branches on --resume: from-manifest (resume) vs.
+// from-project-config (new run). On resume, flags that would change run
+// identity are rejected — the manifest is authoritative.
+func resolveFindInputs(projectDir string) (*findInputs, error) {
 	if findFlags.resume != "" {
+		var conflicts []string
+		if findFlags.name != "" {
+			conflicts = append(conflicts, "--name")
+		}
+		if len(findFlags.include) > 0 {
+			conflicts = append(conflicts, "--include")
+		}
+		if len(findFlags.exclude) > 0 {
+			conflicts = append(conflicts, "--exclude")
+		}
+		if findFlags.effort != "" {
+			conflicts = append(conflicts, "--effort")
+		}
+		if len(conflicts) > 0 {
+			return nil, fmt.Errorf("cannot combine --resume with %s; the run's manifest is authoritative", strings.Join(conflicts, ", "))
+		}
+
 		abs := findFlags.resume
 		if !filepath.IsAbs(abs) {
 			abs = filepath.Join(projectDir, abs)
@@ -201,11 +212,55 @@ func openOrCreateRun(projectDir string, cfg project.Config, spec agent.Spec, inc
 		if err != nil {
 			return nil, fmt.Errorf("open run: %w", err)
 		}
-		return &runPath{Path: rp, projectDir: projectDir}, nil
+		m, err := rp.Manifest()
+		if err != nil {
+			return nil, fmt.Errorf("read run manifest: %w", err)
+		}
+		findStage, ok := m.Stages["find"]
+		if !ok {
+			return nil, fmt.Errorf("run %s has no `find` stage in run.json", abs)
+		}
+		return &findInputs{
+			rp:         rp,
+			targetRepo: m.TargetRepo,
+			include:    m.Include,
+			exclude:    m.Exclude,
+			spec: agent.Spec{
+				Name:    findStage.Agent,
+				Model:   findStage.Model,
+				Effort:  findStage.Effort,
+				WorkDir: m.TargetRepo,
+				Timeout: findFlags.timeout,
+			},
+		}, nil
 	}
 
-	promptPath := filepath.Join(projectDir, cfg.Instructions.Find)
-	body, err := os.ReadFile(promptPath)
+	cfg, err := project.Load(projectDir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("no .fettle.json in %s — run `fettle init` first", projectDir)
+		}
+		return nil, fmt.Errorf("load project: %w", err)
+	}
+
+	include := cfg.Include
+	if len(findFlags.include) > 0 {
+		include = findFlags.include
+	}
+	exclude := cfg.Exclude
+	if len(findFlags.exclude) > 0 {
+		exclude = findFlags.exclude
+	}
+
+	spec := agent.Spec{
+		Name:    cfg.Agent.Name,
+		Model:   cfg.Agent.Model,
+		Effort:  findFlags.effort,
+		WorkDir: cfg.TargetRepo,
+		Timeout: findFlags.timeout,
+	}
+
+	promptBody, err := os.ReadFile(filepath.Join(projectDir, cfg.Instructions.Find))
 	if err != nil {
 		return nil, fmt.Errorf("read find prompt %s: %w", cfg.Instructions.Find, err)
 	}
@@ -215,7 +270,7 @@ func openOrCreateRun(projectDir string, cfg project.Config, spec agent.Spec, inc
 		TargetRepo:     cfg.TargetRepo,
 		Include:        include,
 		Exclude:        exclude,
-		FindPrompt:     string(body),
+		FindPrompt:     string(promptBody),
 		FindSourcePath: cfg.Instructions.Find,
 		FindSpec:       spec,
 		Args: map[string]any{
@@ -227,29 +282,18 @@ func openOrCreateRun(projectDir string, cfg project.Config, spec agent.Spec, inc
 	if err != nil {
 		return nil, fmt.Errorf("create run: %w", err)
 	}
-	return &runPath{Path: rp, projectDir: projectDir}, nil
-}
-
-// runPath wraps run.Path with project-aware sandbox config.
-type runPath struct {
-	*run.Path
-	projectDir string
-}
-
-// AddDirsForRun returns the dirs the agent must be allowed to write to.
-// Currently just the run's raw/ — that's where per-file findings land.
-func (rp *runPath) AddDirsForRun(_ schema.RunManifest) []string {
-	return []string{rp.RawDir()}
-}
-
-// analysisResult holds what one file analysis produced.
-type analysisResult struct {
-	status schema.FileStatus
+	return &findInputs{
+		rp:         rp,
+		targetRepo: cfg.TargetRepo,
+		include:    include,
+		exclude:    exclude,
+		spec:       spec,
+	}, nil
 }
 
 // analyzeOne runs the agent against a single file, parses the resulting
 // JSONL, and appends each finding. Returns a FileStatus for files.jsonl.
-func analyzeOne(ctx context.Context, rp *runPath, spec agent.Spec, promptBody, repoRoot, absFile, relFile string) analysisResult {
+func analyzeOne(ctx context.Context, rp *run.Path, spec agent.Spec, promptBody, repoRoot, absFile, relFile string) schema.FileStatus {
 	started := time.Now().UTC()
 	hash := run.FileHash(relFile)
 	outputPath := filepath.Join(rp.RawDir(), hash+".jsonl")
@@ -271,25 +315,25 @@ func analyzeOne(ctx context.Context, rp *runPath, spec agent.Spec, promptBody, r
 	}
 	ended := time.Now().UTC()
 	if err != nil {
-		return analysisResult{status: schema.FileStatus{
+		return schema.FileStatus{
 			File: relFile, Status: schema.StatusError, Error: err.Error(),
 			Started: started, Ended: ended,
-		}}
+		}
 	}
 
-	findings, parseErr := readFindings(outputPath, relFile, started, fmt.Sprintf("agent:%s/%s", spec.Name, spec.Model))
+	findings, parseErr := readFindings(outputPath, relFile, started, formatCreatedBy(spec))
 	if parseErr != nil {
-		return analysisResult{status: schema.FileStatus{
-			File: relFile, Status: schema.StatusError, Error: "parse findings: " + parseErr.Error(),
+		return schema.FileStatus{
+			File: relFile, Status: schema.StatusError, Error: parseErr.Error(),
 			Started: started, Ended: ended,
-		}}
+		}
 	}
 	for _, f := range findings {
 		if appendErr := rp.AppendFinding(f); appendErr != nil {
-			return analysisResult{status: schema.FileStatus{
+			return schema.FileStatus{
 				File: relFile, Status: schema.StatusError, Error: "append finding: " + appendErr.Error(),
 				Started: started, Ended: ended,
-			}}
+			}
 		}
 	}
 
@@ -297,10 +341,18 @@ func analyzeOne(ctx context.Context, rp *runPath, spec agent.Spec, promptBody, r
 	if len(findings) == 0 {
 		status = schema.StatusEmpty
 	}
-	return analysisResult{status: schema.FileStatus{
+	return schema.FileStatus{
 		File: relFile, Status: status, FindingCount: len(findings),
 		Started: started, Ended: ended,
-	}}
+	}
+}
+
+// formatCreatedBy returns "agent:<name>" or "agent:<name>/<model>".
+func formatCreatedBy(spec agent.Spec) string {
+	if spec.Model == "" {
+		return "agent:" + spec.Name
+	}
+	return "agent:" + spec.Name + "/" + spec.Model
 }
 
 // buildFindPrompt prepends a key=value header so the agent reads the
@@ -308,8 +360,7 @@ func analyzeOne(ctx context.Context, rp *runPath, spec agent.Spec, promptBody, r
 // template body.
 func buildFindPrompt(body string, vars map[string]string) string {
 	var b strings.Builder
-	keys := sortedKeys(vars)
-	for _, k := range keys {
+	for _, k := range sortedKeys(vars) {
 		b.WriteString(k)
 		b.WriteString("=")
 		b.WriteString(vars[k])
@@ -325,7 +376,6 @@ func sortedKeys(m map[string]string) []string {
 	for k := range m {
 		out = append(out, k)
 	}
-	// small map, simple sort
 	for i := 1; i < len(out); i++ {
 		for j := i; j > 0 && out[j] < out[j-1]; j-- {
 			out[j], out[j-1] = out[j-1], out[j]
@@ -334,8 +384,6 @@ func sortedKeys(m map[string]string) []string {
 	return out
 }
 
-// pendingFiles returns absolute paths whose repo-relative form isn't
-// already in done.
 func pendingFiles(absFiles []string, repoRoot string, done map[string]bool) []string {
 	pending := make([]string, 0, len(absFiles))
 	for _, f := range absFiles {
@@ -353,15 +401,16 @@ func pendingFiles(absFiles []string, repoRoot string, done map[string]bool) []st
 }
 
 // readFindings parses one agent-written JSONL file and stamps each finding
-// with stable id, source file, and timestamp. An empty/missing output
-// file is a valid "no findings" result.
+// with stable id, source file, and timestamp. The file MUST exist (even
+// if empty) — a missing OUTPUT_PATH means the agent failed to follow the
+// contract and we surface it as an error so coverage isn't silently lost.
 func readFindings(outputPath, sourceFile string, analyzedAt time.Time, createdBy string) ([]schema.Finding, error) {
 	data, err := os.ReadFile(outputPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
+			return nil, fmt.Errorf("agent did not write OUTPUT_PATH: %s", outputPath)
 		}
-		return nil, err
+		return nil, fmt.Errorf("read findings: %w", err)
 	}
 	if len(data) == 0 {
 		return nil, nil
@@ -374,9 +423,8 @@ func readFindings(outputPath, sourceFile string, analyzedAt time.Time, createdBy
 		}
 		var f schema.Finding
 		if err := json.Unmarshal([]byte(line), &f); err != nil {
-			return nil, fmt.Errorf("line %d: %w", ln+1, err)
+			return nil, fmt.Errorf("parse line %d: %w", ln+1, err)
 		}
-		// Always re-derive these — agents shouldn't be trusted with id/timestamps.
 		if f.File == "" {
 			f.File = sourceFile
 		}

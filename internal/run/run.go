@@ -24,10 +24,11 @@ import (
 // Path is a handle to a run folder. Methods are safe for concurrent use
 // across goroutines (append writers serialize via internal mutexes).
 type Path struct {
-	dir         string
-	findingsMu  sync.Mutex
-	filesMu     sync.Mutex
-	manifestMu  sync.Mutex
+	dir        string
+	findingsMu sync.Mutex // also guards seenIDs
+	filesMu    sync.Mutex
+	manifestMu sync.Mutex
+	seenIDs    map[string]bool // already-appended finding ids, for dedupe-on-resume
 }
 
 // Dir returns the absolute path of the run folder.
@@ -49,8 +50,18 @@ type CreateFindOpts struct {
 // CreateForFind initializes a new run folder under projectDir/runs/ with
 // the find prompt snapshotted and run.json populated.
 func CreateForFind(opts CreateFindOpts) (*Path, error) {
-	name := generateName("find", opts.Slug)
-	dir := filepath.Join(opts.ProjectDir, "runs", name)
+	name, err := generateName("find", opts.Slug)
+	if err != nil {
+		return nil, err
+	}
+	runsDir := filepath.Join(opts.ProjectDir, "runs")
+	if err := os.MkdirAll(runsDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create runs/: %w", err)
+	}
+	dir := filepath.Join(runsDir, name)
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("create run dir: %w", err)
+	}
 	for _, sub := range []string{"instructions", "raw"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
 			return nil, fmt.Errorf("mkdir %s: %w", sub, err)
@@ -87,10 +98,11 @@ func CreateForFind(opts CreateFindOpts) (*Path, error) {
 	if err := writeManifest(dir, manifest); err != nil {
 		return nil, err
 	}
-	return &Path{dir: dir}, nil
+	return &Path{dir: dir, seenIDs: map[string]bool{}}, nil
 }
 
-// Open opens an existing run folder.
+// Open opens an existing run folder. Loads existing finding ids from
+// findings.jsonl so AppendFinding can dedupe across resumes.
 func Open(dir string) (*Path, error) {
 	if _, err := os.Stat(filepath.Join(dir, "run.json")); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -98,7 +110,11 @@ func Open(dir string) (*Path, error) {
 		}
 		return nil, err
 	}
-	return &Path{dir: dir}, nil
+	seen, err := loadFindingIDs(dir)
+	if err != nil {
+		return nil, fmt.Errorf("load existing finding ids: %w", err)
+	}
+	return &Path{dir: dir, seenIDs: seen}, nil
 }
 
 // Manifest reads run.json.
@@ -108,11 +124,23 @@ func (p *Path) Manifest() (schema.RunManifest, error) {
 	return readManifest(p.dir)
 }
 
-// AppendFinding appends one finding to findings.jsonl. Concurrent-safe.
+// AppendFinding appends one finding to findings.jsonl. Idempotent on id:
+// re-appending a finding whose id is already on disk is a no-op, so a
+// crash between AppendFinding and AppendFileStatus doesn't duplicate
+// findings on resume. Concurrent-safe.
 func (p *Path) AppendFinding(f schema.Finding) error {
 	p.findingsMu.Lock()
 	defer p.findingsMu.Unlock()
-	return appendJSONL(filepath.Join(p.dir, "findings.jsonl"), f)
+	if f.ID != "" && p.seenIDs[f.ID] {
+		return nil
+	}
+	if err := appendJSONL(filepath.Join(p.dir, "findings.jsonl"), f); err != nil {
+		return err
+	}
+	if f.ID != "" {
+		p.seenIDs[f.ID] = true
+	}
+	return nil
 }
 
 // AppendFileStatus appends one row to files.jsonl. Concurrent-safe.
@@ -168,19 +196,70 @@ func FileHash(repoRelPath string) string {
 }
 
 // generateName builds a run folder name like
-// `find_20260430T145233Z_<slug>`. If slug is empty, a 4-byte random hex
-// suffix is used.
-func generateName(stage, slug string) string {
+// `find_20260430T145233Z_<slug>`. The slug must match [A-Za-z0-9_-]+;
+// when empty, a 4-byte random hex suffix is used.
+func generateName(stage, slug string) (string, error) {
+	if err := validateSlug(slug); err != nil {
+		return "", err
+	}
 	ts := time.Now().UTC().Format("20060102T150405Z")
 	if slug == "" {
 		var b [4]byte
-		if _, err := rand.Read(b[:]); err == nil {
-			slug = hex.EncodeToString(b[:])
-		} else {
-			slug = "run"
+		if _, err := rand.Read(b[:]); err != nil {
+			return "", fmt.Errorf("random slug: %w", err)
+		}
+		slug = hex.EncodeToString(b[:])
+	}
+	return fmt.Sprintf("%s_%s_%s", stage, ts, slug), nil
+}
+
+func validateSlug(s string) error {
+	if s == "" {
+		return nil
+	}
+	for _, r := range s {
+		if r >= 'a' && r <= 'z' {
+			continue
+		}
+		if r >= 'A' && r <= 'Z' {
+			continue
+		}
+		if r >= '0' && r <= '9' {
+			continue
+		}
+		if r == '-' || r == '_' {
+			continue
+		}
+		return fmt.Errorf("invalid run slug %q: only [A-Za-z0-9_-] allowed", s)
+	}
+	return nil
+}
+
+// loadFindingIDs scans findings.jsonl and returns the set of ids already
+// recorded. Bad/empty lines are skipped silently — partial-write tolerance.
+func loadFindingIDs(dir string) (map[string]bool, error) {
+	f, err := os.Open(filepath.Join(dir, "findings.jsonl"))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return map[string]bool{}, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+
+	seen := map[string]bool{}
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<16), 1<<20)
+	for sc.Scan() {
+		var fnd schema.Finding
+		if err := json.Unmarshal(sc.Bytes(), &fnd); err != nil {
+			continue
+		}
+		if fnd.ID != "" {
+			seen[fnd.ID] = true
 		}
 	}
-	return fmt.Sprintf("%s_%s_%s", stage, ts, slug)
+	return seen, sc.Err()
 }
 
 func touch(path string) error {
