@@ -89,6 +89,24 @@ func runCmd(ctx context.Context, cmd *exec.Cmd, stdinPrompt string) (*Result, er
 // don't block forever waiting on the parent's terminal.
 var nilReader io.Reader = strings.NewReader("")
 
+// CustomScriptDoc is the contract a user-provided --agent-script can
+// rely on. Embedded in `fettle find --help` and referenced by the
+// runCustom doc comment so the source-side and CLI-side descriptions
+// stay in sync.
+const CustomScriptDoc = `Custom agent scripts (--agent-script):
+  fettle invokes the script with:
+    stdin    the fully composed prompt
+    cwd      the target repo root
+    args     none — fettle never adds positional arguments
+    env      FETTLE_RUN     absolute path to the active run folder
+             FETTLE_AGENT   the configured agent name (also the source
+                            label used in created_by)
+             FETTLE_MODEL   the configured model, when set
+             FETTLE_EFFORT  the configured reasoning effort, when set
+             PATH           prepended with fettle's binary dir, so
+                            the script can call 'fettle finding add'
+    exit     0 on success; non-zero records the file as status=error`
+
 // buildEnv constructs the env for an agent subprocess: os.Environ() with
 // PATH prepended by the running fettle binary's directory (so the agent
 // can shell out to `fettle finding add` and find this exact build), plus
