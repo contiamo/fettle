@@ -68,11 +68,13 @@ type GitInfo struct {
 // StageEntry is one row in RunManifest.Stages — set incrementally as each
 // stage runs in this run folder.
 type StageEntry struct {
-	Agent        string `json:"agent"`
-	Model        string `json:"model,omitempty"`
-	Effort       string `json:"effort,omitempty"`
-	SourcePath   string `json:"source_path"`
-	SnapshotPath string `json:"snapshot_path"`
+	Agent        string   `json:"agent"`
+	Model        string   `json:"model,omitempty"`
+	Effort       string   `json:"effort,omitempty"`
+	Command      string   `json:"command,omitempty"`
+	Args         []string `json:"args,omitempty"`
+	SourcePath   string   `json:"source_path"`
+	SnapshotPath string   `json:"snapshot_path"`
 }
 
 // NewFindingID returns a fresh random 16-hex-char id. Ids are not derived

@@ -52,6 +52,10 @@ var findFlags struct {
 	limit       int
 	include     []string
 	exclude     []string
+	agent       string
+	model       string
+	command     string
+	agentArgs   []string
 	effort      string
 	timeout     time.Duration
 }
@@ -79,6 +83,10 @@ func init() {
 	findCmd.Flags().IntVar(&findFlags.limit, "limit", 0, "scan at most N files this invocation (0 = all)")
 	findCmd.Flags().StringSliceVar(&findFlags.include, "include", nil, "include globs (overrides project config; not allowed with --resume)")
 	findCmd.Flags().StringSliceVar(&findFlags.exclude, "exclude", nil, "exclude globs (overrides project config; not allowed with --resume)")
+	findCmd.Flags().StringVar(&findFlags.agent, "agent", "", "agent name override: claude or codex (overrides project config; not allowed with --resume)")
+	findCmd.Flags().StringVar(&findFlags.model, "model", "", "agent model override (overrides project config; not allowed with --resume)")
+	findCmd.Flags().StringVar(&findFlags.command, "command", "", "custom agent script path; takes precedence over --agent (not allowed with --resume)")
+	findCmd.Flags().StringArrayVar(&findFlags.agentArgs, "agent-arg", nil, "extra arg to pass to --command (repeatable; not allowed with --resume)")
 	findCmd.Flags().StringVar(&findFlags.effort, "effort", "", "codex reasoning effort; not allowed with --resume")
 	findCmd.Flags().DurationVar(&findFlags.timeout, "timeout", defaultFindTimeout, "per-file agent timeout")
 	rootCmd.AddCommand(findCmd)
@@ -232,6 +240,18 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 		if findFlags.effort != "" {
 			conflicts = append(conflicts, "--effort")
 		}
+		if findFlags.agent != "" {
+			conflicts = append(conflicts, "--agent")
+		}
+		if findFlags.model != "" {
+			conflicts = append(conflicts, "--model")
+		}
+		if findFlags.command != "" {
+			conflicts = append(conflicts, "--command")
+		}
+		if len(findFlags.agentArgs) > 0 {
+			conflicts = append(conflicts, "--agent-arg")
+		}
 		if len(conflicts) > 0 {
 			return nil, fmt.Errorf("cannot combine --resume with %s; the run's manifest is authoritative", strings.Join(conflicts, ", "))
 		}
@@ -261,6 +281,8 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 				Name:    findStage.Agent,
 				Model:   findStage.Model,
 				Effort:  findStage.Effort,
+				Command: findStage.Command,
+				Args:    findStage.Args,
 				WorkDir: m.TargetRepo,
 				Timeout: findFlags.timeout,
 			},
@@ -288,14 +310,47 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 		exclude = findFlags.exclude
 	}
 
+	agentName := cfg.Agent.Name
+	agentModel := cfg.Agent.Model
+	agentCommand := cfg.Agent.Command
+	agentArgs := cfg.Agent.Args
+
+	if findFlags.command != "" {
+		agentCommand = findFlags.command
+		// A CLI --command without explicit --agent shouldn't claim the
+		// config's name (typically "claude"); that would mislead the
+		// manifest and per-finding created_by. Default to "custom"
+		// unless the user explicitly named the agent.
+		if findFlags.agent == "" && cfg.Agent.Command == "" {
+			agentName = "custom"
+		}
+	}
+	if findFlags.agent != "" {
+		agentName = findFlags.agent
+	}
+	if findFlags.model != "" {
+		agentModel = findFlags.model
+	}
+	if len(findFlags.agentArgs) > 0 {
+		agentArgs = findFlags.agentArgs
+	}
+	// Resolve a relative agent command to absolute now so the manifest
+	// records a path that's still valid on resume from a different cwd.
+	if agentCommand != "" && !filepath.IsAbs(agentCommand) {
+		abs, err := filepath.Abs(agentCommand)
+		if err != nil {
+			return nil, fmt.Errorf("resolve agent.command %q: %w", agentCommand, err)
+		}
+		agentCommand = abs
+	}
 	spec := agent.Spec{
-		Name:    cfg.Agent.Name,
-		Model:   cfg.Agent.Model,
+		Name:    agentName,
+		Model:   agentModel,
 		Effort:  findFlags.effort,
 		WorkDir: targetRepo,
 		Timeout: findFlags.timeout,
-		Command: cfg.Agent.Command,
-		Args:    cfg.Agent.Args,
+		Command: agentCommand,
+		Args:    agentArgs,
 	}
 
 	promptBody, err := os.ReadFile(filepath.Join(projectDir, cfg.Instructions.Find))
