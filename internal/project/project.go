@@ -3,6 +3,7 @@
 package project
 
 import (
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,13 @@ import (
 	"path/filepath"
 	"time"
 )
+
+// stubFS holds the per-stage prompt templates `fettle init` writes into
+// instructions/. They're proper markdown files in stubs/, not Go const
+// strings, so they're easy to edit with normal markdown tooling.
+//
+//go:embed stubs/*.md
+var stubFS embed.FS
 
 // Version is the fettle version stamped into .fettle.json on init.
 const Version = "0.1.0"
@@ -74,14 +82,8 @@ func Init(dir string, cfg Config) error {
 	if err := os.MkdirAll(insDir, 0o755); err != nil {
 		return fmt.Errorf("create instructions/: %w", err)
 	}
-	for name, body := range stubs {
-		path := filepath.Join(insDir, name)
-		if _, err := os.Stat(path); err == nil {
-			continue
-		}
-		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-			return fmt.Errorf("write %s: %w", path, err)
-		}
+	if err := writeStubs(insDir); err != nil {
+		return err
 	}
 
 	if err := os.MkdirAll(filepath.Join(dir, "runs"), 0o755); err != nil {
@@ -126,105 +128,31 @@ func (c Config) ResolveTargetRepo(projectDir string) (string, error) {
 	return abs, nil
 }
 
-var stubs = map[string]string{
-	"find.md":   findStub,
-	"review.md": reviewStub,
-	"group.md":  groupStub,
+// writeStubs copies every embedded stub into dir, skipping any file
+// the user has already customized (a previously-init'd project).
+func writeStubs(dir string) error {
+	entries, err := stubFS.ReadDir("stubs")
+	if err != nil {
+		return fmt.Errorf("read stubs: %w", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		if _, err := os.Stat(path); err == nil {
+			continue
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		body, err := stubFS.ReadFile("stubs/" + e.Name())
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, body, 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", path, err)
+		}
+	}
+	return nil
 }
 
-const findStub = `# Find — instructions for the agent
-
-You are analyzing **one file** for issues. Write findings as JSONL to the
-output path, then exit. Replace this stub with what you actually want
-fettle to look for.
-
-## Inputs (substituted by fettle)
-
-- ` + "`TARGET_FILE`" + ` — absolute path to the file under analysis
-- ` + "`OUTPUT_PATH`" + ` — write findings here, one JSON object per line (may be empty)
-- ` + "`REPO_ROOT`" + ` — absolute path to the target repo root
-
-## Method
-
-Replace this section with your domain. Examples:
-
-- Refactor sweep: list legacy patterns to flag, name a conventions doc.
-- Security pass: list file-local sinks (SQL concat, shell exec with
-  unescaped variables, hardcoded secrets).
-- Doc audit: list public-API criteria for missing/outdated comments.
-
-## Output schema (one JSON object per line)
-
-` + "```json" + `
-{
-  "file": "<repo-relative path>",
-  "line": 42,
-  "title": "<short imperative title, no trailing period>",
-  "description": "<2-5 sentences: what's wrong and where>",
-  "suggestion": "<concrete change in 1-3 sentences>",
-  "severity": null,
-  "labels": [],
-  "references": []
-}
-` + "```" + `
-
-` + "`severity`" + ` is a free-form string or null — you choose the scale.
-` + "`labels`" + ` use a ` + "`prefix:value`" + ` convention, e.g.
-` + "`[\"category:duplication\", \"confidence:high\"]`" + `. ` + "`references`" + ` lists
-extra code locations: ` + "`{\"file\": \"...\", \"line\": 12}`" + `.
-
-If nothing to report, write an empty file (still create it).
-`
-
-const reviewStub = `# Review — instructions for the agent
-
-You are reviewing **one finding** produced by ` + "`fettle find`" + `. Decide what
-labels and comment to attach.
-
-## Inputs
-
-- ` + "`ISSUE_JSON`" + ` — the finding as a single-line JSON object
-- ` + "`OUTPUT_PATH`" + ` — write your review here, one JSON object on one line
-- ` + "`REPO_ROOT`" + ` — absolute path to the target repo
-
-## Output schema
-
-` + "```json" + `
-{
-  "subject": {"kind": "issue", "id": "<echo from ISSUE_JSON.id>"},
-  "labels":  ["confirmed", "category:false-positive"],
-  "comment": "<1-3 sentences explaining the call>",
-  "at":      "<RFC3339 timestamp>"
-}
-` + "```" + `
-
-Replace this stub with the labels you actually want to apply (e.g.
-` + "`confirmed`" + `, ` + "`false-positive`" + `, ` + "`out-of-scope`" + `, ` + "`needs-human`" + `).
-`
-
-const groupStub = `# Group — instructions for the agent
-
-Cluster findings into review-sized groups. You see all findings (and
-their reviews, if any) at once and write one JSON object per group.
-
-## Inputs
-
-- ` + "`ISSUES_JSON`" + ` — array of all findings in this run
-- ` + "`REVIEWS_JSON`" + ` — merged review state, keyed by issue id (` + "`{}`" + ` if no reviews)
-- ` + "`OUTPUT_PATH`" + ` — write groups here, one JSON object per line
-
-## Output schema
-
-` + "```json" + `
-{
-  "id": "g_<8 hex chars>",
-  "title": "<short imperative title>",
-  "summary": "<1-2 sentences>",
-  "issue_ids": ["<finding id>", ...],
-  "labels": []
-}
-` + "```" + `
-
-Every issue id from ` + "`ISSUES_JSON`" + ` should appear in exactly one group's
-` + "`issue_ids`" + ` (unless your prompt drops issues based on review labels).
-`
