@@ -2,10 +2,8 @@
 package schema
 
 import (
-	"crypto/sha256"
+	"crypto/rand"
 	"encoding/hex"
-	"fmt"
-	"strings"
 	"time"
 )
 
@@ -77,10 +75,16 @@ type StageEntry struct {
 	SnapshotPath string `json:"snapshot_path"`
 }
 
-// FindingID returns a stable hash for a (file, line-bucket, title) tuple.
-// Line bucketing tolerates small drift between runs of the same prompt.
-func FindingID(file string, line int, title string) string {
-	key := fmt.Sprintf("%s|%d|%s", file, line/10, strings.ToLower(strings.TrimSpace(title)))
-	h := sha256.Sum256([]byte(key))
-	return hex.EncodeToString(h[:])[:16]
+// NewFindingID returns a fresh random 16-hex-char id. Ids are not derived
+// from finding content, so two findings with identical (file, line, title)
+// get distinct ids. Crash-mid-write recovery can therefore surface a small
+// number of duplicate findings with different ids — humans reviewing the
+// UI dismiss them, and a content-hash dedup is unreliable against LLM
+// phrasing drift anyway.
+func NewFindingID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("crypto/rand: " + err.Error())
+	}
+	return hex.EncodeToString(b[:])
 }

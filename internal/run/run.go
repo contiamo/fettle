@@ -25,10 +25,9 @@ import (
 // across goroutines (append writers serialize via internal mutexes).
 type Path struct {
 	dir        string
-	findingsMu sync.Mutex // also guards seenIDs
+	findingsMu sync.Mutex
 	filesMu    sync.Mutex
 	manifestMu sync.Mutex
-	seenIDs    map[string]bool // already-appended finding ids, for dedupe-on-resume
 }
 
 // Dir returns the absolute path of the run folder.
@@ -98,11 +97,10 @@ func CreateForFind(opts CreateFindOpts) (*Path, error) {
 	if err := writeManifest(dir, manifest); err != nil {
 		return nil, err
 	}
-	return &Path{dir: dir, seenIDs: map[string]bool{}}, nil
+	return &Path{dir: dir}, nil
 }
 
-// Open opens an existing run folder. Loads existing finding ids from
-// findings.jsonl so AppendFinding can dedupe across resumes.
+// Open opens an existing run folder.
 func Open(dir string) (*Path, error) {
 	if _, err := os.Stat(filepath.Join(dir, "run.json")); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -110,11 +108,7 @@ func Open(dir string) (*Path, error) {
 		}
 		return nil, err
 	}
-	seen, err := loadFindingIDs(dir)
-	if err != nil {
-		return nil, fmt.Errorf("load existing finding ids: %w", err)
-	}
-	return &Path{dir: dir, seenIDs: seen}, nil
+	return &Path{dir: dir}, nil
 }
 
 // Manifest reads run.json.
@@ -124,23 +118,13 @@ func (p *Path) Manifest() (schema.RunManifest, error) {
 	return readManifest(p.dir)
 }
 
-// AppendFinding appends one finding to findings.jsonl. Idempotent on id:
-// re-appending a finding whose id is already on disk is a no-op, so a
-// crash between AppendFinding and AppendFileStatus doesn't duplicate
-// findings on resume. Concurrent-safe.
+// AppendFinding appends one finding to findings.jsonl. Concurrent-safe.
+// Ids are random per call (see schema.NewFindingID), so this is a plain
+// append; cross-process dedup isn't a goal.
 func (p *Path) AppendFinding(f schema.Finding) error {
 	p.findingsMu.Lock()
 	defer p.findingsMu.Unlock()
-	if f.ID != "" && p.seenIDs[f.ID] {
-		return nil
-	}
-	if err := appendJSONL(filepath.Join(p.dir, "findings.jsonl"), f); err != nil {
-		return err
-	}
-	if f.ID != "" {
-		p.seenIDs[f.ID] = true
-	}
-	return nil
+	return appendJSONL(filepath.Join(p.dir, "findings.jsonl"), f)
 }
 
 // AppendFileStatus appends one row to files.jsonl. Concurrent-safe.
@@ -235,32 +219,6 @@ func validateSlug(s string) error {
 	return nil
 }
 
-// loadFindingIDs scans findings.jsonl and returns the set of ids already
-// recorded. Bad/empty lines are skipped silently — partial-write tolerance.
-func loadFindingIDs(dir string) (map[string]bool, error) {
-	f, err := os.Open(filepath.Join(dir, "findings.jsonl"))
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return map[string]bool{}, nil
-		}
-		return nil, err
-	}
-	defer f.Close()
-
-	seen := map[string]bool{}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<16), 1<<20)
-	for sc.Scan() {
-		var fnd schema.Finding
-		if err := json.Unmarshal(sc.Bytes(), &fnd); err != nil {
-			continue
-		}
-		if fnd.ID != "" {
-			seen[fnd.ID] = true
-		}
-	}
-	return seen, sc.Err()
-}
 
 func touch(path string) error {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)

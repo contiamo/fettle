@@ -459,7 +459,7 @@ func readFindings(outputPath, sourceFile string, analyzedAt time.Time, createdBy
 		if f.File == "" {
 			f.File = sourceFile
 		}
-		f.ID = schema.FindingID(f.File, f.Line, f.Title)
+		f.ID = schema.NewFindingID()
 		f.CreatedBy = createdBy
 		f.CreatedAt = analyzedAt
 		if f.Labels == nil {
