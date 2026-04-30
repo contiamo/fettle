@@ -22,10 +22,11 @@ import (
 )
 
 // Path is a handle to a run folder. Methods are safe for concurrent use
-// across goroutines (append writers serialize via internal mutexes).
+// across goroutines and (for findings.jsonl) across processes — the
+// findings append uses flock(2). files.jsonl is harness-only, so it
+// uses an in-process mutex.
 type Path struct {
 	dir        string
-	findingsMu sync.Mutex
 	filesMu    sync.Mutex
 	manifestMu sync.Mutex
 }
@@ -118,13 +119,17 @@ func (p *Path) Manifest() (schema.RunManifest, error) {
 	return readManifest(p.dir)
 }
 
-// AppendFinding appends one finding to findings.jsonl. Concurrent-safe.
-// Ids are random per call (see schema.NewFindingID), so this is a plain
-// append; cross-process dedup isn't a goal.
+// AppendFinding appends one finding to findings.jsonl. Safe across
+// goroutines and across processes — the underlying append uses flock(2)
+// on the data file, so the agent-spawned `fettle finding add` and the
+// harness's own writers serialize through the kernel.
 func (p *Path) AppendFinding(f schema.Finding) error {
-	p.findingsMu.Lock()
-	defer p.findingsMu.Unlock()
-	return appendJSONL(filepath.Join(p.dir, "findings.jsonl"), f)
+	line, err := json.Marshal(f)
+	if err != nil {
+		return err
+	}
+	line = append(line, '\n')
+	return appendWithLock(filepath.Join(p.dir, "findings.jsonl"), line)
 }
 
 // AppendFileStatus appends one row to files.jsonl. Concurrent-safe.
