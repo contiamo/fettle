@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +36,7 @@ var findAddFlags struct {
 	severity    string
 	labels      []string
 	references  []string
+	canonicalOf []string
 	verbose     bool
 }
 
@@ -64,6 +66,7 @@ func init() {
 	findAddCmd.Flags().StringVar(&findAddFlags.severity, "severity", "", "severity (free-form string; e.g. low|medium|high)")
 	findAddCmd.Flags().StringSliceVar(&findAddFlags.labels, "label", nil, "label of the form prefix:value, repeatable")
 	findAddCmd.Flags().StringSliceVar(&findAddFlags.references, "reference", nil, "additional code location PATH or PATH:LINE, repeatable")
+	findAddCmd.Flags().StringArrayVar(&findAddFlags.canonicalOf, "canonical-of", nil, "source RUN:FINDING_ID this canonical finding subsumes (required in dedupe runs, rejected in find runs); repeatable")
 	findAddCmd.Flags().BoolVar(&findAddFlags.verbose, "verbose", false, "print the new finding's id to stdout on success")
 
 	findCmd.AddCommand(findAddCmd)
@@ -78,6 +81,10 @@ func runFindAdd(cmd *cobra.Command, args []string) error {
 	rp, err := run.Open(runDir)
 	if err != nil {
 		return internalError(fmt.Errorf("open run %s: %w", runDir, err))
+	}
+	manifest, err := rp.Manifest()
+	if err != nil {
+		return internalError(fmt.Errorf("read run manifest: %w", err))
 	}
 
 	references, refErrs := parseReferences(findAddFlags.references)
@@ -101,6 +108,28 @@ func runFindAdd(cmd *cobra.Command, args []string) error {
 	for _, e := range refErrs {
 		problems = append(problems, e)
 	}
+
+	// Stage-aware --canonical-of rules.
+	switch manifest.Stage {
+	case "find":
+		if len(findAddFlags.canonicalOf) > 0 {
+			problems = append(problems, "--canonical-of is rejected in find runs (it's required in dedupe runs only)")
+		}
+	case "dedupe":
+		if len(findAddFlags.canonicalOf) == 0 {
+			problems = append(problems, "--canonical-of is required in dedupe runs (one or more RUN:FINDING_ID entries)")
+		}
+	case "group":
+		problems = append(problems, "find add is rejected in group runs; use group add instead")
+	default:
+		problems = append(problems, fmt.Sprintf("find add is not supported in %q runs", manifest.Stage))
+	}
+
+	members, memberErrs := parseCanonicalOf(rp, manifest, findAddFlags.canonicalOf)
+	for _, e := range memberErrs {
+		problems = append(problems, e)
+	}
+
 	if len(problems) > 0 {
 		return validationError(problems)
 	}
@@ -128,6 +157,7 @@ func runFindAdd(cmd *cobra.Command, args []string) error {
 		Severity:    severity,
 		Labels:      labels,
 		References:  references,
+		Members:     members,
 		CreatedBy:   createdBy,
 		CreatedAt:   time.Now().UTC(),
 	}
@@ -153,6 +183,68 @@ func composeCreatedBy(name, model string) string {
 		return "agent:" + name
 	}
 	return "agent:" + name + "/" + model
+}
+
+// parseCanonicalOf turns each "RUN:FINDING_ID" string into a Member,
+// validating that RUN appears in the dedupe run's input_runs[] and
+// FINDING_ID exists in that run's findings.jsonl. Returns nil for
+// non-dedupe runs (no parsing needed).
+func parseCanonicalOf(rp *run.Path, manifest schema.RunManifest, raws []string) ([]schema.Member, []string) {
+	if len(raws) == 0 {
+		return nil, nil
+	}
+	if manifest.Stage != "dedupe" {
+		return nil, nil // upstream check already added a problem
+	}
+
+	inputSet := map[string]bool{}
+	for _, ir := range manifest.InputRuns {
+		inputSet[ir] = true
+	}
+
+	var out []schema.Member
+	var errs []string
+
+	// Resolve the project dir from the run dir (parent's parent).
+	runDir := rp.Dir()
+	projectDir := filepath.Dir(filepath.Dir(runDir))
+
+	for _, raw := range raws {
+		raw = strings.TrimSpace(raw)
+		idx := strings.LastIndex(raw, ":")
+		if idx < 0 {
+			errs = append(errs, fmt.Sprintf("--canonical-of %q: expected RUN:FINDING_ID", raw))
+			continue
+		}
+		runRel := raw[:idx]
+		findingID := raw[idx+1:]
+		if findingID == "" {
+			errs = append(errs, fmt.Sprintf("--canonical-of %q: empty finding id", raw))
+			continue
+		}
+		if !inputSet[runRel] {
+			errs = append(errs, fmt.Sprintf("--canonical-of %q: %q is not in this run's input_runs[] (%v)", raw, runRel, manifest.InputRuns))
+			continue
+		}
+		// Verify the finding exists in the source run.
+		srcPath := filepath.Join(projectDir, runRel)
+		srcRP, err := run.Open(srcPath)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("--canonical-of %q: open source run: %v", raw, err))
+			continue
+		}
+		exists, err := srcRP.FindingExists(findingID)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("--canonical-of %q: lookup error: %v", raw, err))
+			continue
+		}
+		if !exists {
+			errs = append(errs, fmt.Sprintf("--canonical-of %q: finding %q not found in %s", raw, findingID, runRel))
+			continue
+		}
+		out = append(out, schema.Member{FindingID: findingID, FromRun: runRel})
+	}
+	return out, errs
 }
 
 // parseReferences turns each "PATH" or "PATH:LINE" string into a Reference.

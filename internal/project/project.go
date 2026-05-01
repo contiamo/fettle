@@ -52,6 +52,7 @@ type AgentRef struct {
 type Instructions struct {
 	Find   string `json:"find"`
 	Review string `json:"review"`
+	Dedupe string `json:"dedupe"`
 	Group  string `json:"group"`
 }
 
@@ -67,6 +68,7 @@ func NewConfig(targetRepo, agent, model string) Config {
 		Instructions: Instructions{
 			Find:   "instructions/find.md",
 			Review: "instructions/review.md",
+			Dedupe: "instructions/dedupe.md",
 			Group:  "instructions/group.md",
 		},
 	}

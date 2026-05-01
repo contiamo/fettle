@@ -104,6 +104,67 @@ func CreateForFind(opts CreateFindOpts) (*Path, error) {
 	return &Path{dir: dir}, nil
 }
 
+// CreateDedupeOpts configures CreateForDedupe.
+type CreateDedupeOpts struct {
+	ProjectDir       string
+	Slug             string
+	InputRuns        []string // project-relative paths to input run folders
+	DedupePrompt     string   // full text to snapshot
+	DedupeSourcePath string   // project-relative path of the source prompt
+	DedupeSpec       agent.Spec
+}
+
+// CreateForDedupe initializes a new dedupe run folder with the dedupe
+// prompt snapshotted and run.json populated. Single-shot stage —
+// the caller invokes the agent, then calls MarkCompleted on success.
+func CreateForDedupe(opts CreateDedupeOpts) (*Path, error) {
+	name, err := generateName("dedupe", opts.Slug)
+	if err != nil {
+		return nil, err
+	}
+	runsDir := filepath.Join(opts.ProjectDir, "runs")
+	if err := os.MkdirAll(runsDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create runs/: %w", err)
+	}
+	dir := filepath.Join(runsDir, name)
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("create run dir: %w", err)
+	}
+	for _, sub := range []string{"instructions", "raw"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			return nil, fmt.Errorf("mkdir %s: %w", sub, err)
+		}
+	}
+	snap := filepath.Join("instructions", "dedupe.md")
+	if err := os.WriteFile(filepath.Join(dir, snap), []byte(opts.DedupePrompt), 0o644); err != nil {
+		return nil, fmt.Errorf("snapshot dedupe prompt: %w", err)
+	}
+	if err := touch(filepath.Join(dir, "findings.jsonl")); err != nil {
+		return nil, err
+	}
+	manifest := schema.RunManifest{
+		Name:          name,
+		Stage:         "dedupe",
+		FettleVersion: project.Version,
+		CreatedAt:     time.Now().UTC(),
+		InputRuns:     opts.InputRuns,
+		Stages: map[string]schema.StageEntry{
+			"dedupe": {
+				Agent:        opts.DedupeSpec.Name,
+				Model:        opts.DedupeSpec.Model,
+				Effort:       opts.DedupeSpec.Effort,
+				Script:       opts.DedupeSpec.Script,
+				SourcePath:   opts.DedupeSourcePath,
+				SnapshotPath: snap,
+			},
+		},
+	}
+	if err := writeManifest(dir, manifest); err != nil {
+		return nil, err
+	}
+	return &Path{dir: dir}, nil
+}
+
 // CreateMergeOpts configures CreateForMerge.
 type CreateMergeOpts struct {
 	ProjectDir string
