@@ -331,6 +331,43 @@ func (p *Path) AppendFileStatus(s schema.FileStatus) error {
 	return appendJSONL(filepath.Join(p.dir, "files.jsonl"), s)
 }
 
+// AppendClosure appends one closure event to closures.jsonl. Cross-
+// process safe via flock.
+func (p *Path) AppendClosure(c schema.Closure) error {
+	line, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+	line = append(line, '\n')
+	return appendWithLock(filepath.Join(p.dir, "closures.jsonl"), line)
+}
+
+// LoadClosures reads closures.jsonl in append order. Tolerates
+// malformed lines (skipped, like other JSONL readers in the
+// harness). Empty file returns an empty slice and no error.
+func (p *Path) LoadClosures() ([]schema.Closure, error) {
+	f, err := os.Open(filepath.Join(p.dir, "closures.jsonl"))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<16), 1<<20)
+	var out []schema.Closure
+	for sc.Scan() {
+		var c schema.Closure
+		if err := json.Unmarshal(sc.Bytes(), &c); err != nil {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out, sc.Err()
+}
+
 // AppendReview appends one review entry to reviews_<author>.jsonl.
 // Cross-process safe via flock — the same author may have concurrent
 // `fettle review add` invocations during a parallel review run.

@@ -125,6 +125,18 @@ func NewFindingID() string {
 	return hex.EncodeToString(b[:])
 }
 
+// Closure is one closure event for a finding or group. Lives in
+// runs/<name>/closures.jsonl. Append-only; latest entry per subject
+// wins for "current state" display, but the full history is
+// preserved (and viewable via `fettle close show --all`).
+type Closure struct {
+	Subject  Subject   `json:"subject"`
+	Status   string    `json:"status"`
+	PRURL    string    `json:"pr_url,omitempty"`
+	At       time.Time `json:"at"`
+	MarkedBy string    `json:"marked_by"`
+}
+
 // Group is one cluster of findings produced by `fettle run group`.
 // Lives in runs/<group-run>/groups.jsonl. `finding_ids[]` references
 // findings in the group run's `input_run`'s findings.jsonl.

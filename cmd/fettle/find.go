@@ -14,9 +14,9 @@ import (
 )
 
 const (
-	fettleRunEnv    = "FETTLE_RUN"
-	fettleAgentEnv  = "FETTLE_AGENT"
-	fettleModelEnv  = "FETTLE_MODEL"
+	fettleRunEnv   = "FETTLE_RUN"
+	fettleAgentEnv = "FETTLE_AGENT"
+	fettleModelEnv = "FETTLE_MODEL"
 )
 
 // findCmd is the parent of `fettle find <verb>` record subcommands
@@ -168,6 +168,50 @@ func runFindAdd(cmd *cobra.Command, args []string) error {
 		fmt.Println(finding.ID)
 	}
 	return nil
+}
+
+// resolveAuthor returns the identity to stamp on records that
+// fettle attributes back (reviews, closures). The chain is:
+//
+//   - FETTLE_AGENT       — agent name set by the harness during a stage
+//   - $FETTLE_AUTHOR     — explicit per-invocation override
+//   - ~/.config/fettle/identity — the slug the UI/init persisted
+//
+// Returns (slug, isAgent, error). The caller decides how to format
+// the per-record `marked_by` / `created_by` field — agents get an
+// `agent:<name>[/<model>]` prefix, humans get `human:<slug>`.
+func resolveAuthor() (string, bool, error) {
+	if a := strings.TrimSpace(os.Getenv(fettleAgentEnv)); a != "" {
+		return a, true, nil
+	}
+	if a := strings.TrimSpace(os.Getenv("FETTLE_AUTHOR")); a != "" {
+		return a, false, nil
+	}
+	home, err := os.UserHomeDir()
+	if err == nil {
+		path := filepath.Join(home, ".config", "fettle", "identity")
+		if data, err := os.ReadFile(path); err == nil {
+			if slug := strings.TrimSpace(string(data)); slug != "" {
+				return slug, false, nil
+			}
+		}
+	}
+	return "", false, fmt.Errorf("no author identity: set $FETTLE_AUTHOR, write a slug to ~/.config/fettle/identity, or run `fettle ui` once to pick one")
+}
+
+// markedBy returns the `marked_by` / `created_by` string for the
+// resolved author. Agents use the existing composeCreatedBy shape so
+// closures stamped by an agent match findings stamped by the same
+// agent; humans get the simpler `human:<slug>` form.
+func markedBy() (string, error) {
+	slug, isAgent, err := resolveAuthor()
+	if err != nil {
+		return "", err
+	}
+	if isAgent {
+		return composeCreatedBy(slug, os.Getenv(fettleModelEnv)), nil
+	}
+	return "human:" + slug, nil
 }
 
 // composeCreatedBy reassembles the per-finding `created_by` field from
