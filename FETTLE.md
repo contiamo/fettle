@@ -178,8 +178,7 @@ Downstream stages (`merge` / `dedupe` / `group`) require their
 inputs' `completed_at` to be set, so an interrupted or errored find
 run can't silently feed in. They do **not** second-guess
 `--limit`-truncated inputs — if you want to dedupe two partial
-runs, that's your call. UI browsing and `run review --watch` may
-read in-progress find runs (that's the whole point of `--watch`).
+runs, that's your call.
 
 A **find** run additionally records:
 
@@ -299,10 +298,10 @@ hand, not just `finding_ids[]` to chase.
 
 `REPO_ROOT` is the `target_repo` recorded on the run reviewing
 operates against. For find runs the value is direct from
-`run.json`'s `target_repo`. For dedupe and group runs (which don't
-have their own `target_repo`), it's resolved by walking back through
-`input_run`/`input_runs[]` to a find run; **dedupe rejects input
-runs whose `target_repo` differs**, so the value is unambiguous.
+`run.json`'s `target_repo`. For merge / dedupe / group runs (which
+don't have their own `target_repo`), it's resolved by walking back
+through `input_run`/`input_runs[]` to a find run. Dedupe rejects
+input runs whose `target_repo` differs, so the value is unambiguous.
 
 `REVIEWS_JSON` is the merged review state, keyed by finding id. It's `{}` if
 no reviews exist — `group` runs fine without `review` having happened. For
@@ -333,39 +332,41 @@ care what the prompt looks like beyond the variable substitution.
 
 ## The CLI
 
-The CLI is organized into two namespaces:
+The CLI is organized verb-first. Five top-level verbs:
 
-- `fettle run <stage>` — start an agent-driven stage. `find`, `dedupe`, and `group` create a new run folder (find can also resume one with `--resume`). `review` is the exception: it operates on an existing run via `--run` and writes per-author files into it; no new folder.
-- `fettle <noun> <verb>` — operate on a record kind (`find`, `group`, `review`, `close`); `add` is the agent-facing append, `show` is the read command. Same noun used regardless of which run kind the record lives in.
+- `fettle run <stage>` — start an agent-driven stage (`find`, `review`, `merge`, `dedupe`, `group`). `find` / `dedupe` / `group` / `merge` create new run folders; `review` operates on an existing run via `--run` and writes per-author files into it.
+- `fettle add <noun>` — append a record (`finding`, `group`, `review`, `outcome`). Called by spawned agents (FETTLE_RUN env), or by humans for `outcome`.
+- `fettle list <noun>` — list records of a kind in a run, or `runs` for all runs in the project.
+- `fettle show <noun>` — print one record (or one run's status).
+- `fettle init` — create a new fettle project.
 
-`fettle init`, `fettle ui`, and `--dir` are top-level. Every command operates on the fettle project in the current directory unless `--dir` overrides.
+`fettle ui` is planned but not yet shipped. `--dir` and `--json` are global flags. Every command emits the `{"data": ...}` envelope when `--json` is passed; reads always emit it.
 
 ```
-fettle init [--target REPO] [--agent claude|codex|gemini]
-    Create a new fettle project in cwd. Writes .fettle.json and a stub
-    instructions/ tree.
+fettle init [--target REPO] [--agent claude|codex]
+    Create a new fettle project in cwd. Writes .fettle.json and a
+    stub instructions/ tree.
 
 # Stage runners (agent-driven)
 
 fettle run find [--name SLUG] [--include GLOB] [--exclude GLOB] [-c N] [--limit N]
-    Create runs/find_<YYYYMMDDTHHMMSSZ>_<slug>/, snapshot the find prompt
-    into it, walk the target repo, and append findings to that run's
-    findings.jsonl. Prints the run path so you can pipe it into the
-    next stage.
+    Create runs/find_<YYYYMMDDTHHMMSSZ>_<slug>/, snapshot the find
+    prompt into it, walk the target repo, and append findings to
+    that run's findings.jsonl. Prints the run path so you can pipe
+    it into the next stage.
 
 fettle run find --resume runs/<name>/
     Resume a killed find. Re-uses the snapshotted prompt — editing
-    instructions/find.md after the run started has no effect on the
-    resume.
+    instructions/find.md after the run started has no effect.
+    Flags that would change run identity (--include, --exclude,
+    --limit, --agent, --model, --effort, --agent-script, --name)
+    are rejected; the manifest is authoritative.
 
-fettle run review --run runs/<name>/ [--agent NAME] [--watch]
-    For each finding (find/dedupe runs) or group (group runs) not yet
-    reviewed by this agent, run the review agent. Append to
-    runs/<name>/reviews_<agent>.jsonl. --watch polls the run's
-    findings.jsonl and picks up new entries as they land — only
-    meaningful for in-progress find runs. `--watch` is rejected
-    against dedupe/group runs because their output is single-shot
-    and only readable after `completed_at` is set.
+fettle run review --run runs/<name>/ [--agent NAME]
+    For each finding in --run not yet reviewed by this agent, run
+    the review agent. Append to runs/<name>/reviews_<agent>.jsonl.
+    Currently supports find and dedupe runs; group-run review is
+    not yet implemented.
 
 fettle run merge --run RUN [--run RUN]... [--name SLUG]
     Concatenate non-overlapping runs. Harness-only — no agent
@@ -405,83 +406,84 @@ fettle run group --run runs/<name>/ [--name SLUG] [--agent NAME]
     REVIEWS_JSON; otherwise the agent gets `{}`. Creates
     runs/group_<UTC-timestamp>_<slug>/.
 
-fettle list runs
-    List all runs in the project with summary counts.
-
-fettle show run --run runs/<name>/
-    Print counts for one run, scoped to records that live in the run
-    folder. For a find or dedupe run that's findings, reviews, and
-    outcomes; for a group run that's groups, reviews, and outcomes.
-    Downstream runs (e.g. groups derived from a find run) aren't
-    counted — those are separate runs with their own status.
-
-# Record CLIs (called by spawned agents, sometimes by humans)
+# Record writes (called by spawned agents, sometimes by humans)
 
 fettle add finding --file PATH --line N --title T --description D --suggestion S
-                [--severity X] [--label k:v ...] [--reference PATH[:LINE] ...]
-                [--canonical-of RUN:FINDING_ID ...]
+                   [--severity X] [--label k:v ...] [--reference PATH[:LINE] ...]
+                   [--canonical-of RUN:FINDING_ID ...]
     Append one finding to FETTLE_RUN's findings.jsonl. Used by both
     find runs (no --canonical-of) and dedupe runs (one or more
     --canonical-of entries make the new finding a canonical
     synthesis with members).
-
-fettle show finding --run runs/<name>/ ID
-    Print one finding record to stdout.
 
 fettle add group --title T --summary S --finding ID [--finding ID ...]
                  [--label k:v ...]
     Append one group to FETTLE_RUN's groups.jsonl. Members are
     --finding ID entries (repeatable).
 
-fettle show group --run runs/<name>/ ID
-    Print one group record to stdout.
-
-fettle add review --finding ID | --group ID --label LABEL ... [--comment TEXT]
+fettle add review {--finding ID | --group ID} --label LABEL ... [--comment TEXT]
     Append one review entry to the run's reviews_<FETTLE_AGENT>.jsonl.
 
 fettle add outcome --run runs/<name>/ {--finding ID | --group ID}
-                 [--pr URL] [--status STATUS]
-    Append a outcome event to runs/<name>/outcomes.jsonl. Marks
-    the subject as closed (PR merged, won't fix, etc.). The target
-    run is whichever folder owns the subject (find/dedupe run for
-    findings; group run for groups).
+                   --status STATUS [--pr URL]
+    Append an outcome event to runs/<name>/outcomes.jsonl. Marks
+    the subject as disposed of (PR merged, won't fix, etc.). The
+    target run is whichever folder owns the subject (find / merge /
+    dedupe run for findings; group run for groups). Author identity
+    chains FETTLE_AGENT → $FETTLE_AUTHOR → ~/.config/fettle/identity.
 
-fettle show outcome --run runs/<name>/ {--finding ID | --group ID} [--all]
-    Print the current outcome state for one finding or group.
-    Closures are keyed by (subject.kind, subject.id) — latest
-    entry wins for display. Default prints the latest event only;
-    `--all` prints the full chronological history of events for that
-    subject (including overridden ones).
+# Record reads
 
-All record-add CLIs use server-side metadata generation. `find add`
-and `group add` assign `id` / `created_by` / `created_at`; `review
-add` has no id and assigns only `at` (author derived from
-`FETTLE_AGENT`); `close add` assigns `at` and `marked_by` (same
-author-lookup chain as review: `FETTLE_AGENT` if set, else
-`$FETTLE_AUTHOR`, else `~/.config/fettle/identity`, else error). All
-validate fields before append.
+fettle list runs
+    Print all runs in the project as a JSON array, sorted newest
+    first. Each entry has identity, provenance, and a counts block.
 
-**Stage-aware guards** the harness enforces:
+fettle show run PATH
+    Print one run's summary (status + counts). PATH is positional.
 
-- `find add --canonical-of` is required in a dedupe run and rejected
-  in a find run.
-- `find add` is rejected in a group run; `group add` is rejected
+fettle list findings  --run runs/<name>/
+fettle list groups    --run runs/<name>/
+fettle list reviews   --run runs/<name>/
+fettle list outcomes  --run runs/<name>/
+    Dump every record of that kind in --run as a JSON array.
+
+fettle show finding   --run runs/<name>/ ID
+fettle show group     --run runs/<name>/ ID
+fettle show review    --run runs/<name>/ {--finding ID | --group ID} [--all]
+fettle show outcome   --run runs/<name>/ {--finding ID | --group ID} [--all]
+    Print one record. For review and outcome, default emits the
+    derived current state per subject; --all emits the full
+    chronological history (including superseded entries).
+
+# Output
+
+All read commands emit `{"data": <records>}` unconditionally. Stage
+runners and add commands print plain text to stdout by default
+(path / id) so shell pipelines like `out=$(fettle run find)` keep
+working; pass `--json` to switch them to the same envelope.
+
+# Server-side metadata
+
+`add finding` and `add group` assign `id` / `created_by` /
+`created_at`; `add review` assigns only `at` (author derived from
+`FETTLE_AGENT`); `add outcome` assigns `at` and `marked_by` (same
+author-lookup chain as review). All validate fields before append.
+
+# Stage-aware guards the harness enforces
+
+- `add finding --canonical-of` is required in a dedupe run and
+  rejected in a find run.
+- `add finding` is rejected in a group run; `add group` is rejected
   outside a group run.
 - `--canonical-of RUN:FINDING_ID` provenance: `RUN` must appear in
   the dedupe run's `input_runs[]` and `FINDING_ID` must exist in
   that run's `findings.jsonl`.
-- `group add --finding ID`: `ID` must exist in the group run's
+- `add group --finding ID`: `ID` must exist in the group run's
   `input_run`'s `findings.jsonl`.
-- `review add` and `close add`: `--finding ID` accepted only in
-  find/dedupe runs (id must exist in `findings.jsonl`); `--group ID`
-  accepted only in group runs (id must exist in `groups.jsonl`).
-  Mismatched subject kind or unknown id is rejected.
-
-# UI
-
-fettle ui [--port N]
-    Launch the web UI. Shows a run picker; pick one to browse, label,
-    and close.
+- `add review` and `add outcome`: `--finding ID` accepted only in
+  find / merge / dedupe runs (id must exist in `findings.jsonl`);
+  `--group ID` accepted only in group runs (id must exist in
+  `groups.jsonl`). Mismatched subject kind or unknown id is rejected.
 ```
 
 Concurrency, resume, retries, and timelines are the harness's job.
@@ -765,11 +767,6 @@ resume:
   is `ok` or `empty`; `error` rows get retried.
 - `fettle run review --run <run> --agent codex` skips findings
   already reviewed in `reviews_codex.jsonl`.
-- `fettle run review --watch` polls a find run's `findings.jsonl`
-  and picks up new entries as `find` appends them, so review can run
-  concurrently with a long find scan. `--watch` is rejected against
-  merge/dedupe/group runs (their output is single-shot; review them
-  after `completed_at` is set).
 
 **Single-shot stages** are atomic at the run level — successful runs
 have `completed_at` set in `run.json`; partial runs do not.
@@ -787,8 +784,8 @@ have `completed_at` set in `run.json`; partial runs do not.
   per cluster. Same atomic semantics.
 
 (See the `run.json` description above for how readers should
-interpret missing `completed_at` — UI/`--watch` may read in-progress
-find runs, but merge / dedupe / group inputs must be completed.)
+interpret missing `completed_at` — merge / dedupe / group inputs
+must be completed before consumption.)
 
 JSONL files are append-only. You can hand-edit them between runs if
 you need to correct something, but the normal flow is "let the tools

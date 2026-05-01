@@ -142,6 +142,12 @@ func runFind(cmd *cobra.Command, args []string) error {
 		"model", in.spec.Model,
 	)
 	if len(pending) == 0 {
+		// Resume of a run that was already complete, or a fresh run
+		// with no matching files. Either way the harness "finished
+		// what it was asked" — flip completed_at if not already set.
+		if err := in.rp.MarkCompleted(); err != nil {
+			logger.Warn("mark completed", "error", err)
+		}
 		_ = printRunResult(in.rp.Dir())
 		return nil
 	}
@@ -259,6 +265,12 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 		}
 		if findFlags.script != "" {
 			conflicts = append(conflicts, "--agent-script")
+		}
+		if findFlags.limit > 0 {
+			// --limit on resume would silently truncate the resumed batch
+			// while args.limit on run.json still reflects the original
+			// invocation, making the manifest lie about coverage.
+			conflicts = append(conflicts, "--limit")
 		}
 		if len(conflicts) > 0 {
 			return nil, fmt.Errorf("cannot combine --resume with %s; the run's manifest is authoritative", strings.Join(conflicts, ", "))

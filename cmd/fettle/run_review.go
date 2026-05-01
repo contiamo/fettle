@@ -278,7 +278,17 @@ func resolveReviewInputs(projectDir string) (*reviewInputs, error) {
 		}
 	}
 
-	targetRepo := manifest.TargetRepo // direct for find runs; dedupe inherits from input runs
+	// Find runs carry target_repo directly. Dedupe / merge runs don't
+	// store it on their manifest; resolve by walking the input chain
+	// (resolveRepoRoot lives in run_group.go and handles the recursion).
+	targetRepo := manifest.TargetRepo
+	if targetRepo == "" {
+		resolved, rrErr := resolveRepoRoot(projectDir, manifest)
+		if rrErr != nil {
+			return nil, fmt.Errorf("resolve target_repo for review: %w", rrErr)
+		}
+		targetRepo = resolved
+	}
 
 	spec := agent.Spec{
 		Name:    agentName,

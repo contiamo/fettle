@@ -51,33 +51,33 @@ running scan.
 Once you have a find run, every other CLI works against it. Browse:
 
 ```sh
-fettle --dir examples/self-scan run list
-fettle --dir examples/self-scan run status --run runs/<run>/
-fettle --dir examples/self-scan find list --run runs/<run>/
-fettle --dir examples/self-scan find show --run runs/<run>/ <id>
+fettle --dir examples/self-scan list runs
+fettle --dir examples/self-scan show run runs/<run>/
+fettle --dir examples/self-scan list findings --run runs/<run>/
+fettle --dir examples/self-scan show finding --run runs/<run>/ <id>
 ```
 
 Review the findings (one agent invocation per finding):
 
 ```sh
 fettle --dir examples/self-scan run review --run runs/<run>/
-fettle --dir examples/self-scan review list --run runs/<run>/
-fettle --dir examples/self-scan review show --run runs/<run>/ --finding <id>
+fettle --dir examples/self-scan list reviews --run runs/<run>/
+fettle --dir examples/self-scan show review --run runs/<run>/ --finding <id>
 ```
 
 Cluster into PR-sized batches:
 
 ```sh
 fettle --dir examples/self-scan run group --run runs/<run>/
-fettle --dir examples/self-scan group list --run runs/<group-run>/
+fettle --dir examples/self-scan list groups --run runs/<group-run>/
 ```
 
-Mark closures as you ship fixes:
+Mark outcomes as you ship fixes:
 
 ```sh
-fettle --dir examples/self-scan close add --run runs/<run>/ --finding <id> --status merged --pr <url>
-fettle --dir examples/self-scan close show --run runs/<run>/ --finding <id>
-fettle --dir examples/self-scan close list --run runs/<run>/
+fettle --dir examples/self-scan add outcome --run runs/<run>/ --finding <id> --status merged --pr <url>
+fettle --dir examples/self-scan show outcome --run runs/<run>/ --finding <id>
+fettle --dir examples/self-scan list outcomes --run runs/<run>/
 ```
 
 For a second find run with a different agent, then dedupe:

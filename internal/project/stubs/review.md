@@ -1,7 +1,7 @@
 <!--
   This file is the "what to evaluate" half of fettle's review-stage
   prompt. fettle wraps it in a frozen frame that handles the agent
-  contract — variable values, the `fettle review add` recording
+  contract — variable values, the `fettle add review` recording
   protocol, and exit-code handling. You only describe the rubric.
 
   Replace everything below with your domain.

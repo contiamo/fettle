@@ -2,7 +2,7 @@
   This file is the "domain rubric" half of fettle's dedupe-stage
   prompt. fettle wraps it in a frozen frame that handles the agent
   contract — receiving FINDINGS_JSON with from_run + review state,
-  the `fettle find add --canonical-of` recording protocol, and
+  the `fettle add finding --canonical-of` recording protocol, and
   exit-code handling. You only describe the merging judgment.
 
   Replace everything below with your domain.
