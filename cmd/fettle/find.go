@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -70,7 +71,113 @@ func init() {
 	findAddCmd.Flags().BoolVar(&findAddFlags.verbose, "verbose", false, "print the new finding's id to stdout on success")
 
 	findCmd.AddCommand(findAddCmd)
+
+	findShowCmd.Flags().StringVar(&findShowFlags.run, "run", "", "path to the run folder containing the finding (required)")
+	_ = findShowCmd.MarkFlagRequired("run")
+	findCmd.AddCommand(findShowCmd)
+
+	findListCmd.Flags().StringVar(&findListFlags.run, "run", "", "path to the run folder to list findings from (required)")
+	_ = findListCmd.MarkFlagRequired("run")
+	findCmd.AddCommand(findListCmd)
+
 	rootCmd.AddCommand(findCmd)
+}
+
+var findShowFlags struct {
+	run string
+}
+
+var findShowCmd = &cobra.Command{
+	Use:   "show ID",
+	Short: "Print one finding record as JSON",
+	Long: `show prints a single finding from --run by id, as pretty JSON
+on stdout. Use --run to pick the find/merge/dedupe run that owns
+the finding.
+
+Exit codes: 0 found, 1 not found / validation, 2 internal error.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runFindShow,
+}
+
+var findListFlags struct {
+	run string
+}
+
+var findListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "Print all findings in --run as a JSON array",
+	Long: `list dumps every finding in --run as a JSON array on stdout.
+For ad-hoc filtering, pipe through jq. Empty runs (or missing
+findings.jsonl) print [].
+
+Exit codes: 0 success, 2 internal error.`,
+	RunE: runFindList,
+}
+
+func runFindShow(cmd *cobra.Command, args []string) error {
+	id := args[0]
+	rp, err := openRunForRead(findShowFlags.run)
+	if err != nil {
+		return err
+	}
+	findings, err := loadFindingsFromRun(rp.Dir())
+	if err != nil {
+		return internalError(fmt.Errorf("load findings: %w", err))
+	}
+	for _, f := range findings {
+		if f.ID == id {
+			data, err := json.MarshalIndent(f, "", "  ")
+			if err != nil {
+				return internalError(fmt.Errorf("marshal finding: %w", err))
+			}
+			fmt.Println(string(data))
+			return nil
+		}
+	}
+	return validationError([]string{fmt.Sprintf("finding %q not found in %s", id, findShowFlags.run)})
+}
+
+func runFindList(cmd *cobra.Command, args []string) error {
+	rp, err := openRunForRead(findListFlags.run)
+	if err != nil {
+		return err
+	}
+	findings, err := loadFindingsFromRun(rp.Dir())
+	if err != nil {
+		return internalError(fmt.Errorf("load findings: %w", err))
+	}
+	if findings == nil {
+		findings = []schema.Finding{}
+	}
+	data, err := json.MarshalIndent(findings, "", "  ")
+	if err != nil {
+		return internalError(fmt.Errorf("marshal findings: %w", err))
+	}
+	fmt.Println(string(data))
+	return nil
+}
+
+// openRunForRead resolves a --run flag (relative to the project dir
+// or absolute) and opens it. Used by the read commands (show / list).
+// Distinct from openRunForClose only because the close path also
+// needs the manifest; this one doesn't.
+func openRunForRead(rawRun string) (*run.Path, error) {
+	if rawRun == "" {
+		return nil, validationError([]string{"--run is required"})
+	}
+	abs := rawRun
+	if !filepath.IsAbs(abs) {
+		dir, err := projectDir()
+		if err != nil {
+			return nil, internalError(err)
+		}
+		abs = filepath.Join(dir, rawRun)
+	}
+	rp, err := run.Open(abs)
+	if err != nil {
+		return nil, internalError(fmt.Errorf("open run %s: %w", rawRun, err))
+	}
+	return rp, nil
 }
 
 func runFindAdd(cmd *cobra.Command, args []string) error {
