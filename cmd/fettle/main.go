@@ -32,7 +32,7 @@ func init() {
 }
 
 // exitCoder is implemented by errors that want a specific process exit
-// code. Used by `fettle finding add` to distinguish validation (1) from
+// code. Used by `fettle find add` to distinguish validation (1) from
 // internal failures (2).
 type exitCoder interface {
 	ExitCode() int

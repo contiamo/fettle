@@ -14,7 +14,7 @@ import (
 //             FETTLE_MODEL   the configured model, when set
 //             FETTLE_EFFORT  the configured reasoning effort, when set
 //             PATH           prepended with fettle's binary dir, so the
-//                            script can `fettle finding add` directly
+//                            script can `fettle find add` directly
 //   - cwd:    spec.WorkDir (typically the target repo root)
 //   - args:   none — fettle never adds positional arguments. Bake any
 //             flags you need into a wrapper.

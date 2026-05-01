@@ -1,7 +1,7 @@
 <!--
   This file is the "what to look for" half of fettle's find-stage prompt.
   fettle wraps it in a frozen frame that handles variable values, the
-  `fettle finding add` recording protocol, exit-code handling, and output
+  `fettle find add` recording protocol, exit-code handling, and output
   discipline. You don't need to repeat any of that here — just describe
   the analysis you want.
 

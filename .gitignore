@@ -1,3 +1,4 @@
 old/
 bin/
 **/runs/
+.claude/settings.local.json

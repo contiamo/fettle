@@ -2,7 +2,7 @@
 
 You are analyzing **one file** for issues. Read it, decide which findings
 meet the bar in the "What to look for" section below, record them via the
-`fettle finding add` CLI, and exit.
+`fettle find add` CLI, and exit.
 
 - File under analysis: `{{.TargetFile}}`
 - Repo root: `{{.RepoRoot}}`
@@ -16,7 +16,7 @@ meet the bar in the "What to look for" section below, record them via the
 For each finding, run a single shell command:
 
 ```bash
-fettle finding add \
+fettle find add \
   --file 'path/relative/to/repo.go' \
   --line 42 \
   --title 'short imperative title' \
@@ -35,13 +35,20 @@ which scale to use), `--label` (repeatable, `prefix:value` convention),
 `--reference` (repeatable, `PATH` or `PATH:LINE` — used by fettle for
 grouping).
 
+**Same-root-cause findings**: if multiple sites in the file share one
+underlying issue (e.g. the same stringly-typed pattern at four call
+sites, or a swallowed error reproduced in two helpers), record **one**
+finding and pass the other locations via `--reference path:line`. Don't
+emit N near-identical findings — fettle's grouping uses `references` to
+cluster, but only when you actually populate it.
+
 **Shell quoting**: wrap every string flag in single quotes so spaces and
 shell metacharacters pass through unchanged. For literal single quotes
 inside the value, end the quote, escape the apostrophe, and re-open:
 `'don'\''t'` (the shell sees `don't`). Newlines inside single quotes are
 literal.
 
-**Error handling**: if `fettle finding add` exits non-zero, read its
+**Error handling**: if `fettle find add` exits non-zero, read its
 stderr and try again with corrections. Exit codes:
 - `0` — finding recorded
 - `1` — validation error (your fault: missing or malformed flag)
@@ -49,7 +56,10 @@ stderr and try again with corrections. Exit codes:
 
 ## Output discipline
 
+- **Prefer fewer, stronger findings.** Zero is better than filler. A
+  file with three sharp findings beats one with eight, where five are
+  noise. If you're padding to feel productive, stop.
 - Do not write any files yourself. Do not print findings to stdout.
 - Do not summarize at the end, do not ask follow-up questions.
 - An empty file (no findings worth flagging) is a valid result — just
-  exit without calling `fettle finding add` at all.
+  exit without calling `fettle find add` at all.

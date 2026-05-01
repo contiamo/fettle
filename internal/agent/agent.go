@@ -91,7 +91,7 @@ var nilReader io.Reader = strings.NewReader("")
 
 // buildEnv constructs the env for an agent subprocess: os.Environ() with
 // PATH prepended by the running fettle binary's directory (so the agent
-// can shell out to `fettle finding add` and find this exact build), plus
+// can shell out to `fettle find add` and find this exact build), plus
 // spec.Env appended so caller-supplied vars win on key conflict.
 func buildEnv(spec Spec) []string {
 	env := os.Environ()

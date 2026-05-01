@@ -45,7 +45,7 @@ var initCmd = &cobra.Command{
 			return err
 		}
 		fmt.Printf("Initialized fettle project in %s\n", dir)
-		fmt.Println("Edit instructions/find.md to describe what to look for, then run `fettle find`.")
+		fmt.Println("Edit instructions/find.md to describe what to look for, then run `fettle run find`.")
 		return nil
 	},
 }

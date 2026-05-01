@@ -13,8 +13,12 @@ record nothing.
 ## Read first
 
 Read the project's Go conventions at `conventions/go.md` (relative to
-the repo root). Those conventions are mandatory — anything that
-contradicts them is a finding.
+the repo root). The conventions are the bar for the project, but they
+are not a checklist — flag a violation only when it creates real
+**reader cost**, **schema/API drift**, **operational risk**, or
+**repeated inconsistency**. Mechanical one-off modernizations (single
+`slices.Sort`, single `omitzero` swap, etc.) are low severity and
+should be skipped unless they're the strongest finding in the file.
 
 ## Also flag (concrete smells, file-local)
 

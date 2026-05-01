@@ -122,7 +122,7 @@ func (p *Path) Manifest() (schema.RunManifest, error) {
 
 // AppendFinding appends one finding to findings.jsonl. Safe across
 // goroutines and across processes — the underlying append uses flock(2)
-// on the data file, so the agent-spawned `fettle finding add` and the
+// on the data file, so the agent-spawned `fettle find add` and the
 // harness's own writers serialize through the kernel.
 func (p *Path) AppendFinding(f schema.Finding) error {
 	line, err := json.Marshal(f)
