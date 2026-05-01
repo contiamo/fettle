@@ -80,7 +80,7 @@ type Review struct {
 // RunManifest is the contents of run.json.
 type RunManifest struct {
 	Name          string                `json:"name"`
-	Stage         string                `json:"stage"` // "find" | "dedupe" | "group"
+	Stage         string                `json:"stage"` // "find" | "merge" | "dedupe" | "group"
 	FettleVersion string                `json:"fettle_version"`
 	CreatedAt     time.Time             `json:"created_at"`
 	CompletedAt   *time.Time            `json:"completed_at,omitempty"`
@@ -123,4 +123,29 @@ func NewFindingID() string {
 		panic("crypto/rand: " + err.Error())
 	}
 	return hex.EncodeToString(b[:])
+}
+
+// Group is one cluster of findings produced by `fettle run group`.
+// Lives in runs/<group-run>/groups.jsonl. `finding_ids[]` references
+// findings in the group run's `input_run`'s findings.jsonl.
+type Group struct {
+	ID         string    `json:"id"`
+	Title      string    `json:"title"`
+	Summary    string    `json:"summary"`
+	FindingIDs []string  `json:"finding_ids"`
+	Labels     []string  `json:"labels"`
+	CreatedBy  string    `json:"created_by"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// NewGroupID returns a fresh random group id of the form `g_xxxxxxxx`
+// (8 hex chars). The `g_` prefix keeps groups distinguishable from
+// findings at a glance — useful when both kinds appear side by side in
+// review/resolution logs.
+func NewGroupID() string {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("crypto/rand: " + err.Error())
+	}
+	return "g_" + hex.EncodeToString(b[:])
 }
