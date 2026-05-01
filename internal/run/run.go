@@ -104,6 +104,61 @@ func CreateForFind(opts CreateFindOpts) (*Path, error) {
 	return &Path{dir: dir}, nil
 }
 
+// CreateMergeOpts configures CreateForMerge.
+type CreateMergeOpts struct {
+	ProjectDir string
+	Slug       string
+	InputRuns  []string // project-relative paths to input run folders
+}
+
+// CreateForMerge initializes a new merge run folder. No agent
+// invocation; the caller (cmd/fettle/run_merge.go) populates the
+// findings/reviews then calls MarkCompleted on the returned Path.
+func CreateForMerge(opts CreateMergeOpts) (*Path, error) {
+	name, err := generateName("merge", opts.Slug)
+	if err != nil {
+		return nil, err
+	}
+	runsDir := filepath.Join(opts.ProjectDir, "runs")
+	if err := os.MkdirAll(runsDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create runs/: %w", err)
+	}
+	dir := filepath.Join(runsDir, name)
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("create run dir: %w", err)
+	}
+	if err := touch(filepath.Join(dir, "findings.jsonl")); err != nil {
+		return nil, err
+	}
+	manifest := schema.RunManifest{
+		Name:          name,
+		Stage:         "merge",
+		FettleVersion: project.Version,
+		CreatedAt:     time.Now().UTC(),
+		InputRuns:     opts.InputRuns,
+		Stages:        map[string]schema.StageEntry{}, // no agent stages
+	}
+	if err := writeManifest(dir, manifest); err != nil {
+		return nil, err
+	}
+	return &Path{dir: dir}, nil
+}
+
+// MarkCompleted stamps run.json's completed_at field. Single-shot
+// stages call this once their work is fully written, signalling to
+// downstream consumers that the run is trustworthy.
+func (p *Path) MarkCompleted() error {
+	p.manifestMu.Lock()
+	defer p.manifestMu.Unlock()
+	m, err := readManifest(p.dir)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	m.CompletedAt = &now
+	return writeManifest(p.dir, m)
+}
+
 // Open opens an existing run folder.
 func Open(dir string) (*Path, error) {
 	if _, err := os.Stat(filepath.Join(dir, "run.json")); err != nil {

@@ -19,6 +19,7 @@ type Finding struct {
 	Severity    *string     `json:"severity"`
 	Labels      []string    `json:"labels"`
 	References  []Reference `json:"references"`
+	Members     []Member    `json:"members,omitempty"`
 	CreatedBy   string      `json:"created_by"`
 	CreatedAt   time.Time   `json:"created_at"`
 }
@@ -27,6 +28,14 @@ type Finding struct {
 type Reference struct {
 	File string `json:"file"`
 	Line int    `json:"line,omitempty"`
+}
+
+// Member is one source-finding back-pointer on a merge or dedupe
+// canonical finding. members.length is always 1 for merge runs and
+// 1 or more for dedupe runs.
+type Member struct {
+	FindingID string `json:"finding_id"`
+	FromRun   string `json:"from_run"`
 }
 
 // FileStatus is one row of files.jsonl, the per-file scan ledger.
