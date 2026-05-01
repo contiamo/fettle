@@ -634,11 +634,24 @@ actions a human takes:
 
 - Browse the run's findings by file, label, or group.
 - Add labels and comments — written as a new entry in the run's
-  `reviews_<your-slug>.jsonl`. Your slug comes from `$FETTLE_AUTHOR`, or
-  `~/.config/fettle/identity` as a fallback — never from `.fettle.json`,
-  since the project directory may be shared or checked in.
+  `reviews_<your-slug>.jsonl`.
 - Mark findings or groups resolved — written as a new entry in the run's
   `resolutions.jsonl`.
+
+**Author identity (UI):** on the first edit in a fresh install, the
+UI prompts once for a slug, prefilled with `git config user.name` (or
+`$USER` if git isn't configured). The chosen slug is persisted to
+`~/.config/fettle/identity` and used for every subsequent UI session.
+A small "Reviewing as: <slug>" indicator shows the active identity
+with a way to change it. Identity is per-user, per-machine — never
+stored in `.fettle.json`, since the project directory may be shared
+or checked in.
+
+**Author identity (CLI):** non-interactive contexts can't prompt, so
+the CLI uses the standard chain: `FETTLE_AGENT` (set by the harness
+during stages) → `$FETTLE_AUTHOR` → `~/.config/fettle/identity` →
+error. Setting up identity once via the UI populates the same file
+the CLI reads.
 
 There is no separate backend service. The UI process reads and writes the
 project directory and that's all.
