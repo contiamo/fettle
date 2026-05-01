@@ -363,8 +363,8 @@ fettle run find --resume runs/<name>/
 fettle run review --run runs/<name>/ [--agent NAME]
     For each finding in --run not yet reviewed by this agent, run
     the review agent. Append to runs/<name>/reviews_<agent>.jsonl.
-    Currently supports find and dedupe runs; group-run review is
-    not yet implemented.
+    Currently supports find / merge / dedupe runs; group-run review
+    is not yet implemented.
 
 fettle run merge --run RUN [--run RUN]... [--name SLUG]
     Concatenate non-overlapping runs. Harness-only — no agent
