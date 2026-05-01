@@ -55,7 +55,7 @@ const (
 	StatusError = "error"
 )
 
-// Subject identifies what a review or resolution is about.
+// Subject identifies what a review or closure is about.
 type Subject struct {
 	Kind string `json:"kind"` // "finding" or "group"
 	ID   string `json:"id"`
@@ -141,7 +141,7 @@ type Group struct {
 // NewGroupID returns a fresh random group id of the form `g_xxxxxxxx`
 // (8 hex chars). The `g_` prefix keeps groups distinguishable from
 // findings at a glance — useful when both kinds appear side by side in
-// review/resolution logs.
+// review/closure logs.
 func NewGroupID() string {
 	var b [4]byte
 	if _, err := rand.Read(b[:]); err != nil {

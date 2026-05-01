@@ -24,7 +24,7 @@ var runMergeFlags struct {
 var runMergeCmd = &cobra.Command{
 	Use:   "merge",
 	Short: "Concatenate multiple non-overlapping runs into one",
-	Long: `merge copies findings (and review/resolution attachments) from
+	Long: `merge copies findings (and review/closure attachments) from
 two or more input runs into a new merge run. Harness-only — no agent
 invocation. Each finding gets a fresh id and a single-element
 members[] entry pointing at its source. Source reviews are

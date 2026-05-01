@@ -347,7 +347,7 @@ func (p *Path) AppendReview(author string, review schema.Review) error {
 }
 
 // FindingExists reports whether findings.jsonl contains a row with
-// the given id. Used to validate review/resolve subjects.
+// the given id. Used to validate review/close subjects.
 func (p *Path) FindingExists(id string) (bool, error) {
 	return idExistsIn(filepath.Join(p.dir, "findings.jsonl"), id)
 }

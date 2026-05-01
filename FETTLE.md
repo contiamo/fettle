@@ -18,7 +18,7 @@ the knowledge is yours.
 ## Pipeline
 
 ```
-  find    →    review       →    merge | dedupe   →    group     →   resolve
+  find    →    review       →    merge | dedupe   →    group     →   close
   per-file     per-finding       (optional;            cluster        track
   agent        agent and/or      multi-run             findings into  closures
   scan         human review      consolidation)        PR-sized
@@ -26,9 +26,9 @@ the knowledge is yours.
 ```
 
 `find`, `merge`, `dedupe`, and `group` each create their own **run
-folder** under `runs/`. `review` and `resolve` are operations on
+folder** under `runs/`. `review` and `close` are operations on
 existing runs — their outputs (per-author review files, the
-resolutions log) live inside the target run, not in their own
+closures log) live inside the target run, not in their own
 folders. Stages are independent — you can skip any, re-run any, or
 stop after the first one if a report is all you need.
 
@@ -62,9 +62,9 @@ grouping isn't supported directly; merge or dedupe first, then group.
 the stage prefix and a UTC timestamp. Each folder is self-describing
 about its own data and points at any input runs for full provenance.
 
-`review` and `resolve` are **operations on existing runs**, not
+`review` and `close` are **operations on existing runs**, not
 stages with their own folders. Their outputs (per-author review
-files, the resolutions log) live inside the target run.
+files, the closures log) live inside the target run.
 
 ```
 my-audit/
@@ -82,13 +82,13 @@ my-audit/
       files.jsonl               per-file scan ledger
       raw/                      verbatim agent output, one file per file
       reviews_<author>.jsonl    written by `fettle run review --run …`; one per author
-      resolutions.jsonl         written by `fettle resolve add --run …`
+      closures.jsonl            written by `fettle close add --run …`
 
     merge_20260501T091500Z_combined/
       run.json                  manifest with input_runs: ["runs/find_go", "runs/find_ts"]
       findings.jsonl            findings copied verbatim, stamped with members[].length=1
       reviews_<author>.jsonl    propagated from input runs (subject ids remapped)
-      resolutions.jsonl         closures of merged findings live here
+      closures.jsonl            closures of merged findings live here
                                 (no instructions/ — merge is harness-only, no agent)
                                 (no raw/ — no agent transcript to capture)
 
@@ -98,7 +98,7 @@ my-audit/
       findings.jsonl            canonical findings (with members[] back-pointers)
       raw/                      single agent transcript
       reviews_<author>.jsonl    reviews of canonical findings live here
-      resolutions.jsonl         closures of canonical findings live here
+      closures.jsonl            closures of canonical findings live here
 
     group_20260501T100000Z_pr-scoped/
       run.json                  manifest with input_run: "runs/dedupe_X" (or a find run)
@@ -106,7 +106,7 @@ my-audit/
       groups.jsonl              clusters
       raw/                      single agent transcript
       reviews_<author>.jsonl    reviews of groups live here
-      resolutions.jsonl         closures of groups live here
+      closures.jsonl            closures of groups live here
 ```
 
 `find` creates a new run folder on each invocation, or continues an
@@ -116,13 +116,13 @@ folder — `merge` and `dedupe` accept multiple `--run` flags (one
 per input find run); `group` accepts exactly one `--run` (the find,
 merge, or dedupe run to cluster).
 
-`fettle run review` and `fettle resolve add` / `fettle resolve show`
+`fettle run review` and `fettle close add` / `fettle close show`
 take `--run runs/<name>/` pointing at the target run; they read its
 findings or groups and write their own append-only files inside it
-(`reviews_<author>.jsonl` for review, `resolutions.jsonl` for
-resolve). They never create a new run folder. The agent-facing
-`fettle review add` resolves the run from `FETTLE_RUN` instead of
-taking `--run` directly — same target, different entry point.
+(`reviews_<author>.jsonl` for review, `closures.jsonl` for close).
+They never create a new run folder. The agent-facing `fettle review
+add` resolves the run from `FETTLE_RUN` instead of taking `--run`
+directly — same target, different entry point.
 
 A run folder is *self-describing about its own data*, not
 self-contained: a group folder references a finding/dedupe run for
@@ -141,7 +141,7 @@ partial folder should be deleted and the stage re-run.
 
 **`run.json`** is the manifest of the stage that created the folder
 (find / merge / dedupe / group). It captures everything needed to
-understand or reproduce that run. Reviews and resolves do *not* update
+understand or reproduce that run. Reviews and closes do *not* update
 `run.json` — they're attachments to a run, not stage outputs of
 their own.
 
@@ -332,7 +332,7 @@ care what the prompt looks like beyond the variable substitution.
 The CLI is organized into two namespaces:
 
 - `fettle run <stage>` — start an agent-driven stage. `find`, `dedupe`, and `group` create a new run folder (find can also resume one with `--resume`). `review` is the exception: it operates on an existing run via `--run` and writes per-author files into it; no new folder.
-- `fettle <noun> <verb>` — operate on a record kind (`find`, `group`, `review`, `resolve`); `add` is the agent-facing append, `show` is the read command. Same noun used regardless of which run kind the record lives in.
+- `fettle <noun> <verb>` — operate on a record kind (`find`, `group`, `review`, `close`); `add` is the agent-facing append, `show` is the read command. Same noun used regardless of which run kind the record lives in.
 
 `fettle init`, `fettle ui`, and `--dir` are top-level. Every command operates on the fettle project in the current directory unless `--dir` overrides.
 
@@ -368,8 +368,8 @@ fettle run merge --run RUN [--run RUN]... [--name SLUG]
     invocation. Each finding from each input run is copied forward
     with a fresh id and members[{finding_id, from_run}] of length 1.
     Source reviews are propagated verbatim with subject ids
-    remapped. Source resolutions are NOT propagated (closures should
-    be re-evaluated against the merged view). Creates
+    remapped. Source closures are NOT propagated (they should be
+    re-evaluated against the merged view). Creates
     runs/merge_<UTC-timestamp>_<slug>/.
 
     Use this for non-overlapping inputs (e.g. one find run on
@@ -407,10 +407,9 @@ fettle run list
 fettle run status --run runs/<name>/
     Print counts for one run, scoped to records that live in the run
     folder. For a find or dedupe run that's findings, reviews, and
-    resolutions; for a group run that's groups, reviews, and
-    resolutions. Downstream runs (e.g. groups derived from a find
-    run) aren't counted — those are separate runs with their own
-    status.
+    closures; for a group run that's groups, reviews, and closures.
+    Downstream runs (e.g. groups derived from a find run) aren't
+    counted — those are separate runs with their own status.
 
 # Record CLIs (called by spawned agents, sometimes by humans)
 
@@ -436,16 +435,16 @@ fettle group show --run runs/<name>/ ID
 fettle review add --finding ID | --group ID --label LABEL ... [--comment TEXT]
     Append one review entry to the run's reviews_<FETTLE_AGENT>.jsonl.
 
-fettle resolve add --run runs/<name>/ {--finding ID | --group ID}
-                   [--pr URL] [--status STATUS]
-    Append a closure event to runs/<name>/resolutions.jsonl. Marks
-    the subject as resolved (PR merged, won't fix, etc.). The target
+fettle close add --run runs/<name>/ {--finding ID | --group ID}
+                 [--pr URL] [--status STATUS]
+    Append a closure event to runs/<name>/closures.jsonl. Marks
+    the subject as closed (PR merged, won't fix, etc.). The target
     run is whichever folder owns the subject (find/dedupe run for
     findings; group run for groups).
 
-fettle resolve show --run runs/<name>/ {--finding ID | --group ID} [--all]
-    Print the current resolution state for one finding or group.
-    Resolutions are keyed by (subject.kind, subject.id) — latest
+fettle close show --run runs/<name>/ {--finding ID | --group ID} [--all]
+    Print the current closure state for one finding or group.
+    Closures are keyed by (subject.kind, subject.id) — latest
     entry wins for display. Default prints the latest event only;
     `--all` prints the full chronological history of events for that
     subject (including overridden ones).
@@ -453,8 +452,8 @@ fettle resolve show --run runs/<name>/ {--finding ID | --group ID} [--all]
 All record-add CLIs use server-side metadata generation. `find add`
 and `group add` assign `id` / `created_by` / `created_at`; `review
 add` has no id and assigns only `at` (author derived from
-`FETTLE_AGENT`); `resolve add` assigns `at` and `marked_by` (same
-author-resolution chain as review: `FETTLE_AGENT` if set, else
+`FETTLE_AGENT`); `close add` assigns `at` and `marked_by` (same
+author-lookup chain as review: `FETTLE_AGENT` if set, else
 `$FETTLE_AUTHOR`, else `~/.config/fettle/identity`, else error). All
 validate fields before append.
 
@@ -469,7 +468,7 @@ validate fields before append.
   that run's `findings.jsonl`.
 - `group add --finding ID`: `ID` must exist in the group run's
   `input_run`'s `findings.jsonl`.
-- `review add` and `resolve add`: `--finding ID` accepted only in
+- `review add` and `close add`: `--finding ID` accepted only in
   find/dedupe runs (id must exist in `findings.jsonl`); `--group ID`
   accepted only in group runs (id must exist in `groups.jsonl`).
   Mismatched subject kind or unknown id is rejected.
@@ -478,7 +477,7 @@ validate fields before append.
 
 fettle ui [--port N]
     Launch the web UI. Shows a run picker; pick one to browse, label,
-    and resolve.
+    and close.
 ```
 
 Concurrency, resume, retries, and timelines are the harness's job.
@@ -665,12 +664,12 @@ Same `labels` convention as findings — `prefix:value` strings, e.g.
 groups too (`subject.kind: "group"` in `reviews_<author>.jsonl`); the
 same display rules apply.
 
-**`resolutions.jsonl`** — one resolution event per line. Lives in
+**`closures.jsonl`** — one closure event per line. Lives in
 whichever run owns the subject:
 
-- Resolutions of findings live in the find or dedupe run that produced
+- Closures of findings live in the find or dedupe run that produced
   them.
-- Resolutions of groups live in the group run that produced them.
+- Closures of groups live in the group run that produced them.
 
 Records that a finding or group is closed (PR merged, won't fix,
 deduped, etc.). Fettle does not open or merge PRs; this is a tracking
@@ -694,14 +693,14 @@ agrees on. Re-marking is allowed; the latest entry wins.
 `fettle ui` serves a small React app on localhost. It opens on a run
 picker (one row per `runs/<name>/`), and once you pick a run it reads
 that run's JSONL files (auto-refreshes when they change) and writes back
-to the run's `reviews_<your-slug>.jsonl` and `resolutions.jsonl` for
+to the run's `reviews_<your-slug>.jsonl` and `closures.jsonl` for
 actions a human takes:
 
 - Browse the run's findings by file, label, or group.
 - Add labels and comments — written as a new entry in the run's
   `reviews_<your-slug>.jsonl`.
-- Mark findings or groups resolved — written as a new entry in the run's
-  `resolutions.jsonl`.
+- Mark findings or groups closed — written as a new entry in the run's
+  `closures.jsonl`.
 
 **Author identity (UI):** on the first edit in a fresh install, the
 UI prompts once for a slug, prefilled with `git config user.name` (or
@@ -802,7 +801,7 @@ run, just create a new group run.
 
 ## Non-goals
 
-- **No auto-merge.** `resolutions.jsonl` is a closure log, not a shipping
+- **No auto-merge.** `closures.jsonl` is a closure log, not a shipping
   pipeline. Humans drive the actual fix-and-merge step.
 - **No build/lint/test integration.** If you want a stage that runs your
   test suite, write a prompt that tells the agent to do so — fettle won't
