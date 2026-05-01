@@ -1,11 +1,11 @@
 # Fettle
 
 A harness for running LLM agents over a codebase to find, review, and group
-issues. You provide the instructions in markdown; fettle handles the
+findings. You provide the instructions in markdown; fettle handles the
 orchestration. Output is JSONL on disk.
 
 Fettle is a **file-oriented** harness: it runs an agent per file matching
-your globs, and an issue's primary anchor is `(file, line)`. That makes it a
+your globs, and a finding's primary anchor is `(file, line)`. That makes it a
 good fit for refactor sweeps, convention enforcement, doc-comment audits,
 license-header checks, and lint-shaped security checks. It is *not* a fit
 for analyses where the natural unit is bigger than a file — cross-file data
@@ -18,23 +18,41 @@ the knowledge is yours.
 ## Pipeline
 
 ```
-  find       →    review        →    group       →    resolve
-  per-file        per-issue          cluster into     track which
-  agent scan      agent and/or       review-sized     issues/groups
-                  human review       batches          are closed
+  find    →    review       →    dedupe         →    group     →   resolve
+  per-file     per-finding       (optional;          cluster        track
+  agent        agent and/or      multi-run          findings into    closures
+  scan         human review      consolidation)     PR-sized
+                                                    batches
 ```
 
-Each stage reads and writes JSONL files in the project directory. Stages are
-independent — you can skip any of them, re-run any of them, or stop after the
-first one if a report is all you need.
+`find`, `dedupe`, and `group` each create their own **run folder**
+under `runs/`. `review` and `resolve` are operations on existing
+runs — their outputs (per-author review files, the resolutions log)
+live inside the target run, not in their own folders. Stages are
+independent — you can skip any, re-run any, or stop after the first
+one if a report is all you need.
+
+**Dedupe is a multi-input stage**: it consolidates findings from
+multiple find runs (typically two agents scanning the same code) into
+canonical findings with a `members[]` field listing the source
+findings. Skip it if you only have one find run — within-run dedup is
+already the find agent's job (via `--reference`).
+
+**Group is single-input**: it takes one run (a find run, or a dedupe
+run if you consolidated first) and clusters its findings into
+PR-sized batches. Multi-run grouping isn't supported directly; dedupe
+first, then group.
 
 ## Project layout
 
-`fettle init` creates a project directory. Each `fettle find` invocation
-creates a self-contained **run folder** under `runs/`; everything that
-follows (review, group, resolve) operates on a specific run. Each run is
-copyable, archivable, and reproducible — the prompt that produced it is
-snapshotted alongside the data.
+`fettle init` creates a project directory. **`find`, `dedupe`, and
+`group` each create their own run folder** under `runs/`, named with
+the stage prefix and a UTC timestamp. Each folder is self-describing
+about its own data and points at any input runs for full provenance.
+
+`review` and `resolve` are **operations on existing runs**, not
+stages with their own folders. Their outputs (per-author review
+files, the resolutions log) live inside the target run.
 
 ```
 my-audit/
@@ -42,65 +60,140 @@ my-audit/
   instructions/                 editable templates (seed for new runs)
     find.md
     review.md
+    dedupe.md
     group.md
   runs/
     find_20260430T145233Z_security-v1/
-      run.json                  manifest: who/what/when, fully self-describing
-      instructions/             snapshots of the prompts that ran (frozen)
-        find.md                 snapshotted at run start
-        review.md               snapshotted on first `fettle review --run …`
-        group.md                snapshotted on first `fettle group --run …`
-      findings.jsonl
+      run.json                  manifest: who/what/when
+      instructions/find.md      snapshot of the find prompt that ran
+      findings.jsonl            scan results
       files.jsonl               per-file scan ledger
-      raw/                      verbatim agent output, one file per invocation
-      reviews_<author>.jsonl    one per reviewer (agent or human)
-      groups.jsonl
-      resolutions.jsonl
-    find_20260502T091812Z_refactor/
-      ...
+      raw/                      verbatim agent output, one file per file
+      reviews_<author>.jsonl    written by `fettle review --run …`; one per author
+      resolutions.jsonl         written by `fettle resolve --run …`
+
+    dedupe_20260501T093000Z_consolidate/
+      run.json                  manifest with input_runs: ["runs/find_X", "runs/find_Y"]
+      instructions/dedupe.md    snapshot
+      findings.jsonl            canonical findings (with members[] back-pointers)
+      raw/                      single agent transcript
+      reviews_<author>.jsonl    reviews of canonical findings live here
+      resolutions.jsonl         closures of canonical findings live here
+
+    group_20260501T100000Z_pr-scoped/
+      run.json                  manifest with input_run: "runs/dedupe_X" (or a find run)
+      instructions/group.md     snapshot
+      groups.jsonl              clusters
+      raw/                      single agent transcript
+      reviews_<author>.jsonl    reviews of groups live here
+      resolutions.jsonl         closures of groups live here
 ```
 
-A run folder is the unit of work. All paths in the schemas below are
-relative to a run folder. `review`, `group`, and `resolve` all take
-`--run runs/<name>/` and stay scoped to that folder.
+`find` creates a new run folder on each invocation, or continues an
+existing one via `--resume runs/<name>/`. `dedupe` and `group` take
+input runs via `--run` and create a *new* output run folder —
+`dedupe` accepts multiple `--run` flags (one per input find run);
+`group` accepts exactly one `--run` (the find or dedupe run to
+cluster).
 
-**Run folder naming**: `find_<UTC-timestamp>_<slug>/`. Timestamp format is
-`YYYYMMDDTHHMMSSZ` so runs sort chronologically and same-day runs don't
-collide. The slug defaults to a short random suffix; `--name <slug>`
-overrides just the slug portion (the timestamp prefix is always
-generated). Resuming a killed `find` is `fettle find --resume runs/<name>/`.
+`review` and `resolve` always take `--run runs/<name>/` pointing at
+the target run; they read its findings (or groups) and write their
+own per-author files inside it. They never create a new run folder.
 
-**`run.json`** is the manifest. It captures everything needed to
-understand or reproduce the run after it's archived or copied:
+A run folder is *self-describing about its own data*, not
+self-contained: a group folder references a finding/dedupe run for
+member resolution; a dedupe folder references find runs for member
+provenance. Archive the input-run chain alongside if you want full
+data portability.
+
+**Run folder naming**: `<stage>_<UTC-timestamp>_<slug>/` where
+`<stage>` is `find`, `dedupe`, or `group`. Timestamp format is
+`YYYYMMDDTHHMMSSZ` so runs sort chronologically and same-day runs
+don't collide. The slug defaults to a short random suffix; `--name
+<slug>` overrides just the slug portion. Resuming a killed `find` is
+`fettle find --resume runs/<name>/`. `dedupe` and `group` are
+single-shot agent invocations — no resume; if they crash mid-output
+the partial folder should be deleted and the stage re-run.
+
+**`run.json`** is the manifest of the stage that created the folder
+(find / dedupe / group). It captures everything needed to understand
+or reproduce that run. Reviews and resolves do *not* update
+`run.json` — they're attachments to a run, not stage outputs of
+their own.
+
+Common spine:
 
 ```json
 {
   "name": "find_20260430T145233Z_security-v1",
+  "stage": "find",
   "fettle_version": "0.1.0",
-  "created_at": "2026-04-30T14:52:33Z",
-  "target_repo": "/abs/path/to/repo",
-  "target_repo_git": { "head": "abc123def", "dirty": false },
-  "include": ["**/*.go"],
-  "exclude": ["vendor/**", "**/*_generated.go"],
-  "stages": {
-    "find":   { "agent": "claude", "model": "sonnet",
-                "source_path": "instructions/find.md",
-                "snapshot_path": "instructions/find.md" },
-    "review": { "agent": "codex",  "model": "gpt-5",
-                "source_path": "instructions/review.md",
-                "snapshot_path": "instructions/review.md" },
-    "group":  { "agent": "claude", "model": "sonnet",
-                "source_path": "instructions/group.md",
-                "snapshot_path": "instructions/group.md" }
-  },
-  "args": { "concurrency": 4, "limit": 0 }
+  "created_at":   "2026-04-30T14:52:33Z",
+  "completed_at": "2026-04-30T15:08:11Z",
+  "agent":  { "name": "claude", "model": "sonnet" },
+  "source_path":   "instructions/find.md",
+  "snapshot_path": "instructions/find.md"
 }
 ```
 
+`completed_at` is set when the stage finishes successfully:
+
+- `find`: set only after every walked file has a final `ok` or
+  `empty` row in `files.jsonl`. If any file's latest row is `error`,
+  `completed_at` stays absent — the run is recoverable via
+  `fettle find --resume`.
+- `dedupe` / `group`: set after the agent exits cleanly. Single-shot
+  stages — partial runs (no `completed_at`) should be deleted and
+  re-run.
+
+Readers should treat the absence of `completed_at` differently
+depending on context. UI browsing and `review --watch` may read
+in-progress find runs (that's the whole point of `--watch`). But
+dedupe and group consumers should **require** their inputs to be
+completed before consuming — feeding an in-progress find run into
+dedupe is a footgun.
+
+A **find** run additionally records:
+
+```json
+"target_repo": "/abs/path/to/repo",
+"target_repo_git": { "head": "abc123def", "dirty": false },
+"include": ["**/*.go"],
+"exclude": ["vendor/**", "**/*_generated.go"],
+"args": { "concurrency": 4, "limit": 0 }
+```
+
+A **dedupe** run records its inputs:
+
+```json
+"input_runs": [
+  "runs/find_20260430T145233Z_security-v1",
+  "runs/find_20260430T211903Z_codex"
+]
+```
+
+A **group** run records its single input:
+
+```json
+"input_run": "runs/dedupe_20260501T093000Z_consolidate"
+```
+
 `target_repo_git` is best-effort — populated when the target is a git
-repo, omitted otherwise. The `stages` block is built incrementally:
-`find` writes its entry at run creation; `review` and `group` add theirs
-the first time they run, snapshotting their prompts at the same moment.
+repo, omitted otherwise.
+
+**Review prompt snapshot**: when `fettle review --run X` runs the
+**review agent** for the first time in X, it writes the active
+`review.md` into `runs/X/instructions/review.md`. Subsequent
+*automated* reviews in X re-use that snapshot — one rubric per run,
+which is what you want when labels from multiple automated reviewers
+are merged.
+
+Human reviewers via the UI don't consume `review.md` (they're making
+direct judgments, not following an LLM rubric), so the snapshot
+isn't read for human reviews. To use a different automated review
+prompt, do not edit the snapshot in place — start a new run upstream
+or explicitly delete the run's `instructions/review.md` and any
+existing `reviews_*.jsonl` you don't want carried over.
 
 `.fettle.json` confirms the directory is a fettle project and records the
 fettle version that created it. It also holds the project's config:
@@ -116,6 +209,7 @@ fettle version that created it. It also holds the project's config:
   "instructions": {
     "find":   "instructions/find.md",
     "review": "instructions/review.md",
+    "dedupe": "instructions/dedupe.md",
     "group":  "instructions/group.md"
   }
 }
@@ -130,21 +224,43 @@ what to look for, what fields to emit, what's out of scope.
 
 A minimal `find.md` for a security pass might say: *"Read `TARGET_FILE`. Flag
 every place that builds a SQL query by string concatenation, every `os/exec`
-call constructed with unescaped variables, every hardcoded credential or API
-key. For each issue, emit one JSON object to `OUTPUT_PATH` with fields …"*.
-Keep the checks file-local; cross-file data flow is out of scope for fettle.
+call constructed with unescaped variables, every hardcoded credential or
+API key. For each finding, run `fettle finding add` with `--file`,
+`--line`, `--title`, `--description`, `--suggestion`, and a relevant
+`--severity` and `--label`."*. Keep the checks file-local; cross-file
+data flow is out of scope for fettle.
 
 Fettle substitutes a small, fixed set of variables when running each stage:
 
-| Stage  | Variables available in the prompt                          |
-|--------|------------------------------------------------------------|
-| find   | `TARGET_FILE`, `OUTPUT_PATH`, `REPO_ROOT`                  |
-| review | `ISSUE_JSON`, `OUTPUT_PATH`, `REPO_ROOT`                   |
-| group  | `ISSUES_JSON`, `REVIEWS_JSON`, `OUTPUT_PATH`               |
+| Stage                        | Variables available in the prompt                                            |
+|------------------------------|------------------------------------------------------------------------------|
+| find                         | `TARGET_FILE`, `REPO_ROOT`                                                   |
+| review (find/dedupe target)  | `FINDING_JSON`, `REPO_ROOT`                                                  |
+| review (group target)        | `GROUP_JSON`, `MEMBERS_JSON`, `REPO_ROOT`                                    |
+| dedupe                       | `FINDINGS_JSON` (annotated with `from_run` and current review state)         |
+| group                        | `FINDINGS_JSON`, `REVIEWS_JSON`                                              |
 
-`REVIEWS_JSON` is the merged review state, keyed by issue id. It's `{}` if
+**No stage gets `OUTPUT_PATH`.** Every stage records its output by
+shelling to `fettle <kind> add` (see the CLI section). This unifies
+the agent contract: the harness owns ids, timestamps, validation, and
+file appends; the agent never writes a fettle data file directly. The
+prompt frame teaches the recording protocol; the user's
+stage-specific instructions decide what to record.
+
+`MEMBERS_JSON` (review of group runs) is the resolved finding records
+the group references — so the reviewer has the actual evidence in
+hand, not just `finding_ids[]` to chase.
+
+`REPO_ROOT` is the `target_repo` recorded on the run reviewing
+operates against. For find runs the value is direct from
+`run.json`'s `target_repo`. For dedupe and group runs (which don't
+have their own `target_repo`), it's resolved by walking back through
+`input_run`/`input_runs[]` to a find run; **dedupe rejects input
+runs whose `target_repo` differs**, so the value is unambiguous.
+
+`REVIEWS_JSON` is the merged review state, keyed by finding id. It's `{}` if
 no reviews exist — `group` runs fine without `review` having happened. For
-each issue with reviews, fettle hands the agent the chronological per-author
+each finding with reviews, fettle hands the agent the chronological per-author
 entries plus a derived `current_labels` union (latest entry per author,
 unioned across authors — matches the display rules below):
 
@@ -160,10 +276,10 @@ unioned across authors — matches the display rules below):
 }
 ```
 
-Your `group.md` decides what to do with it — typically: skip issues whose
+Your `group.md` decides what to do with it — typically: skip findings whose
 `current_labels` include `false-positive` or `out-of-scope`, prefer
-high-confidence issues, etc. If `REVIEWS_JSON` is empty, the prompt should
-just cluster on issues directly.
+high-confidence findings, etc. If `REVIEWS_JSON` is empty, the prompt should
+just cluster on findings directly.
 
 Inside your markdown you're free to inline or reference additional knowledge
 docs (conventions, checklists, threat models, style guides). Fettle doesn't
@@ -188,19 +304,78 @@ fettle find --resume runs/<name>/
     resume.
 
 fettle review --run runs/<name>/ [--agent NAME] [--watch]
-    For each finding in the run not yet reviewed by this agent, run the
-    review agent. Append to runs/<name>/reviews_<agent>.jsonl. --watch
-    polls the run's findings.jsonl and picks up new entries (useful while
-    a long find is still running).
+    For each finding (find/dedupe runs) or group (group runs) not yet
+    reviewed by this agent, run the review agent. Append to
+    runs/<name>/reviews_<agent>.jsonl. --watch polls the run's
+    findings.jsonl and picks up new entries as they land — only
+    meaningful for in-progress find runs (where findings stream in
+    over time). Reviewing a dedupe or group run is one-shot;
+    `--watch` is rejected against those run kinds because their
+    output is single-shot and only readable after `completed_at` is
+    set.
 
-fettle group --run runs/<name>/ [--agent NAME]
-    Cluster the run's findings. If reviews_*.jsonl files exist in the
-    run, merge them into REVIEWS_JSON; otherwise the agent gets `{}`.
-    Write to runs/<name>/groups.jsonl.
+fettle dedupe --run RUN [--run RUN]... [--name SLUG] [--agent NAME]
+    Cross-run consolidation. Reads findings (annotated with current
+    review state from each input run) and asks the agent to merge
+    equivalent findings into canonical entries — same shape, plus a
+    members[] back-pointer. Creates runs/dedupe_<UTC-timestamp>_<slug>/.
+    Single agent invocation; no resume — re-run if it fails. Skip
+    this stage if you only have one find run.
 
-fettle resolve --run runs/<name>/ {--issue ID | --group ID} [--pr URL] [--status STATUS]
-    Mark a run's issue or group as resolved. Append to
-    runs/<name>/resolutions.jsonl.
+fettle group --run runs/<name>/ [--name SLUG] [--agent NAME]
+    Cluster the input run's findings into PR-sized batches. Single
+    input — if you have multiple find runs, dedupe first. If
+    reviews_*.jsonl files exist in the input run, merge them into
+    REVIEWS_JSON; otherwise the agent gets `{}`. Creates
+    runs/group_<UTC-timestamp>_<slug>/.
+
+fettle resolve --run runs/<name>/ {--finding ID | --group ID} [--pr URL] [--status STATUS]
+    Mark a run's finding or group as resolved. Append to
+    runs/<name>/resolutions.jsonl. The run is whichever folder owns
+    the subject (the find/dedupe run for findings; the group run for
+    groups).
+
+# Agent-facing append CLIs (called by spawned agents, not typically by humans):
+
+fettle finding add --file PATH --line N --title T --description D --suggestion S
+                   [--severity X] [--label k:v ...] [--reference PATH[:LINE] ...]
+                   [--canonical-of RUN:FINDING_ID ...]
+    Append one finding to FETTLE_RUN's findings.jsonl. Used by find
+    (no --canonical-of) and by dedupe (one or more --canonical-of
+    entries make the new finding a canonical synthesis with members).
+
+fettle group add --title T --summary S --finding ID [--finding ID ...]
+                 [--label k:v ...]
+    Append one group to FETTLE_RUN's groups.jsonl. Members are
+    --finding ID entries (repeatable).
+
+fettle review add --finding ID | --group ID --label LABEL ... [--comment TEXT]
+    Append one review entry to the run's reviews_<FETTLE_AGENT>.jsonl.
+
+All three are server-side metadata generation. `finding add` and
+`group add` assign `id` / `created_by` / `created_at`. `review add`
+has no id — it assigns `at` (the timestamp); the author comes from
+the `reviews_<author>.jsonl` filename, which the harness derives
+from `FETTLE_AGENT`. All three validate fields before append.
+
+**Stage-aware guards** the harness enforces:
+
+- `finding add --canonical-of` is required in a dedupe run and
+  rejected in a find run.
+- `finding add` is rejected in a group run; `group add` is rejected
+  outside a group run.
+- `--canonical-of RUN:FINDING_ID` provenance: `RUN` must appear in
+  the dedupe run's `input_runs[]` and `FINDING_ID` must exist in
+  that run's `findings.jsonl`.
+- `group add --finding ID`: `ID` must exist in the group run's
+  `input_run`'s `findings.jsonl`.
+- `review add`: `--finding ID` is accepted only in find/dedupe runs
+  and the id must exist in the run's `findings.jsonl`; `--group ID`
+  is accepted only in group runs and the id must exist in the run's
+  `groups.jsonl`. Mismatched subject kind or unknown id is rejected.
+- `fettle resolve`: same subject-kind rules as `review add` — find
+  and dedupe runs accept `--finding`; group runs accept `--group`;
+  unknown ids are rejected.
 
 fettle ui [--port N]
     Launch the web UI. Shows a run picker; pick one to browse, label,
@@ -212,7 +387,7 @@ fettle runs
 fettle status --run runs/<name>/
     Print counts for one run: findings, reviewed, grouped, resolved.
 
-fettle show --run runs/<name>/ {issue|group} ID
+fettle show --run runs/<name>/ {finding|group} ID
     Print one record to stdout.
 ```
 
@@ -224,11 +399,31 @@ Every command operates on the fettle project in the current directory (or
 Fettle owns a small, stable shape. Everything else — labels, severity scale,
 category names — is yours to define in your prompts.
 
-All of these files live inside a run folder (`runs/<name>/`). The schemas
-below describe one run's data; cross-run analysis is something you do
-yourself by reading multiple folders.
+All of these files live inside a run folder (`runs/<name>/`). Each
+schema is described once and applies to whichever stage's run folder
+contains it.
 
-**`findings.jsonl`** — one finding per line:
+**Path conventions in the schemas below**:
+
+- `file` and `references[].file` are repo-relative — i.e., relative
+  to the run's `target_repo` (find runs) or the source run's
+  `target_repo` (dedupe runs).
+- `from_run` and `input_runs[]` are project-relative — i.e.,
+  relative to the project directory containing `runs/`.
+- `source_path` in `run.json` is whatever path the user put in
+  `.fettle.json`'s `instructions` map — fettle reads it verbatim.
+  Typical case is project-relative (`instructions/find.md`);
+  absolute paths are also allowed.
+- `snapshot_path` in `run.json` is run-relative (it points at the
+  frozen copy inside this run folder, typically `instructions/<stage>.md`,
+  resolved against the run dir).
+- `input_run` (group) and `input_runs[]` (dedupe) are
+  project-relative — they reference other run folders under
+  `runs/`.
+
+**`findings.jsonl`** — one finding per line. Lives in find runs (raw
+findings) and dedupe runs (canonical findings synthesized from
+multiple find runs).
 
 ```json
 {
@@ -241,12 +436,43 @@ yourself by reading multiple folders.
   "severity": null,
   "labels": [],
   "references": [],
+  "members": [
+    { "finding_id": "111", "from_run": "runs/find_20260430T214841Z_materiality" },
+    { "finding_id": "222", "from_run": "runs/find_20260430T215611Z_codex" }
+  ],
   "created_by": "agent:claude/sonnet",
   "created_at": "..."
 }
 ```
 
-`id` is content-derived and stable across re-runs.
+`id` is generated server-side and unique. In find-run findings, `id`
+identifies a single agent observation. In dedupe-run findings, `id`
+identifies the canonical synthesis and `members[]` lists the source
+observations.
+
+`members[]` is **omitted** in find-run findings (or empty array). In
+dedupe-run findings, `members[]` is the provenance trail back to the
+source observations.
+
+For consensus signal, count carefully — `members.length` is
+*observation count*, not agent count: one agent might flag the same
+root cause at two adjacent lines and have both observations land in
+the same canonical finding. The right counters:
+
+- `members.length` — total source observations
+- distinct `from_run` count — how many runs flagged it
+- agent count — derived by reading each `from_run`'s `run.json` for
+  its `agent.name` and de-duping
+
+The dedupe agent receives source findings annotated with their
+**current review state** (labels, latest comment per author) from
+each input run. This prevents canonicalizing findings that source-run
+reviewers already labeled `false-positive`/`out-of-scope`. Reviews on
+source findings are **not** copied into the canonical finding's
+review files — that would forge authorship; canonical findings start
+with no reviews of their own. The agent should write the rejection
+into its decision (skip the finding) or into the canonical finding's
+`labels[]`/`description` synthesis.
 
 `severity` is a free-form string (or null). Fettle doesn't enforce a scale —
 your prompt decides whether to use `low`/`medium`/`high`, `P1`/`P2`/`P3`, a
@@ -257,13 +483,13 @@ numeric `7.5`, or none. The UI sorts lexically.
 "confidence:high"]`. The UI treats prefixes as facets so you can filter by
 "all `cwe:` labels" or "all `category:` labels."
 
-`references` carries additional code locations the issue points to — the
-duplication case being the obvious one ("this issue exists in N other
+`references` carries additional code locations the finding points to — the
+duplication case being the obvious one ("this finding exists in N other
 files"), but also "see also this related site" findings. Each entry:
 `{ "file": "internal/baz/qux.go", "line": 33 }`. `line` is optional.
-The grouping prompt sees these via `ISSUES_JSON` and can cluster on
-reference overlap (multiple issues touching the same site) or hotspot
-frequency (a file that appears in many issues' references).
+The grouping prompt sees these via `FINDINGS_JSON` and can cluster on
+reference overlap (multiple findings touching the same site) or hotspot
+frequency (a file that appears in many findings' references).
 
 **`files.jsonl`** — per-file scan ledger. One entry per file `find` has
 processed in this run. Files with zero findings still get a row, so resume
@@ -295,19 +521,20 @@ Each entry:
 
 ```json
 {
-  "subject": { "kind": "issue", "id": "abc123" },
+  "subject": { "kind": "finding", "id": "abc123" },
   "labels":  ["confirmed", "high-impact"],
   "comment": "Verified: untrusted input flows into Exec on line 47.",
   "at": "2026-04-30T11:02:14Z"
 }
 ```
 
-`subject.kind` is `issue` or `group`. The same shape covers both. There is
-no `source` field inside the entry — the filename carries that.
+`subject.kind` is `finding` or `group`, matching what the run
+produces. The same shape covers both. There is no `source` field
+inside the entry — the filename carries that.
 
 Display merges all `reviews_*.jsonl` files at read time and sorts by `at`
-per subject, so you get one chronological feed per issue or group regardless
-of which reviewers contributed.
+per subject, so you get one chronological feed per finding or group
+regardless of which reviewers contributed.
 
 Append-only. **Label semantics**: each entry is the writing author's
 *current full label set* on that subject. The latest entry from a given
@@ -316,28 +543,39 @@ per-label override). When merging across authors for display, fettle takes
 the latest entry per `(author, subject)` and unions the resulting label
 sets, so "label X is set" means at least one author has it set right now.
 
-**`groups.jsonl`** — one group per line:
+**`groups.jsonl`** — one group per line. Lives in group runs only.
 
 ```json
 {
   "id": "g_abc12345",
   "title": "...",
   "summary": "...",
-  "issue_ids": ["abc123", "def456"],
+  "finding_ids": ["abc123", "def456"],
   "labels": [],
   "created_by": "agent:claude/sonnet",
   "created_at": "..."
 }
 ```
 
-Same `labels` convention as issues — `prefix:value` strings, e.g.
-`["effort:large", "category:duplication"]`. Reviews can attach to groups
-too (`subject.kind: "group"` in `reviews_<author>.jsonl`); the same
-display rules apply.
+`finding_ids[]` references findings in the group run's input run
+(specified in `run.json`'s `input_run`). Resolving "what's in this
+group" means reading the input run's `findings.jsonl` for those ids.
 
-**`resolutions.jsonl`** — one resolution event per line. Records that an
-issue or group is closed (PR merged, won't fix, deduped, etc.). Fettle does
-not open or merge PRs; this is a tracking log.
+Same `labels` convention as findings — `prefix:value` strings, e.g.
+`["effort:large", "category:duplication"]`. Reviews can attach to
+groups too (`subject.kind: "group"` in `reviews_<author>.jsonl`); the
+same display rules apply.
+
+**`resolutions.jsonl`** — one resolution event per line. Lives in
+whichever run owns the subject:
+
+- Resolutions of findings live in the find or dedupe run that produced
+  them.
+- Resolutions of groups live in the group run that produced them.
+
+Records that a finding or group is closed (PR merged, won't fix,
+deduped, etc.). Fettle does not open or merge PRs; this is a tracking
+log.
 
 ```json
 {
@@ -365,7 +603,7 @@ actions a human takes:
   `reviews_<your-slug>.jsonl`. Your slug comes from `$FETTLE_AUTHOR`, or
   `~/.config/fettle/identity` as a fallback — never from `.fettle.json`,
   since the project directory may be shared or checked in.
-- Mark issues or groups resolved — written as a new entry in the run's
+- Mark findings or groups resolved — written as a new entry in the run's
   `resolutions.jsonl`.
 
 There is no separate backend service. The UI process reads and writes the
@@ -373,48 +611,79 @@ project directory and that's all.
 
 ## Agent contract
 
-Agents that fettle spawns are dead simple to write because the contract is
-narrow:
+Agents that fettle spawns share a unified contract across all stages:
 
 1. Fettle invokes the agent CLI (`claude -p ...`, `codex exec ...`,
-   `gemini ...`) with the markdown prompt as input.
-2. Variables in the prompt (`TARGET_FILE`, `OUTPUT_PATH`, etc.) have already
-   been substituted.
-3. The agent reads what it needs, follows the instructions, and writes
-   strict JSONL to `OUTPUT_PATH`.
-4. The agent exits. No return value beyond the file. An empty file is a
-   valid "no findings."
+   user-supplied script, etc.) with the substituted markdown prompt as input.
+2. The agent reads its inputs, decides what to record, and shells to
+   the appropriate fettle CLI (`fettle finding add`, `fettle group add`,
+   `fettle review add`) for each output record. `finding add` and
+   `group add` assign `id`, `created_by`, and `created_at`; `review
+   add` assigns only `at` and derives the author from `FETTLE_AGENT`
+   for the per-author filename. All three validate before appending —
+   server-side identity is preserved across every stage.
+3. Environment passed to the agent: `FETTLE_RUN` points at the run
+   folder the output should land in; `FETTLE_AGENT` carries the
+   agent label used for the source identity; `FETTLE_MODEL` and
+   `FETTLE_EFFORT` are passed through when set; `PATH` is prepended
+   with fettle's binary directory so the CLIs are callable without
+   further setup.
+4. The agent exits. Zero records emitted is a valid "nothing to
+   report"; the per-stage ledger (or the `completed_at` mark on the
+   manifest) tells the harness whether the run succeeded.
 
-This works for any CLI agent that accepts a prompt and can write a file.
-Fettle does not depend on any agent's tool-calling protocol or session model.
+This works for any CLI agent that accepts a prompt and can shell out.
+Fettle does not depend on any agent's tool-calling protocol or
+session model — only that it can invoke `fettle <kind> add`.
 
 ## Resumability
 
-The run folder is the unit of resume. Every stage uses the prompt
-snapshotted into the run, never the editable template — `find` from
-`runs/<name>/instructions/find.md`, `review` from `…/review.md`, `group`
-from `…/group.md`. Editing the project's templates after a stage has
-started in a run has no effect on that run; start a new run to pick up
-template edits.
+The run folder is the unit of resume for per-unit stages. Every stage
+uses the prompt snapshotted into the run, never the editable template
+— editing the project's templates after a stage has started has no
+effect; start a new run to pick up template edits.
 
-`find --resume <run>` skips files whose last entry in `files.jsonl` is
-`ok` or `empty`; `error` rows get retried. `review --run <run> --agent
-codex` skips findings already reviewed in `reviews_codex.jsonl`. `group
---run <run>` skips findings already in some group. `review --watch`
-polls the run's `findings.jsonl` and picks up new entries as `find`
-appends them, so the two stages can run concurrently on a long scan.
+**Per-unit stages** (one agent invocation per file/finding) support
+resume:
 
-JSONL files are append-only. You can hand-edit them between runs if you
-need to correct something, but the normal flow is "let the tools and the
-UI append; never mutate in place."
+- `find --resume <run>` skips files whose last entry in `files.jsonl`
+  is `ok` or `empty`; `error` rows get retried.
+- `review --run <run> --agent codex` skips findings already reviewed
+  in `reviews_codex.jsonl`.
+- `review --watch` polls a find run's `findings.jsonl` and picks up
+  new entries as `find` appends them, so review can run concurrently
+  with a long find scan. `--watch` is rejected against dedupe/group
+  runs (their output is single-shot; review them after
+  `completed_at` is set).
 
-**Caveats**: resume assumes the target repo snapshot hasn't changed since
-the run started. If a file's contents move under `find`, the `ok`/`empty`
-ledger entry will still cause it to be skipped — re-scan by deleting the
-matching row from the run's `files.jsonl`. (A future version may track
-`content_sha`/`mtime` to detect drift automatically.) Similarly, `group`
-only sees the findings and reviews that exist when it runs; if reviews
-change after grouping, regenerate `groups.jsonl` to reflect them.
+**Single-shot stages** (one agent invocation per run) are atomic at
+the run level — successful runs have `completed_at` set in
+`run.json`; partial runs do not.
+
+- `dedupe` — one invocation reads all input runs, calls `fettle
+  finding add` per canonical record. The harness sets
+  `completed_at` after the agent exits cleanly. If the agent
+  crashes mid-output, partial findings are committed but
+  `completed_at` is missing — delete the run folder and re-run.
+- `group` — same shape; one invocation, calls `fettle group add`
+  per cluster. Same atomic semantics.
+
+(See the `run.json` description above for how readers should
+interpret missing `completed_at` — UI/`--watch` may read in-progress
+find runs, but dedupe and group inputs must be completed.)
+
+JSONL files are append-only. You can hand-edit them between runs if
+you need to correct something, but the normal flow is "let the tools
+and the UI append; never mutate in place."
+
+**Caveats**: resume assumes the target repo snapshot hasn't changed
+since the run started. If a file's contents move under `find`, the
+`ok`/`empty` ledger entry will still cause it to be skipped — re-scan
+by deleting the matching row from the run's `files.jsonl`. (A future
+version may track `content_sha`/`mtime` to detect drift
+automatically.) Similarly, dedupe and group only see the input that
+exists when they run; if findings or reviews change after a group
+run, just create a new group run.
 
 ## Non-goals
 
@@ -424,7 +693,7 @@ change after grouping, regenerate `groups.jsonl` to reflect them.
   test suite, write a prompt that tells the agent to do so — fettle won't
   invoke `task test` on your behalf.
 - **No language awareness.** Fettle treats everything as text + globs. If
-  your issue depends on AST analysis, your prompt tells the agent how to do
+  your analysis depends on AST inspection, your prompt tells the agent how to do
   it (or pre-extracts the data outside fettle).
 
 ## Versioning and the project marker
