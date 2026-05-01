@@ -18,7 +18,22 @@ import (
 // "current state" display.
 var closeCmd = &cobra.Command{
 	Use:   "close",
-	Short: "Operate on closure events (add, show)",
+	Short: "Operate on closure events (add, list, show)",
+}
+
+var closeListFlags struct {
+	run string
+}
+
+var closeListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "Print all closure events in --run as a JSON array",
+	Long: `list dumps every closure event in --run's closures.jsonl as a
+chronologically-sorted JSON array. Empty runs (or missing
+closures.jsonl) print [].
+
+Exit codes: 0 success, 2 internal error.`,
+	RunE: runCloseList,
 }
 
 var closeAddFlags struct {
@@ -85,9 +100,32 @@ func init() {
 	closeShowCmd.Flags().BoolVar(&closeShowFlags.all, "all", false, "print every closure event for the subject (default: latest only)")
 	_ = closeShowCmd.MarkFlagRequired("run")
 
+	closeListCmd.Flags().StringVar(&closeListFlags.run, "run", "", "path to the run folder (required)")
+	_ = closeListCmd.MarkFlagRequired("run")
+
 	closeCmd.AddCommand(closeAddCmd)
+	closeCmd.AddCommand(closeListCmd)
 	closeCmd.AddCommand(closeShowCmd)
 	rootCmd.AddCommand(closeCmd)
+}
+
+func runCloseList(cmd *cobra.Command, args []string) error {
+	rp, _, err := openRunForClose(closeListFlags.run)
+	if err != nil {
+		return err
+	}
+	closures, err := rp.LoadClosures()
+	if err != nil {
+		return internalError(fmt.Errorf("load closures: %w", err))
+	}
+	if closures == nil {
+		closures = []schema.Closure{}
+	}
+	sort.SliceStable(closures, func(i, j int) bool { return closures[i].At.Before(closures[j].At) })
+	if err := printJSON(closures); err != nil {
+		return internalError(fmt.Errorf("emit closures: %w", err))
+	}
+	return nil
 }
 
 func runCloseAdd(cmd *cobra.Command, args []string) error {
