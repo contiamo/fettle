@@ -86,17 +86,10 @@ func CreateForFind(opts CreateFindOpts) (*Path, error) {
 		TargetRepoGit: gitInfo(opts.TargetRepo),
 		Include:       opts.Include,
 		Exclude:       opts.Exclude,
-		Stages: map[string]schema.StageEntry{
-			"find": {
-				Agent:        opts.FindSpec.Name,
-				Model:        opts.FindSpec.Model,
-				Effort:       opts.FindSpec.Effort,
-				Script:       opts.FindSpec.Script,
-				SourcePath:   opts.FindSourcePath,
-				SnapshotPath: snap,
-			},
-		},
-		Args: opts.Args,
+		Agent:         agentInfoFromSpec(opts.FindSpec),
+		SourcePath:    opts.FindSourcePath,
+		SnapshotPath:  snap,
+		Args:          opts.Args,
 	}
 	if err := writeManifest(dir, manifest); err != nil {
 		return nil, err
@@ -148,16 +141,9 @@ func CreateForDedupe(opts CreateDedupeOpts) (*Path, error) {
 		FettleVersion: project.Version,
 		CreatedAt:     time.Now().UTC(),
 		InputRuns:     opts.InputRuns,
-		Stages: map[string]schema.StageEntry{
-			"dedupe": {
-				Agent:        opts.DedupeSpec.Name,
-				Model:        opts.DedupeSpec.Model,
-				Effort:       opts.DedupeSpec.Effort,
-				Script:       opts.DedupeSpec.Script,
-				SourcePath:   opts.DedupeSourcePath,
-				SnapshotPath: snap,
-			},
-		},
+		Agent:         agentInfoFromSpec(opts.DedupeSpec),
+		SourcePath:    opts.DedupeSourcePath,
+		SnapshotPath:  snap,
 	}
 	if err := writeManifest(dir, manifest); err != nil {
 		return nil, err
@@ -209,16 +195,9 @@ func CreateForGroup(opts CreateGroupOpts) (*Path, error) {
 		FettleVersion: project.Version,
 		CreatedAt:     time.Now().UTC(),
 		InputRun:      opts.InputRun,
-		Stages: map[string]schema.StageEntry{
-			"group": {
-				Agent:        opts.GroupSpec.Name,
-				Model:        opts.GroupSpec.Model,
-				Effort:       opts.GroupSpec.Effort,
-				Script:       opts.GroupSpec.Script,
-				SourcePath:   opts.GroupSourcePath,
-				SnapshotPath: snap,
-			},
-		},
+		Agent:         agentInfoFromSpec(opts.GroupSpec),
+		SourcePath:    opts.GroupSourcePath,
+		SnapshotPath:  snap,
 	}
 	if err := writeManifest(dir, manifest); err != nil {
 		return nil, err
@@ -258,7 +237,7 @@ func CreateForMerge(opts CreateMergeOpts) (*Path, error) {
 		FettleVersion: project.Version,
 		CreatedAt:     time.Now().UTC(),
 		InputRuns:     opts.InputRuns,
-		Stages:        map[string]schema.StageEntry{}, // no agent stages
+		// Agent / SourcePath / SnapshotPath stay empty — merge runs no agent.
 	}
 	if err := writeManifest(dir, manifest); err != nil {
 		return nil, err
@@ -514,6 +493,17 @@ func FileHash(repoRelPath string) string {
 	// hex chars matches the convention from the prior fettle codebase.
 	h := sha256ish(repoRelPath)
 	return h
+}
+
+// agentInfoFromSpec maps an agent.Spec onto the manifest's AgentInfo
+// shape. Used by every Create* helper that runs an agent.
+func agentInfoFromSpec(s agent.Spec) *schema.AgentInfo {
+	return &schema.AgentInfo{
+		Name:   s.Name,
+		Model:  s.Model,
+		Effort: s.Effort,
+		Script: s.Script,
+	}
 }
 
 // generateName builds a run folder name like

@@ -160,22 +160,26 @@ Common spine:
 }
 ```
 
-`completed_at` is set when the stage finishes successfully:
+`completed_at` means **the harness finished what it was asked**, not
+"the scan covered everything." It is set when the stage exits cleanly:
 
-- `find`: set only after every walked file has a final `ok` or
-  `empty` row in `files.jsonl`. If any file's latest row is `error`,
-  `completed_at` stays absent — the run is recoverable via
-  `fettle run find --resume`.
+- `find`: set when every *attempted* file has a final `ok` or
+  `empty` row in `files.jsonl`. A `--limit N` run that processed N
+  files cleanly counts as completed; coverage (whether that
+  truncated subset is enough) is the user's call, visible via the
+  recorded `args.limit`. If any file's latest row is `error` or the
+  run was interrupted, `completed_at` stays absent and the run is
+  recoverable via `fettle run find --resume`.
 - `dedupe` / `group`: set after the agent exits cleanly. Single-shot
   stages — partial runs (no `completed_at`) should be deleted and
   re-run.
 
-Readers should treat the absence of `completed_at` differently
-depending on context. UI browsing and `run review --watch` may read
-in-progress find runs (that's the whole point of `--watch`). But
-dedupe and group consumers should **require** their inputs to be
-completed before consuming — feeding an in-progress find run into
-dedupe is a footgun.
+Downstream stages (`merge` / `dedupe` / `group`) require their
+inputs' `completed_at` to be set, so an interrupted or errored find
+run can't silently feed in. They do **not** second-guess
+`--limit`-truncated inputs — if you want to dedupe two partial
+runs, that's your call. UI browsing and `run review --watch` may
+read in-progress find runs (that's the whole point of `--watch`).
 
 A **find** run additionally records:
 

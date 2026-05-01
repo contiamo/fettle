@@ -79,19 +79,21 @@ type Review struct {
 
 // RunManifest is the contents of run.json.
 type RunManifest struct {
-	Name          string                `json:"name"`
-	Stage         string                `json:"stage"` // "find" | "merge" | "dedupe" | "group"
-	FettleVersion string                `json:"fettle_version"`
-	CreatedAt     time.Time             `json:"created_at"`
-	CompletedAt   *time.Time            `json:"completed_at,omitempty"`
-	TargetRepo    string                `json:"target_repo,omitempty"`
-	TargetRepoGit *GitInfo              `json:"target_repo_git,omitempty"`
-	Include       []string              `json:"include,omitempty"`
-	Exclude       []string              `json:"exclude,omitempty"`
-	InputRun      string                `json:"input_run,omitempty"`  // group runs
-	InputRuns     []string              `json:"input_runs,omitempty"` // dedupe runs
-	Stages        map[string]StageEntry `json:"stages"`
-	Args          map[string]any        `json:"args,omitempty"`
+	Name          string         `json:"name"`
+	Stage         string         `json:"stage"` // "find" | "merge" | "dedupe" | "group"
+	FettleVersion string         `json:"fettle_version"`
+	CreatedAt     time.Time      `json:"created_at"`
+	CompletedAt   *time.Time     `json:"completed_at,omitempty"`
+	TargetRepo    string         `json:"target_repo,omitempty"`
+	TargetRepoGit *GitInfo       `json:"target_repo_git,omitempty"`
+	Include       []string       `json:"include,omitempty"`
+	Exclude       []string       `json:"exclude,omitempty"`
+	InputRun      string         `json:"input_run,omitempty"`  // group runs
+	InputRuns     []string       `json:"input_runs,omitempty"` // dedupe / merge runs
+	Agent         *AgentInfo     `json:"agent,omitempty"`         // nil for merge (no agent ran)
+	SourcePath    string         `json:"source_path,omitempty"`   // path of the editable prompt at stage start (project-relative)
+	SnapshotPath  string         `json:"snapshot_path,omitempty"` // path of the frozen prompt copy inside the run (run-relative)
+	Args          map[string]any `json:"args,omitempty"`
 }
 
 // GitInfo records the target repo's git state at run start.
@@ -100,15 +102,13 @@ type GitInfo struct {
 	Dirty bool   `json:"dirty"`
 }
 
-// StageEntry is one row in RunManifest.Stages — set incrementally as each
-// stage runs in this run folder.
-type StageEntry struct {
-	Agent        string `json:"agent"`
-	Model        string `json:"model,omitempty"`
-	Effort       string `json:"effort,omitempty"`
-	Script       string `json:"script,omitempty"`
-	SourcePath   string `json:"source_path"`
-	SnapshotPath string `json:"snapshot_path"`
+// AgentInfo describes the agent that ran a stage. Omitted from
+// merge run manifests, which run no agent.
+type AgentInfo struct {
+	Name   string `json:"name"`
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
+	Script string `json:"script,omitempty"`
 }
 
 // NewFindingID returns a fresh random 16-hex-char id. Ids are not derived

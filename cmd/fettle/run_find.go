@@ -209,15 +209,15 @@ func runFind(cmd *cobra.Command, args []string) error {
 	}
 	wg.Wait()
 
-	// Mark completed only if every walked file ended up with an
-	// ok or empty ledger row — any error leaves the run resumable.
-	// Skip the mark on partial runs (--limit truncated processing).
+	// Mark completed when the harness finished what it was asked:
+	// no errors, no Ctrl-C, every *attempted* file ended up with an
+	// ok or empty ledger row. A `--limit N` run that processed N
+	// files cleanly counts as completed; coverage (whether the
+	// limited subset is "enough" for downstream consumption) is the
+	// user's call, recorded via args.limit on run.json.
 	if fail.Load() == 0 && ctx.Err() == nil {
-		done, _ := in.rp.LoadDoneFiles()
-		if len(done) == len(files) {
-			if err := in.rp.MarkCompleted(); err != nil {
-				logger.Warn("mark completed", "error", err)
-			}
+		if err := in.rp.MarkCompleted(); err != nil {
+			logger.Warn("mark completed", "error", err)
 		}
 	}
 
@@ -276,9 +276,11 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read run manifest: %w", err)
 		}
-		findStage, ok := m.Stages["find"]
-		if !ok {
-			return nil, fmt.Errorf("run %s has no `find` stage in run.json", abs)
+		if m.Stage != "find" {
+			return nil, fmt.Errorf("run %s is a %q run, not a find run — cannot resume", abs, m.Stage)
+		}
+		if m.Agent == nil {
+			return nil, fmt.Errorf("run %s has no agent info in run.json — cannot resume", abs)
 		}
 		return &findInputs{
 			rp:         rp,
@@ -286,10 +288,10 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 			include:    m.Include,
 			exclude:    m.Exclude,
 			spec: agent.Spec{
-				Name:    findStage.Agent,
-				Model:   findStage.Model,
-				Effort:  findStage.Effort,
-				Script:  findStage.Script,
+				Name:    m.Agent.Name,
+				Model:   m.Agent.Model,
+				Effort:  m.Agent.Effort,
+				Script:  m.Agent.Script,
 				WorkDir: m.TargetRepo,
 				Timeout: findFlags.timeout,
 			},
