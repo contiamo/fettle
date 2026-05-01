@@ -16,6 +16,7 @@
   "instructions": {
     "find": "instructions/find.md",
     "review": "instructions/review.md",
+    "dedupe": "instructions/dedupe.md",
     "group": "instructions/group.md"
   }
 }
