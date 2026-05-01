@@ -209,6 +209,18 @@ func runFind(cmd *cobra.Command, args []string) error {
 	}
 	wg.Wait()
 
+	// Mark completed only if every walked file ended up with an
+	// ok or empty ledger row — any error leaves the run resumable.
+	// Skip the mark on partial runs (--limit truncated processing).
+	if fail.Load() == 0 && ctx.Err() == nil {
+		done, _ := in.rp.LoadDoneFiles()
+		if len(done) == len(files) {
+			if err := in.rp.MarkCompleted(); err != nil {
+				logger.Warn("mark completed", "error", err)
+			}
+		}
+	}
+
 	logger.Info("complete",
 		"run", in.rp.Dir(),
 		"with_findings", ok.Load(),
