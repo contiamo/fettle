@@ -106,10 +106,7 @@ func runReviewAdd(cmd *cobra.Command, args []string) error {
 	if err := rp.AppendReview(author, review); err != nil {
 		return internalError(fmt.Errorf("append review: %w", err))
 	}
-	if reviewAddFlags.verbose {
-		fmt.Println(subject.ID)
-	}
-	return nil
+	return printAddResult(map[string]any{"subject": subject, "at": review.At}, reviewAddFlags.verbose, subject.ID)
 }
 
 // resolveReviewSubject enforces the stage→subject-kind rules and

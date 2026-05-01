@@ -142,7 +142,7 @@ func runFind(cmd *cobra.Command, args []string) error {
 		"model", in.spec.Model,
 	)
 	if len(pending) == 0 {
-		fmt.Println(in.rp.Dir())
+		_ = printRunResult(in.rp.Dir())
 		return nil
 	}
 
@@ -229,7 +229,7 @@ func runFind(cmd *cobra.Command, args []string) error {
 		"total_findings", total.Load(),
 		"elapsed", time.Since(startAll).Round(time.Second),
 	)
-	fmt.Println(in.rp.Dir())
+	_ = printRunResult(in.rp.Dir())
 	return nil
 }
 

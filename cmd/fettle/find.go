@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -126,11 +125,9 @@ func runFindShow(cmd *cobra.Command, args []string) error {
 	}
 	for _, f := range findings {
 		if f.ID == id {
-			data, err := json.MarshalIndent(f, "", "  ")
-			if err != nil {
-				return internalError(fmt.Errorf("marshal finding: %w", err))
+			if err := printJSON(f); err != nil {
+				return internalError(fmt.Errorf("emit finding: %w", err))
 			}
-			fmt.Println(string(data))
 			return nil
 		}
 	}
@@ -149,11 +146,9 @@ func runFindList(cmd *cobra.Command, args []string) error {
 	if findings == nil {
 		findings = []schema.Finding{}
 	}
-	data, err := json.MarshalIndent(findings, "", "  ")
-	if err != nil {
-		return internalError(fmt.Errorf("marshal findings: %w", err))
+	if err := printJSON(findings); err != nil {
+		return internalError(fmt.Errorf("emit findings: %w", err))
 	}
-	fmt.Println(string(data))
 	return nil
 }
 
@@ -271,10 +266,7 @@ func runFindAdd(cmd *cobra.Command, args []string) error {
 	if err := rp.AppendFinding(finding); err != nil {
 		return internalError(fmt.Errorf("append finding: %w", err))
 	}
-	if findAddFlags.verbose {
-		fmt.Println(finding.ID)
-	}
-	return nil
+	return printAddResult(map[string]any{"id": finding.ID}, findAddFlags.verbose, finding.ID)
 }
 
 // resolveAuthor returns the identity to stamp on records that

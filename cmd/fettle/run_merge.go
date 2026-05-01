@@ -150,7 +150,7 @@ func runRunMerge(cmd *cobra.Command, args []string) error {
 		"reviews", reviewsCopied,
 		"dup_keys", dupCount,
 	)
-	fmt.Println(out.Dir())
+	_ = printRunResult(out.Dir())
 	return nil
 }
 

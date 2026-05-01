@@ -167,7 +167,7 @@ func runRunReview(cmd *cobra.Command, args []string) error {
 		"agent", in.spec.Name,
 	)
 	if len(pending) == 0 {
-		fmt.Println(in.rp.Dir())
+		_ = printRunResult(in.rp.Dir())
 		return nil
 	}
 
@@ -210,7 +210,7 @@ func runRunReview(cmd *cobra.Command, args []string) error {
 		"failed", fail.Load(),
 		"elapsed", time.Since(startAll).Round(time.Second),
 	)
-	fmt.Println(in.rp.Dir())
+	_ = printRunResult(in.rp.Dir())
 	return nil
 }
 

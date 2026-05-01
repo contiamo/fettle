@@ -180,7 +180,7 @@ func runRunGroup(cmd *cobra.Command, args []string) error {
 	}
 	if agentErr != nil {
 		logger.Error("agent failed", "error", agentErr, "elapsed", time.Since(startAll).Round(time.Second))
-		fmt.Println(out.Dir())
+		_ = printRunResult(out.Dir())
 		return agentErr
 	}
 
@@ -199,7 +199,7 @@ func runRunGroup(cmd *cobra.Command, args []string) error {
 		"input_findings", len(findings),
 		"elapsed", time.Since(startAll).Round(time.Second),
 	)
-	fmt.Println(out.Dir())
+	_ = printRunResult(out.Dir())
 	return nil
 }
 

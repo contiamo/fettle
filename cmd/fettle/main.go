@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,7 +13,8 @@ import (
 )
 
 var rootFlags struct {
-	dir string
+	dir  string
+	json bool
 }
 
 var rootCmd = &cobra.Command{
@@ -29,6 +31,45 @@ See FETTLE.md at the repo root for the full design.`,
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&rootFlags.dir, "dir", "", "fettle project directory (default: current directory)")
+	rootCmd.PersistentFlags().BoolVar(&rootFlags.json, "json", false, "emit structured JSON to stdout (envelope: {\"data\": ...})")
+}
+
+// printJSON emits v as `{"data": v}` (pretty-printed) to stdout.
+// Read commands use this unconditionally; write commands gate it on
+// --json. The envelope is forward-compatible — pagination, warnings,
+// and other fields land alongside `data` later without breaking
+// consumers that already parse `.data`.
+func printJSON(v any) error {
+	envelope := map[string]any{"data": v}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(envelope)
+}
+
+// printRunResult emits the path of a completed stage run. With
+// --json, wraps it in the data envelope; without, prints a plain
+// path so shell pipelines like `out=$(fettle run find)` keep
+// working. Returns the underlying I/O error if any.
+func printRunResult(runDir string) error {
+	if rootFlags.json {
+		return printJSON(map[string]any{"run": runDir})
+	}
+	_, err := fmt.Println(runDir)
+	return err
+}
+
+// printAddResult emits the result of an `add` command. With --json,
+// emits `{"data": data}`; with the legacy --verbose, prints
+// plainText (typically the new id); otherwise silent.
+func printAddResult(data map[string]any, verbose bool, plainText string) error {
+	if rootFlags.json {
+		return printJSON(data)
+	}
+	if verbose {
+		_, err := fmt.Println(plainText)
+		return err
+	}
+	return nil
 }
 
 // exitCoder is implemented by errors that want a specific process exit

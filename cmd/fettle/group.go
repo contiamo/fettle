@@ -110,11 +110,9 @@ func runGroupShow(cmd *cobra.Command, args []string) error {
 	}
 	for _, g := range groups {
 		if g.ID == id {
-			data, err := json.MarshalIndent(g, "", "  ")
-			if err != nil {
-				return internalError(fmt.Errorf("marshal group: %w", err))
+			if err := printJSON(g); err != nil {
+				return internalError(fmt.Errorf("emit group: %w", err))
 			}
-			fmt.Println(string(data))
 			return nil
 		}
 	}
@@ -133,11 +131,9 @@ func runGroupList(cmd *cobra.Command, args []string) error {
 	if groups == nil {
 		groups = []schema.Group{}
 	}
-	data, err := json.MarshalIndent(groups, "", "  ")
-	if err != nil {
-		return internalError(fmt.Errorf("marshal groups: %w", err))
+	if err := printJSON(groups); err != nil {
+		return internalError(fmt.Errorf("emit groups: %w", err))
 	}
-	fmt.Println(string(data))
 	return nil
 }
 
@@ -222,10 +218,7 @@ func runGroupAdd(cmd *cobra.Command, args []string) error {
 	if err := rp.AppendGroup(g); err != nil {
 		return internalError(fmt.Errorf("append group: %w", err))
 	}
-	if groupAddFlags.verbose {
-		fmt.Println(g.ID)
-	}
-	return nil
+	return printAddResult(map[string]any{"id": g.ID}, groupAddFlags.verbose, g.ID)
 }
 
 // validateGroupMembers checks each --finding id against the group

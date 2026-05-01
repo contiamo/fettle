@@ -1,9 +1,7 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -134,10 +132,7 @@ func runCloseAdd(cmd *cobra.Command, args []string) error {
 	if err := rp.AppendClosure(c); err != nil {
 		return internalError(fmt.Errorf("append closure: %w", err))
 	}
-	if closeAddFlags.verbose {
-		fmt.Println(subject.ID)
-	}
-	return nil
+	return printAddResult(map[string]any{"subject": c.Subject, "at": c.At, "marked_by": c.MarkedBy}, closeAddFlags.verbose, subject.ID)
 }
 
 func runCloseShow(cmd *cobra.Command, args []string) error {
@@ -175,16 +170,16 @@ func runCloseShow(cmd *cobra.Command, args []string) error {
 	}
 	sort.SliceStable(matching, func(i, j int) bool { return matching[i].At.Before(matching[j].At) })
 
-	enc := json.NewEncoder(os.Stdout)
 	if closeShowFlags.all {
-		for _, c := range matching {
-			if err := enc.Encode(c); err != nil {
-				return internalError(fmt.Errorf("encode closure: %w", err))
-			}
+		if err := printJSON(matching); err != nil {
+			return internalError(fmt.Errorf("emit closures: %w", err))
 		}
 		return nil
 	}
-	return enc.Encode(matching[len(matching)-1])
+	if err := printJSON(matching[len(matching)-1]); err != nil {
+		return internalError(fmt.Errorf("emit closure: %w", err))
+	}
+	return nil
 }
 
 // openRunForClose resolves the --run flag (relative to the project
