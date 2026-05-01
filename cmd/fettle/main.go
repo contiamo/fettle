@@ -29,9 +29,25 @@ See FETTLE.md at the repo root for the full design.`,
 	SilenceErrors: true,
 }
 
+// Command groups for `fettle --help` and `fettle run --help`. The
+// IDs here are referenced from each subcommand's GroupID field.
+const (
+	groupProject  = "project"
+	groupStages   = "stages"
+	groupRecords  = "records"
+	groupRunStage = "run-stage"
+	groupRunRead  = "run-read"
+)
+
 func init() {
 	rootCmd.PersistentFlags().StringVar(&rootFlags.dir, "dir", "", "fettle project directory (default: current directory)")
 	rootCmd.PersistentFlags().BoolVar(&rootFlags.json, "json", false, "emit structured JSON to stdout (envelope: {\"data\": ...})")
+
+	rootCmd.AddGroup(
+		&cobra.Group{ID: groupProject, Title: "Project:"},
+		&cobra.Group{ID: groupStages, Title: "Stages (agent-driven work):"},
+		&cobra.Group{ID: groupRecords, Title: "Records (read/write run data):"},
+	)
 }
 
 // printJSON emits v as `{"data": v}` (pretty-printed) to stdout.

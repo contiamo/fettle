@@ -75,6 +75,7 @@ func init() {
 	runGroupCmd.Flags().StringVar(&runGroupFlags.effort, "effort", "", "agent reasoning effort: low|medium|high|xhigh|max")
 	runGroupCmd.Flags().DurationVar(&runGroupFlags.timeout, "timeout", defaultGroupTimeout, "agent timeout (single invocation processes all input findings)")
 	_ = runGroupCmd.MarkFlagRequired("run")
+	runGroupCmd.GroupID = groupRunStage
 	runCmd.AddCommand(runGroupCmd)
 }
 

@@ -19,8 +19,9 @@ import (
 // groupCmd is the parent of `fettle group <verb>` record subcommands.
 // Distinct from `fettle run group`, which runs the group stage.
 var groupCmd = &cobra.Command{
-	Use:   "group",
-	Short: "Operate on groups (add)",
+	Use:     "group",
+	Short:   "Operate on groups (add, list, show)",
+	GroupID: groupRecords,
 }
 
 var groupAddFlags struct {

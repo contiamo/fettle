@@ -54,5 +54,6 @@ func init() {
 	initCmd.Flags().StringVar(&initFlags.target, "target", "", "target repository path (default: current directory)")
 	initCmd.Flags().StringVar(&initFlags.agent, "agent", "claude", "default agent: claude or codex")
 	initCmd.Flags().StringVar(&initFlags.model, "model", "", "default model (empty = agent CLI default)")
+	initCmd.GroupID = groupProject
 	rootCmd.AddCommand(initCmd)
 }

@@ -86,6 +86,7 @@ func init() {
 	runReviewCmd.Flags().StringVar(&runReviewFlags.effort, "effort", "", "agent reasoning effort: low|medium|high|xhigh|max")
 	runReviewCmd.Flags().DurationVar(&runReviewFlags.timeout, "timeout", defaultReviewTimeout, "per-subject agent timeout")
 	_ = runReviewCmd.MarkFlagRequired("run")
+	runReviewCmd.GroupID = groupRunStage
 	runCmd.AddCommand(runReviewCmd)
 }
 

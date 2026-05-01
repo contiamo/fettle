@@ -88,6 +88,7 @@ func init() {
 	runFindCmd.Flags().StringVar(&findFlags.script, "agent-script", "", "run a custom agent script (path to executable); mutually exclusive with --agent")
 	runFindCmd.Flags().StringVar(&findFlags.effort, "effort", "", "agent reasoning effort: low|medium|high|xhigh|max (not allowed with --resume)")
 	runFindCmd.Flags().DurationVar(&findFlags.timeout, "timeout", defaultFindTimeout, "per-file agent timeout")
+	runFindCmd.GroupID = groupRunStage
 	runCmd.AddCommand(runFindCmd)
 }
 

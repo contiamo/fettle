@@ -42,6 +42,7 @@ func init() {
 	runMergeCmd.Flags().StringSliceVar(&runMergeFlags.runs, "run", nil, "input run folder (repeatable; at least one required)")
 	runMergeCmd.Flags().StringVar(&runMergeFlags.name, "name", "", "human label appended to the run folder timestamp")
 	_ = runMergeCmd.MarkFlagRequired("run")
+	runMergeCmd.GroupID = groupRunStage
 	runCmd.AddCommand(runMergeCmd)
 }
 

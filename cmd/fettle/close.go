@@ -17,8 +17,9 @@ import (
 // merged, won't fix, etc.) — append-only events, latest wins for
 // "current state" display.
 var closeCmd = &cobra.Command{
-	Use:   "close",
-	Short: "Operate on closure events (add, list, show)",
+	Use:     "close",
+	Short:   "Operate on closure events (add, list, show)",
+	GroupID: groupRecords,
 }
 
 var closeListFlags struct {

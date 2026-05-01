@@ -70,10 +70,12 @@ Exit codes: 0 success, 1 not a run folder / not found, 2 internal error.`,
 }
 
 func init() {
+	runListCmd.GroupID = groupRunRead
 	runCmd.AddCommand(runListCmd)
 
 	runStatusCmd.Flags().StringVar(&runStatusFlags.run, "run", "", "path to the run folder (required)")
 	_ = runStatusCmd.MarkFlagRequired("run")
+	runStatusCmd.GroupID = groupRunRead
 	runCmd.AddCommand(runStatusCmd)
 }
 

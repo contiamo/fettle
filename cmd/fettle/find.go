@@ -23,8 +23,9 @@ const (
 // (add, show, ...). Distinct from `fettle run find` which runs the
 // find stage.
 var findCmd = &cobra.Command{
-	Use:   "find",
-	Short: "Operate on findings (add, show)",
+	Use:     "find",
+	Short:   "Operate on findings (add, list, show)",
+	GroupID: groupRecords,
 }
 
 var findAddFlags struct {

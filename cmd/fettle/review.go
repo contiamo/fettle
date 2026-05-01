@@ -18,8 +18,9 @@ import (
 // reviewCmd is the parent of `fettle review <verb>` record subcommands.
 // `fettle run review` (the stage runner) lives separately under `runCmd`.
 var reviewCmd = &cobra.Command{
-	Use:   "review",
-	Short: "Operate on review entries (add, list, show)",
+	Use:     "review",
+	Short:   "Operate on review entries (add, list, show)",
+	GroupID: groupRecords,
 }
 
 var reviewAddFlags struct {
