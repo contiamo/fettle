@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"time"
 
@@ -78,6 +79,7 @@ func CreateForFind(opts CreateFindOpts) (*Path, error) {
 	}
 	manifest := schema.RunManifest{
 		Name:          name,
+		Stage:         "find",
 		FettleVersion: project.Version,
 		CreatedAt:     time.Now().UTC(),
 		TargetRepo:    opts.TargetRepo,
@@ -138,6 +140,76 @@ func (p *Path) AppendFileStatus(s schema.FileStatus) error {
 	p.filesMu.Lock()
 	defer p.filesMu.Unlock()
 	return appendJSONL(filepath.Join(p.dir, "files.jsonl"), s)
+}
+
+// AppendReview appends one review entry to reviews_<author>.jsonl.
+// Cross-process safe via flock — the same author may have concurrent
+// `fettle review add` invocations during a parallel review run.
+func (p *Path) AppendReview(author string, review schema.Review) error {
+	if err := validateAuthorSlug(author); err != nil {
+		return err
+	}
+	line, err := json.Marshal(review)
+	if err != nil {
+		return err
+	}
+	line = append(line, '\n')
+	return appendWithLock(filepath.Join(p.dir, "reviews_"+author+".jsonl"), line)
+}
+
+// FindingExists reports whether findings.jsonl contains a row with
+// the given id. Used to validate review/resolve subjects.
+func (p *Path) FindingExists(id string) (bool, error) {
+	return idExistsIn(filepath.Join(p.dir, "findings.jsonl"), id)
+}
+
+// GroupExists reports whether groups.jsonl contains a row with the
+// given id.
+func (p *Path) GroupExists(id string) (bool, error) {
+	return idExistsIn(filepath.Join(p.dir, "groups.jsonl"), id)
+}
+
+// idExistsIn scans a JSONL file for a record whose top-level "id"
+// field matches. Tolerates malformed lines.
+func idExistsIn(path, id string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<16), 1<<20)
+	var row struct {
+		ID string `json:"id"`
+	}
+	for sc.Scan() {
+		row.ID = ""
+		if err := json.Unmarshal(sc.Bytes(), &row); err != nil {
+			continue
+		}
+		if row.ID == id {
+			return true, nil
+		}
+	}
+	return false, sc.Err()
+}
+
+// validateAuthorSlug shares slugRegex with run names — the slug
+// becomes part of the reviews_<author>.jsonl filename, so the same
+// filesystem-safe character class applies. Unlike run slugs, an
+// empty author slug is rejected.
+func validateAuthorSlug(s string) error {
+	if s == "" {
+		return fmt.Errorf("author slug must not be empty")
+	}
+	if !slugRegex.MatchString(s) {
+		return fmt.Errorf("invalid author slug %q: only [A-Za-z0-9_-] allowed", s)
+	}
+	return nil
 }
 
 // CountFindingsForFile scans findings.jsonl and returns how many rows
@@ -236,23 +308,20 @@ func generateName(stage, slug string) (string, error) {
 	return fmt.Sprintf("%s_%s_%s", stage, ts, slug), nil
 }
 
+// slugRegex is the shared validity check for run slugs and author
+// slugs: ASCII alphanumerics, hyphens, and underscores. Both flow into
+// filesystem paths (run folders and reviews_<author>.jsonl), so the
+// same character class keeps both filename-safe.
+var slugRegex = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// validateSlug returns an error if a non-empty run-name slug doesn't
+// match slugRegex. Empty is allowed — generateName picks a random
+// suffix in that case.
 func validateSlug(s string) error {
 	if s == "" {
 		return nil
 	}
-	for _, r := range s {
-		if r >= 'a' && r <= 'z' {
-			continue
-		}
-		if r >= 'A' && r <= 'Z' {
-			continue
-		}
-		if r >= '0' && r <= '9' {
-			continue
-		}
-		if r == '-' || r == '_' {
-			continue
-		}
+	if !slugRegex.MatchString(s) {
 		return fmt.Errorf("invalid run slug %q: only [A-Za-z0-9_-] allowed", s)
 	}
 	return nil

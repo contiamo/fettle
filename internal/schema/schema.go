@@ -46,15 +46,41 @@ const (
 	StatusError = "error"
 )
 
+// Subject identifies what a review or resolution is about.
+type Subject struct {
+	Kind string `json:"kind"` // "finding" or "group"
+	ID   string `json:"id"`
+}
+
+// Subject kinds.
+const (
+	SubjectFinding = "finding"
+	SubjectGroup   = "group"
+)
+
+// Review is one row of reviews_<author>.jsonl. Append-only history;
+// each entry is the writing author's current full label set on the
+// subject. Author identity is carried by the filename, not the entry.
+type Review struct {
+	Subject Subject   `json:"subject"`
+	Labels  []string  `json:"labels"`
+	Comment string    `json:"comment,omitempty"`
+	At      time.Time `json:"at"`
+}
+
 // RunManifest is the contents of run.json.
 type RunManifest struct {
 	Name          string                `json:"name"`
+	Stage         string                `json:"stage"` // "find" | "dedupe" | "group"
 	FettleVersion string                `json:"fettle_version"`
 	CreatedAt     time.Time             `json:"created_at"`
-	TargetRepo    string                `json:"target_repo"`
+	CompletedAt   *time.Time            `json:"completed_at,omitempty"`
+	TargetRepo    string                `json:"target_repo,omitempty"`
 	TargetRepoGit *GitInfo              `json:"target_repo_git,omitempty"`
-	Include       []string              `json:"include"`
-	Exclude       []string              `json:"exclude"`
+	Include       []string              `json:"include,omitempty"`
+	Exclude       []string              `json:"exclude,omitempty"`
+	InputRun      string                `json:"input_run,omitempty"`  // group runs
+	InputRuns     []string              `json:"input_runs,omitempty"` // dedupe runs
 	Stages        map[string]StageEntry `json:"stages"`
 	Args          map[string]any        `json:"args,omitempty"`
 }
