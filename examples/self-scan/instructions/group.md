@@ -2,7 +2,7 @@
   This file is the "domain rubric" half of fettle's group-stage
   prompt. fettle wraps it in a frozen frame that handles the agent
   contract — receiving FINDINGS_JSON and REVIEWS_JSON, the
-  `fettle group add` recording protocol, and exit-code handling.
+  `fettle add group` recording protocol, and exit-code handling.
   You only describe the clustering judgment.
 
   Replace everything below with your domain.

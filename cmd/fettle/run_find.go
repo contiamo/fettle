@@ -30,7 +30,7 @@ const defaultFindTimeout = 10 * time.Minute
 
 // findPromptFrame is the harness-owned wrapper around the user's find
 // instructions. It captures the agent contract — variable values, the
-// `fettle find add` recording protocol, and exit-code handling — so
+// `fettle add finding` recording protocol, and exit-code handling — so
 // the user's own find.md can stay scoped to "what to look for".
 //
 //go:embed prompts/find.md
@@ -88,7 +88,6 @@ func init() {
 	runFindCmd.Flags().StringVar(&findFlags.script, "agent-script", "", "run a custom agent script (path to executable); mutually exclusive with --agent")
 	runFindCmd.Flags().StringVar(&findFlags.effort, "effort", "", "agent reasoning effort: low|medium|high|xhigh|max (not allowed with --resume)")
 	runFindCmd.Flags().DurationVar(&findFlags.timeout, "timeout", defaultFindTimeout, "per-file agent timeout")
-	runFindCmd.GroupID = groupRunStage
 	runCmd.AddCommand(runFindCmd)
 }
 
@@ -422,7 +421,7 @@ Got: %q`, agentScript)
 }
 
 // analyzeOne runs the agent against a single file. The agent writes
-// findings by shelling out to `fettle find add`, which appends to
+// findings by shelling out to `fettle add finding`, which appends to
 // findings.jsonl under flock(2). The harness derives the per-file
 // ledger row from the count of this file's findings before/after the
 // agent ran.
@@ -445,7 +444,7 @@ func analyzeOne(ctx context.Context, rp *run.Path, spec agent.Spec, promptBody, 
 	}
 
 	stageSpec := spec
-	// AddDirs covers codex's sandbox: the spawned `fettle find add`
+	// AddDirs covers codex's sandbox: the spawned `fettle add finding`
 	// subprocess writes findings.jsonl in the run directory.
 	stageSpec.AddDirs = []string{rp.Dir()}
 	stageSpec.Env = []string{

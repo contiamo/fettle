@@ -19,16 +19,7 @@ const (
 	fettleModelEnv = "FETTLE_MODEL"
 )
 
-// findCmd is the parent of `fettle find <verb>` record subcommands
-// (add, show, ...). Distinct from `fettle run find` which runs the
-// find stage.
-var findCmd = &cobra.Command{
-	Use:     "find",
-	Short:   "Operate on findings (add, list, show)",
-	GroupID: groupRecords,
-}
-
-var findAddFlags struct {
+var addFindingFlags struct {
 	file        string
 	line        int
 	title       string
@@ -41,82 +32,79 @@ var findAddFlags struct {
 	verbose     bool
 }
 
-var findAddCmd = &cobra.Command{
-	Use:   "add",
+var addFindingCmd = &cobra.Command{
+	Use:   "finding",
 	Short: "Append one finding to the active run's findings.jsonl",
-	Long: `add records one finding in the run identified by $FETTLE_RUN.
+	Long: `add finding records one finding in the run identified by $FETTLE_RUN.
 
 Intended to be called by the agent fettle has spawned during a find
-stage; the harness sets FETTLE_RUN before invoking the agent. Each
-invocation appends one row to findings.jsonl under a cross-process
-lock, so concurrent agent processes can write safely.
+or dedupe stage; the harness sets FETTLE_RUN before invoking the
+agent. Each invocation appends one row to findings.jsonl under a
+cross-process lock, so concurrent agent processes can write safely.
 
 The id is generated server-side. Two findings with identical (file,
 line, title) get distinct ids — fettle does not dedupe.
 
 Exit codes: 0 on success, 1 on validation error, 2 on internal error.`,
-	RunE: runFindAdd,
+	RunE: runAddFinding,
 }
 
-func init() {
-	findAddCmd.Flags().StringVar(&findAddFlags.file, "file", "", "repo-relative path to the file the finding is anchored to (required)")
-	findAddCmd.Flags().IntVar(&findAddFlags.line, "line", 0, "1-based line number where the finding starts (required, >= 1)")
-	findAddCmd.Flags().StringVar(&findAddFlags.title, "title", "", "short imperative title (required)")
-	findAddCmd.Flags().StringVar(&findAddFlags.description, "description", "", "2-5 sentences describing the issue (required)")
-	findAddCmd.Flags().StringVar(&findAddFlags.suggestion, "suggestion", "", "1-3 sentences with a concrete fix (required)")
-	findAddCmd.Flags().StringVar(&findAddFlags.severity, "severity", "", "severity (free-form string; e.g. low|medium|high)")
-	findAddCmd.Flags().StringSliceVar(&findAddFlags.labels, "label", nil, "label of the form prefix:value, repeatable")
-	findAddCmd.Flags().StringSliceVar(&findAddFlags.references, "reference", nil, "additional code location PATH or PATH:LINE, repeatable")
-	findAddCmd.Flags().StringArrayVar(&findAddFlags.canonicalOf, "canonical-of", nil, "source RUN:FINDING_ID this canonical finding subsumes (required in dedupe runs, rejected in find runs); repeatable")
-	findAddCmd.Flags().BoolVar(&findAddFlags.verbose, "verbose", false, "print the new finding's id to stdout on success")
-
-	findCmd.AddCommand(findAddCmd)
-
-	findShowCmd.Flags().StringVar(&findShowFlags.run, "run", "", "path to the run folder containing the finding (required)")
-	_ = findShowCmd.MarkFlagRequired("run")
-	findCmd.AddCommand(findShowCmd)
-
-	findListCmd.Flags().StringVar(&findListFlags.run, "run", "", "path to the run folder to list findings from (required)")
-	_ = findListCmd.MarkFlagRequired("run")
-	findCmd.AddCommand(findListCmd)
-
-	rootCmd.AddCommand(findCmd)
-}
-
-var findShowFlags struct {
+var showFindingFlags struct {
 	run string
 }
 
-var findShowCmd = &cobra.Command{
-	Use:   "show ID",
+var showFindingCmd = &cobra.Command{
+	Use:   "finding ID",
 	Short: "Print one finding record as JSON",
-	Long: `show prints a single finding from --run by id, as pretty JSON
-on stdout. Use --run to pick the find/merge/dedupe run that owns
-the finding.
+	Long: `show finding prints a single finding from --run by id, as the
+{"data": {...}} envelope on stdout. Use --run to pick the find /
+merge / dedupe run that owns the finding.
 
 Exit codes: 0 found, 1 not found / validation, 2 internal error.`,
 	Args: cobra.ExactArgs(1),
-	RunE: runFindShow,
+	RunE: runShowFinding,
 }
 
-var findListFlags struct {
+var listFindingsFlags struct {
 	run string
 }
 
-var findListCmd = &cobra.Command{
-	Use:   "list",
+var listFindingsCmd = &cobra.Command{
+	Use:   "findings",
 	Short: "Print all findings in --run as a JSON array",
-	Long: `list dumps every finding in --run as a JSON array on stdout.
-For ad-hoc filtering, pipe through jq. Empty runs (or missing
-findings.jsonl) print [].
+	Long: `list findings dumps every finding in --run as a JSON array on
+stdout. For ad-hoc filtering, pipe through jq. Empty runs (or
+missing findings.jsonl) print [].
 
 Exit codes: 0 success, 2 internal error.`,
-	RunE: runFindList,
+	RunE: runListFindings,
 }
 
-func runFindShow(cmd *cobra.Command, args []string) error {
+func init() {
+	addFindingCmd.Flags().StringVar(&addFindingFlags.file, "file", "", "repo-relative path to the file the finding is anchored to (required)")
+	addFindingCmd.Flags().IntVar(&addFindingFlags.line, "line", 0, "1-based line number where the finding starts (required, >= 1)")
+	addFindingCmd.Flags().StringVar(&addFindingFlags.title, "title", "", "short imperative title (required)")
+	addFindingCmd.Flags().StringVar(&addFindingFlags.description, "description", "", "2-5 sentences describing the issue (required)")
+	addFindingCmd.Flags().StringVar(&addFindingFlags.suggestion, "suggestion", "", "1-3 sentences with a concrete fix (required)")
+	addFindingCmd.Flags().StringVar(&addFindingFlags.severity, "severity", "", "severity (free-form string; e.g. low|medium|high)")
+	addFindingCmd.Flags().StringSliceVar(&addFindingFlags.labels, "label", nil, "label of the form prefix:value, repeatable")
+	addFindingCmd.Flags().StringSliceVar(&addFindingFlags.references, "reference", nil, "additional code location PATH or PATH:LINE, repeatable")
+	addFindingCmd.Flags().StringArrayVar(&addFindingFlags.canonicalOf, "canonical-of", nil, "source RUN:FINDING_ID this canonical finding subsumes (required in dedupe runs, rejected in find runs); repeatable")
+	addFindingCmd.Flags().BoolVar(&addFindingFlags.verbose, "verbose", false, "print the new finding's id to stdout on success")
+	addCmd.AddCommand(addFindingCmd)
+
+	showFindingCmd.Flags().StringVar(&showFindingFlags.run, "run", "", "path to the run folder containing the finding (required)")
+	_ = showFindingCmd.MarkFlagRequired("run")
+	showCmd.AddCommand(showFindingCmd)
+
+	listFindingsCmd.Flags().StringVar(&listFindingsFlags.run, "run", "", "path to the run folder to list findings from (required)")
+	_ = listFindingsCmd.MarkFlagRequired("run")
+	listCmd.AddCommand(listFindingsCmd)
+}
+
+func runShowFinding(cmd *cobra.Command, args []string) error {
 	id := args[0]
-	rp, err := openRunForRead(findShowFlags.run)
+	rp, err := openRunForRead(showFindingFlags.run)
 	if err != nil {
 		return err
 	}
@@ -132,11 +120,11 @@ func runFindShow(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 	}
-	return validationError([]string{fmt.Sprintf("finding %q not found in %s", id, findShowFlags.run)})
+	return validationError([]string{fmt.Sprintf("finding %q not found in %s", id, showFindingFlags.run)})
 }
 
-func runFindList(cmd *cobra.Command, args []string) error {
-	rp, err := openRunForRead(findListFlags.run)
+func runListFindings(cmd *cobra.Command, args []string) error {
+	rp, err := openRunForRead(listFindingsFlags.run)
 	if err != nil {
 		return err
 	}
@@ -154,9 +142,7 @@ func runFindList(cmd *cobra.Command, args []string) error {
 }
 
 // openRunForRead resolves a --run flag (relative to the project dir
-// or absolute) and opens it. Used by the read commands (show / list).
-// Distinct from openRunForClose only because the close path also
-// needs the manifest; this one doesn't.
+// or absolute) and opens it. Used by every read command (show / list).
 func openRunForRead(rawRun string) (*run.Path, error) {
 	if rawRun == "" {
 		return nil, validationError([]string{"--run is required"})
@@ -176,7 +162,7 @@ func openRunForRead(rawRun string) (*run.Path, error) {
 	return rp, nil
 }
 
-func runFindAdd(cmd *cobra.Command, args []string) error {
+func runAddFinding(cmd *cobra.Command, args []string) error {
 	runDir := os.Getenv(fettleRunEnv)
 	if runDir == "" {
 		return internalError(fmt.Errorf("%s is not set; this command must be invoked by the fettle harness during a stage", fettleRunEnv))
@@ -190,22 +176,22 @@ func runFindAdd(cmd *cobra.Command, args []string) error {
 		return internalError(fmt.Errorf("read run manifest: %w", err))
 	}
 
-	references, refErrs := parseReferences(findAddFlags.references)
+	references, refErrs := parseReferences(addFindingFlags.references)
 
 	var problems []string
-	if findAddFlags.file == "" {
+	if addFindingFlags.file == "" {
 		problems = append(problems, "--file is required")
 	}
-	if findAddFlags.line < 1 {
+	if addFindingFlags.line < 1 {
 		problems = append(problems, "--line must be >= 1")
 	}
-	if strings.TrimSpace(findAddFlags.title) == "" {
+	if strings.TrimSpace(addFindingFlags.title) == "" {
 		problems = append(problems, "--title is required")
 	}
-	if strings.TrimSpace(findAddFlags.description) == "" {
+	if strings.TrimSpace(addFindingFlags.description) == "" {
 		problems = append(problems, "--description is required")
 	}
-	if strings.TrimSpace(findAddFlags.suggestion) == "" {
+	if strings.TrimSpace(addFindingFlags.suggestion) == "" {
 		problems = append(problems, "--suggestion is required")
 	}
 	for _, e := range refErrs {
@@ -215,20 +201,20 @@ func runFindAdd(cmd *cobra.Command, args []string) error {
 	// Stage-aware --canonical-of rules.
 	switch manifest.Stage {
 	case "find":
-		if len(findAddFlags.canonicalOf) > 0 {
+		if len(addFindingFlags.canonicalOf) > 0 {
 			problems = append(problems, "--canonical-of is rejected in find runs (it's required in dedupe runs only)")
 		}
 	case "dedupe":
-		if len(findAddFlags.canonicalOf) == 0 {
+		if len(addFindingFlags.canonicalOf) == 0 {
 			problems = append(problems, "--canonical-of is required in dedupe runs (one or more RUN:FINDING_ID entries)")
 		}
 	case "group":
-		problems = append(problems, "find add is rejected in group runs; use group add instead")
+		problems = append(problems, "add finding is rejected in group runs; use add group instead")
 	default:
-		problems = append(problems, fmt.Sprintf("find add is not supported in %q runs", manifest.Stage))
+		problems = append(problems, fmt.Sprintf("add finding is not supported in %q runs", manifest.Stage))
 	}
 
-	members, memberErrs := parseCanonicalOf(rp, manifest, findAddFlags.canonicalOf)
+	members, memberErrs := parseCanonicalOf(rp, manifest, addFindingFlags.canonicalOf)
 	for _, e := range memberErrs {
 		problems = append(problems, e)
 	}
@@ -238,10 +224,10 @@ func runFindAdd(cmd *cobra.Command, args []string) error {
 	}
 
 	var severity *string
-	if s := strings.TrimSpace(findAddFlags.severity); s != "" {
+	if s := strings.TrimSpace(addFindingFlags.severity); s != "" {
 		severity = &s
 	}
-	labels := findAddFlags.labels
+	labels := addFindingFlags.labels
 	if labels == nil {
 		labels = []string{}
 	}
@@ -252,11 +238,11 @@ func runFindAdd(cmd *cobra.Command, args []string) error {
 	createdBy := composeCreatedBy(os.Getenv(fettleAgentEnv), os.Getenv(fettleModelEnv))
 	finding := schema.Finding{
 		ID:          schema.NewFindingID(),
-		File:        findAddFlags.file,
-		Line:        findAddFlags.line,
-		Title:       strings.TrimSpace(findAddFlags.title),
-		Description: strings.TrimSpace(findAddFlags.description),
-		Suggestion:  strings.TrimSpace(findAddFlags.suggestion),
+		File:        addFindingFlags.file,
+		Line:        addFindingFlags.line,
+		Title:       strings.TrimSpace(addFindingFlags.title),
+		Description: strings.TrimSpace(addFindingFlags.description),
+		Suggestion:  strings.TrimSpace(addFindingFlags.suggestion),
 		Severity:    severity,
 		Labels:      labels,
 		References:  references,
@@ -267,11 +253,11 @@ func runFindAdd(cmd *cobra.Command, args []string) error {
 	if err := rp.AppendFinding(finding); err != nil {
 		return internalError(fmt.Errorf("append finding: %w", err))
 	}
-	return printAddResult(map[string]any{"id": finding.ID}, findAddFlags.verbose, finding.ID)
+	return printAddResult(map[string]any{"id": finding.ID}, addFindingFlags.verbose, finding.ID)
 }
 
 // resolveAuthor returns the identity to stamp on records that
-// fettle attributes back (reviews, closures). The chain is:
+// fettle attributes back (reviews, outcomes). The chain is:
 //
 //   - FETTLE_AGENT       — agent name set by the harness during a stage
 //   - $FETTLE_AUTHOR     — explicit per-invocation override
@@ -301,7 +287,7 @@ func resolveAuthor() (string, bool, error) {
 
 // markedBy returns the `marked_by` / `created_by` string for the
 // resolved author. Agents use the existing composeCreatedBy shape so
-// closures stamped by an agent match findings stamped by the same
+// outcomes stamped by an agent match findings stamped by the same
 // agent; humans get the simpler `human:<slug>` form.
 func markedBy() (string, error) {
 	slug, isAgent, err := resolveAuthor()

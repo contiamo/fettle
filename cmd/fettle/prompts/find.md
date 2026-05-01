@@ -2,7 +2,7 @@
 
 You are analyzing **one file** for issues. Read it, decide which findings
 meet the bar in the "What to look for" section below, record them via the
-`fettle find add` CLI, and exit.
+`fettle add finding` CLI, and exit.
 
 - File under analysis: `{{.TargetFile}}`
 - Repo root: `{{.RepoRoot}}`
@@ -16,7 +16,7 @@ meet the bar in the "What to look for" section below, record them via the
 For each finding, run a single shell command:
 
 ```bash
-fettle find add \
+fettle add finding \
   --file 'path/relative/to/repo.go' \
   --line 42 \
   --title 'short imperative title' \
@@ -48,7 +48,7 @@ inside the value, end the quote, escape the apostrophe, and re-open:
 `'don'\''t'` (the shell sees `don't`). Newlines inside single quotes are
 literal.
 
-**Error handling**: if `fettle find add` exits non-zero, read its
+**Error handling**: if `fettle add finding` exits non-zero, read its
 stderr and try again with corrections. Exit codes:
 - `0` — finding recorded
 - `1` — validation error (your fault: missing or malformed flag)
@@ -62,4 +62,4 @@ stderr and try again with corrections. Exit codes:
 - Do not write any files yourself. Do not print findings to stdout.
 - Do not summarize at the end, do not ask follow-up questions.
 - An empty file (no findings worth flagging) is a valid result — just
-  exit without calling `fettle find add` at all.
+  exit without calling `fettle add finding` at all.

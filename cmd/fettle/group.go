@@ -16,15 +16,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// groupCmd is the parent of `fettle group <verb>` record subcommands.
-// Distinct from `fettle run group`, which runs the group stage.
-var groupCmd = &cobra.Command{
-	Use:     "group",
-	Short:   "Operate on groups (add, list, show)",
-	GroupID: groupRecords,
-}
-
-var groupAddFlags struct {
+var addGroupFlags struct {
 	title    string
 	summary  string
 	findings []string
@@ -32,10 +24,10 @@ var groupAddFlags struct {
 	verbose  bool
 }
 
-var groupAddCmd = &cobra.Command{
-	Use:   "add",
+var addGroupCmd = &cobra.Command{
+	Use:   "group",
 	Short: "Append one group to the active run's groups.jsonl",
-	Long: `add records one group in the run identified by $FETTLE_RUN.
+	Long: `add group records one group in the run identified by $FETTLE_RUN.
 
 Intended to be called by the agent fettle has spawned during a group
 stage; the harness sets FETTLE_RUN before invoking the agent. Each
@@ -47,124 +39,56 @@ against the group run's input_run findings.jsonl; unknown ids are
 rejected.
 
 Exit codes: 0 on success, 1 on validation error, 2 on internal error.`,
-	RunE: runGroupAdd,
+	RunE: runAddGroup,
 }
 
-func init() {
-	groupAddCmd.Flags().StringVar(&groupAddFlags.title, "title", "", "short title for the group (required)")
-	groupAddCmd.Flags().StringVar(&groupAddFlags.summary, "summary", "", "one-paragraph summary of the cluster (required)")
-	groupAddCmd.Flags().StringArrayVar(&groupAddFlags.findings, "finding", nil, "member finding id from the input run (repeatable; at least one required)")
-	groupAddCmd.Flags().StringSliceVar(&groupAddFlags.labels, "label", nil, "label of the form prefix:value, repeatable")
-	groupAddCmd.Flags().BoolVar(&groupAddFlags.verbose, "verbose", false, "print the new group's id to stdout on success")
-
-	groupCmd.AddCommand(groupAddCmd)
-
-	groupShowCmd.Flags().StringVar(&groupShowFlags.run, "run", "", "path to the group run folder (required)")
-	_ = groupShowCmd.MarkFlagRequired("run")
-	groupCmd.AddCommand(groupShowCmd)
-
-	groupListCmd.Flags().StringVar(&groupListFlags.run, "run", "", "path to the group run folder (required)")
-	_ = groupListCmd.MarkFlagRequired("run")
-	groupCmd.AddCommand(groupListCmd)
-
-	rootCmd.AddCommand(groupCmd)
-}
-
-var groupShowFlags struct {
+var showGroupFlags struct {
 	run string
 }
 
-var groupShowCmd = &cobra.Command{
-	Use:   "show ID",
+var showGroupCmd = &cobra.Command{
+	Use:   "group ID",
 	Short: "Print one group record as JSON",
-	Long: `show prints a single group from --run by id, as pretty JSON
-on stdout.
+	Long: `show group prints a single group from --run by id, as the
+{"data": {...}} envelope on stdout.
 
 Exit codes: 0 found, 1 not found / validation, 2 internal error.`,
 	Args: cobra.ExactArgs(1),
-	RunE: runGroupShow,
+	RunE: runShowGroup,
 }
 
-var groupListFlags struct {
+var listGroupsFlags struct {
 	run string
 }
 
-var groupListCmd = &cobra.Command{
-	Use:   "list",
+var listGroupsCmd = &cobra.Command{
+	Use:   "groups",
 	Short: "Print all groups in --run as a JSON array",
-	Long: `list dumps every group in --run as a JSON array on stdout.
-Empty runs (or missing groups.jsonl) print [].
+	Long: `list groups dumps every group in --run as a JSON array on
+stdout. Empty runs (or missing groups.jsonl) print [].
 
 Exit codes: 0 success, 2 internal error.`,
-	RunE: runGroupList,
+	RunE: runListGroups,
 }
 
-func runGroupShow(cmd *cobra.Command, args []string) error {
-	id := args[0]
-	rp, err := openRunForRead(groupShowFlags.run)
-	if err != nil {
-		return err
-	}
-	groups, err := loadGroupsFromRun(rp.Dir())
-	if err != nil {
-		return internalError(fmt.Errorf("load groups: %w", err))
-	}
-	for _, g := range groups {
-		if g.ID == id {
-			if err := printJSON(g); err != nil {
-				return internalError(fmt.Errorf("emit group: %w", err))
-			}
-			return nil
-		}
-	}
-	return validationError([]string{fmt.Sprintf("group %q not found in %s", id, groupShowFlags.run)})
+func init() {
+	addGroupCmd.Flags().StringVar(&addGroupFlags.title, "title", "", "short title for the group (required)")
+	addGroupCmd.Flags().StringVar(&addGroupFlags.summary, "summary", "", "one-paragraph summary of the cluster (required)")
+	addGroupCmd.Flags().StringArrayVar(&addGroupFlags.findings, "finding", nil, "member finding id from the input run (repeatable; at least one required)")
+	addGroupCmd.Flags().StringSliceVar(&addGroupFlags.labels, "label", nil, "label of the form prefix:value, repeatable")
+	addGroupCmd.Flags().BoolVar(&addGroupFlags.verbose, "verbose", false, "print the new group's id to stdout on success")
+	addCmd.AddCommand(addGroupCmd)
+
+	showGroupCmd.Flags().StringVar(&showGroupFlags.run, "run", "", "path to the group run folder (required)")
+	_ = showGroupCmd.MarkFlagRequired("run")
+	showCmd.AddCommand(showGroupCmd)
+
+	listGroupsCmd.Flags().StringVar(&listGroupsFlags.run, "run", "", "path to the group run folder (required)")
+	_ = listGroupsCmd.MarkFlagRequired("run")
+	listCmd.AddCommand(listGroupsCmd)
 }
 
-func runGroupList(cmd *cobra.Command, args []string) error {
-	rp, err := openRunForRead(groupListFlags.run)
-	if err != nil {
-		return err
-	}
-	groups, err := loadGroupsFromRun(rp.Dir())
-	if err != nil {
-		return internalError(fmt.Errorf("load groups: %w", err))
-	}
-	if groups == nil {
-		groups = []schema.Group{}
-	}
-	if err := printJSON(groups); err != nil {
-		return internalError(fmt.Errorf("emit groups: %w", err))
-	}
-	return nil
-}
-
-// loadGroupsFromRun reads groups.jsonl. Tolerates malformed lines
-// (skipped, like other JSONL readers in the harness). Missing file
-// returns nil/empty without error.
-func loadGroupsFromRun(runDir string) ([]schema.Group, error) {
-	f, err := os.Open(filepath.Join(runDir, "groups.jsonl"))
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	defer f.Close()
-
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<16), 1<<20)
-	var out []schema.Group
-	for sc.Scan() {
-		var g schema.Group
-		if err := json.Unmarshal(sc.Bytes(), &g); err != nil {
-			continue
-		}
-		out = append(out, g)
-	}
-	return out, sc.Err()
-}
-
-func runGroupAdd(cmd *cobra.Command, args []string) error {
+func runAddGroup(cmd *cobra.Command, args []string) error {
 	runDir := os.Getenv(fettleRunEnv)
 	if runDir == "" {
 		return internalError(fmt.Errorf("%s is not set; this command must be invoked by the fettle harness during a group stage", fettleRunEnv))
@@ -180,19 +104,19 @@ func runGroupAdd(cmd *cobra.Command, args []string) error {
 
 	var problems []string
 	if manifest.Stage != "group" {
-		problems = append(problems, fmt.Sprintf("group add is only valid in group runs (this run's stage is %q)", manifest.Stage))
+		problems = append(problems, fmt.Sprintf("add group is only valid in group runs (this run's stage is %q)", manifest.Stage))
 	}
-	if strings.TrimSpace(groupAddFlags.title) == "" {
+	if strings.TrimSpace(addGroupFlags.title) == "" {
 		problems = append(problems, "--title is required")
 	}
-	if strings.TrimSpace(groupAddFlags.summary) == "" {
+	if strings.TrimSpace(addGroupFlags.summary) == "" {
 		problems = append(problems, "--summary is required")
 	}
-	if len(groupAddFlags.findings) == 0 {
+	if len(addGroupFlags.findings) == 0 {
 		problems = append(problems, "at least one --finding is required")
 	}
 
-	memberIDs, memberErrs := validateGroupMembers(rp, manifest, groupAddFlags.findings)
+	memberIDs, memberErrs := validateGroupMembers(rp, manifest, addGroupFlags.findings)
 	for _, e := range memberErrs {
 		problems = append(problems, e)
 	}
@@ -201,7 +125,7 @@ func runGroupAdd(cmd *cobra.Command, args []string) error {
 		return validationError(problems)
 	}
 
-	labels := groupAddFlags.labels
+	labels := addGroupFlags.labels
 	if labels == nil {
 		labels = []string{}
 	}
@@ -209,8 +133,8 @@ func runGroupAdd(cmd *cobra.Command, args []string) error {
 	createdBy := composeCreatedBy(os.Getenv(fettleAgentEnv), os.Getenv(fettleModelEnv))
 	g := schema.Group{
 		ID:         schema.NewGroupID(),
-		Title:      strings.TrimSpace(groupAddFlags.title),
-		Summary:    strings.TrimSpace(groupAddFlags.summary),
+		Title:      strings.TrimSpace(addGroupFlags.title),
+		Summary:    strings.TrimSpace(addGroupFlags.summary),
 		FindingIDs: memberIDs,
 		Labels:     labels,
 		CreatedBy:  createdBy,
@@ -219,7 +143,46 @@ func runGroupAdd(cmd *cobra.Command, args []string) error {
 	if err := rp.AppendGroup(g); err != nil {
 		return internalError(fmt.Errorf("append group: %w", err))
 	}
-	return printAddResult(map[string]any{"id": g.ID}, groupAddFlags.verbose, g.ID)
+	return printAddResult(map[string]any{"id": g.ID}, addGroupFlags.verbose, g.ID)
+}
+
+func runShowGroup(cmd *cobra.Command, args []string) error {
+	id := args[0]
+	rp, err := openRunForRead(showGroupFlags.run)
+	if err != nil {
+		return err
+	}
+	groups, err := loadGroupsFromRun(rp.Dir())
+	if err != nil {
+		return internalError(fmt.Errorf("load groups: %w", err))
+	}
+	for _, g := range groups {
+		if g.ID == id {
+			if err := printJSON(g); err != nil {
+				return internalError(fmt.Errorf("emit group: %w", err))
+			}
+			return nil
+		}
+	}
+	return validationError([]string{fmt.Sprintf("group %q not found in %s", id, showGroupFlags.run)})
+}
+
+func runListGroups(cmd *cobra.Command, args []string) error {
+	rp, err := openRunForRead(listGroupsFlags.run)
+	if err != nil {
+		return err
+	}
+	groups, err := loadGroupsFromRun(rp.Dir())
+	if err != nil {
+		return internalError(fmt.Errorf("load groups: %w", err))
+	}
+	if groups == nil {
+		groups = []schema.Group{}
+	}
+	if err := printJSON(groups); err != nil {
+		return internalError(fmt.Errorf("emit groups: %w", err))
+	}
+	return nil
 }
 
 // validateGroupMembers checks each --finding id against the group
@@ -266,4 +229,30 @@ func validateGroupMembers(rp *run.Path, manifest schema.RunManifest, raws []stri
 		out = append(out, id)
 	}
 	return out, errs
+}
+
+// loadGroupsFromRun reads groups.jsonl. Tolerates malformed lines
+// (skipped, like other JSONL readers in the harness). Missing file
+// returns nil/empty without error.
+func loadGroupsFromRun(runDir string) ([]schema.Group, error) {
+	f, err := os.Open(filepath.Join(runDir, "groups.jsonl"))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<16), 1<<20)
+	var out []schema.Group
+	for sc.Scan() {
+		var g schema.Group
+		if err := json.Unmarshal(sc.Bytes(), &g); err != nil {
+			continue
+		}
+		out = append(out, g)
+	}
+	return out, sc.Err()
 }

@@ -56,7 +56,7 @@ only the live findings.
 For each cluster, run a single shell command:
 
 ```bash
-fettle group add \
+fettle add group \
   --title 'consensus title for this cluster' \
   --summary 'one-paragraph summary of what these findings have in common and why they should land together' \
   --finding 'abc123' \
@@ -72,11 +72,11 @@ the harness rejects unknown ids.
 **Optional**: more `--finding` flags (repeatable); `--label` flags
 (repeatable, `prefix:value` convention).
 
-**Same shell-quoting rules** as `fettle find add`: single quotes
+**Same shell-quoting rules** as `fettle add finding`: single quotes
 around string flags; escape inner apostrophes as `'\''`; newlines
 inside single quotes are literal.
 
-**Error handling**: if `fettle group add` exits non-zero, read its
+**Error handling**: if `fettle add group` exits non-zero, read its
 stderr and try again. Exit codes 0/1/2 same as elsewhere.
 
 ## Output discipline

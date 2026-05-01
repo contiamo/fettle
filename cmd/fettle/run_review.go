@@ -30,7 +30,7 @@ import (
 const defaultReviewTimeout = 5 * time.Minute
 
 // reviewPromptFrame wraps the user's review instructions with the
-// `fettle review add` recording protocol. The user's review.md fills
+// `fettle add review` recording protocol. The user's review.md fills
 // the {{.UserInstructions}} placeholder.
 //
 //go:embed prompts/review.md
@@ -64,7 +64,7 @@ var runReviewCmd = &cobra.Command{
 	Long: `review iterates the findings (find/dedupe runs) or groups (group
 runs) of --run, invoking the configured agent on each subject not
 yet reviewed by this agent. The agent appends review entries via
-` + "`fettle review add`" + `; one entry per subject (or zero — review is
+` + "`fettle add review`" + `; one entry per subject (or zero — review is
 optional per subject).
 
 On first invocation in --run, the active review.md template is
@@ -86,7 +86,6 @@ func init() {
 	runReviewCmd.Flags().StringVar(&runReviewFlags.effort, "effort", "", "agent reasoning effort: low|medium|high|xhigh|max")
 	runReviewCmd.Flags().DurationVar(&runReviewFlags.timeout, "timeout", defaultReviewTimeout, "per-subject agent timeout")
 	_ = runReviewCmd.MarkFlagRequired("run")
-	runReviewCmd.GroupID = groupRunStage
 	runCmd.AddCommand(runReviewCmd)
 }
 

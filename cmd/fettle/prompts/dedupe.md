@@ -51,7 +51,7 @@ latest comment per author from that run's `reviews_<author>.jsonl`).
 For each canonical finding, run a single shell command:
 
 ```bash
-fettle find add \
+fettle add finding \
   --canonical-of 'runs/find_a:abc123' \
   --canonical-of 'runs/find_b:def456' \
   --file 'internal/foo/bar.go' \
@@ -70,11 +70,11 @@ harness validates that RUN appears in this dedupe run's
 findings.jsonl. Plus the usual `--file`, `--line`, `--title`,
 `--description`, `--suggestion`.
 
-**Same shell-quoting rules** as `fettle find add` from a find run:
+**Same shell-quoting rules** as `fettle add finding` from a find run:
 single quotes around string flags; escape inner apostrophes as
 `'\''`; newlines inside single quotes are literal.
 
-**Error handling**: if `fettle find add` exits non-zero, read its
+**Error handling**: if `fettle add finding` exits non-zero, read its
 stderr and try again. Exit codes 0/1/2 same as elsewhere.
 
 ## Output discipline

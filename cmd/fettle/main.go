@@ -29,15 +29,38 @@ See FETTLE.md at the repo root for the full design.`,
 	SilenceErrors: true,
 }
 
-// Command groups for `fettle --help` and `fettle run --help`. The
-// IDs here are referenced from each subcommand's GroupID field.
+// Command groups for `fettle --help`. The IDs here are referenced
+// from each subcommand's GroupID field.
 const (
-	groupProject  = "project"
-	groupStages   = "stages"
-	groupRecords  = "records"
-	groupRunStage = "run-stage"
-	groupRunRead  = "run-read"
+	groupProject = "project"
+	groupStages  = "stages"
+	groupRecords = "records"
 )
+
+// addCmd, listCmd, showCmd are the verb-first parents under which
+// every record-shaped subcommand registers itself. find/group/
+// review/outcome/run all hang off these (and partly off run, for
+// the agent-driven stages).
+var addCmd = &cobra.Command{
+	Use:     "add",
+	Short:   "Append a record (finding, group, review, outcome)",
+	Long:    `add records run output. Each subcommand corresponds to one record kind.`,
+	GroupID: groupRecords,
+}
+
+var listCmd = &cobra.Command{
+	Use:     "list",
+	Short:   "List records in a run, or all runs in the project",
+	Long:    `list reads from the project (runs) or from a single run (--run flag) and prints a JSON array.`,
+	GroupID: groupRecords,
+}
+
+var showCmd = &cobra.Command{
+	Use:     "show",
+	Short:   "Print one record (finding, group, review, outcome) or one run",
+	Long:    `show prints a single record from a run, or a single run's status. Output is the {"data": ...} envelope.`,
+	GroupID: groupRecords,
+}
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&rootFlags.dir, "dir", "", "fettle project directory (default: current directory)")
@@ -48,6 +71,7 @@ func init() {
 		&cobra.Group{ID: groupStages, Title: "Stages (agent-driven work):"},
 		&cobra.Group{ID: groupRecords, Title: "Records (read/write run data):"},
 	)
+	rootCmd.AddCommand(addCmd, listCmd, showCmd)
 }
 
 // printJSON emits v as `{"data": v}` (pretty-printed) to stdout.
@@ -89,7 +113,7 @@ func printAddResult(data map[string]any, verbose bool, plainText string) error {
 }
 
 // exitCoder is implemented by errors that want a specific process exit
-// code. Used by `fettle find add` to distinguish validation (1) from
+// code. Used by `fettle add finding` to distinguish validation (1) from
 // internal failures (2).
 type exitCoder interface {
 	ExitCode() int

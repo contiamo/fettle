@@ -79,7 +79,6 @@ func init() {
 	runDedupeCmd.Flags().StringVar(&runDedupeFlags.effort, "effort", "", "agent reasoning effort: low|medium|high|xhigh|max")
 	runDedupeCmd.Flags().DurationVar(&runDedupeFlags.timeout, "timeout", defaultDedupeTimeout, "agent timeout (single invocation processes all input findings)")
 	_ = runDedupeCmd.MarkFlagRequired("run")
-	runDedupeCmd.GroupID = groupRunStage
 	runCmd.AddCommand(runDedupeCmd)
 }
 

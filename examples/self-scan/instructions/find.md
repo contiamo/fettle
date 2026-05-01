@@ -1,6 +1,6 @@
 <!--
   fettle wraps this file in a frame that handles the agent contract
-  (variable values, `fettle finding add` recording protocol, exit-code
+  (variable values, `fettle add finding` recording protocol, exit-code
   handling, output discipline). Keep this file scoped to the analysis
   criteria themselves.
 -->

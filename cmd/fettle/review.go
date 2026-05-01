@@ -15,15 +15,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// reviewCmd is the parent of `fettle review <verb>` record subcommands.
-// `fettle run review` (the stage runner) lives separately under `runCmd`.
-var reviewCmd = &cobra.Command{
-	Use:     "review",
-	Short:   "Operate on review entries (add, list, show)",
-	GroupID: groupRecords,
-}
-
-var reviewAddFlags struct {
+var addReviewFlags struct {
 	finding string
 	group   string
 	labels  []string
@@ -31,87 +23,86 @@ var reviewAddFlags struct {
 	verbose bool
 }
 
-var reviewAddCmd = &cobra.Command{
-	Use:   "add",
+var addReviewCmd = &cobra.Command{
+	Use:   "review",
 	Short: "Append a review entry to the active run's reviews_<author>.jsonl",
-	Long: `add records one review entry in the run identified by $FETTLE_RUN.
+	Long: `add review records one review entry in the run identified by
+$FETTLE_RUN.
 
 Author identity (the slug used in the filename) comes from
 $FETTLE_AGENT. The harness sets that env var when invoking an agent
-during a review stage; humans calling `+"`fettle review add`"+` directly need
-to set it themselves (or use the UI, which manages identity).
+during a review stage; humans calling ` + "`fettle add review`" + ` directly
+need to set it themselves (or use the UI, which manages identity).
 
 Subject is exactly one of --finding ID or --group ID. The harness
-validates that the id exists in the run's findings.jsonl (find/dedupe
-runs) or groups.jsonl (group runs) and rejects unknown ids and
-mismatched subject kinds.
+validates that the id exists in the run's findings.jsonl (find/
+dedupe runs) or groups.jsonl (group runs) and rejects unknown ids
+and mismatched subject kinds.
 
 Exit codes: 0 success, 1 validation error, 2 internal error.`,
-	RunE: runReviewAdd,
+	RunE: runAddReview,
 }
 
-func init() {
-	reviewAddCmd.Flags().StringVar(&reviewAddFlags.finding, "finding", "", "review subject is a finding with this id")
-	reviewAddCmd.Flags().StringVar(&reviewAddFlags.group, "group", "", "review subject is a group with this id")
-	reviewAddCmd.Flags().StringSliceVar(&reviewAddFlags.labels, "label", nil, "label of the form prefix:value (or any string), repeatable")
-	reviewAddCmd.Flags().StringVar(&reviewAddFlags.comment, "comment", "", "free-form comment")
-	reviewAddCmd.Flags().BoolVar(&reviewAddFlags.verbose, "verbose", false, "print the appended subject id on success")
-
-	reviewCmd.AddCommand(reviewAddCmd)
-
-	reviewListCmd.Flags().StringVar(&reviewListFlags.run, "run", "", "path to the run folder (required)")
-	_ = reviewListCmd.MarkFlagRequired("run")
-	reviewCmd.AddCommand(reviewListCmd)
-
-	reviewShowCmd.Flags().StringVar(&reviewShowFlags.run, "run", "", "path to the run folder (required)")
-	reviewShowCmd.Flags().StringVar(&reviewShowFlags.finding, "finding", "", "subject is a finding with this id")
-	reviewShowCmd.Flags().StringVar(&reviewShowFlags.group, "group", "", "subject is a group with this id")
-	reviewShowCmd.Flags().BoolVar(&reviewShowFlags.all, "all", false, "print every review entry for the subject (default: derived current state)")
-	_ = reviewShowCmd.MarkFlagRequired("run")
-	reviewCmd.AddCommand(reviewShowCmd)
-
-	rootCmd.AddCommand(reviewCmd)
-}
-
-var reviewListFlags struct {
+var listReviewsFlags struct {
 	run string
 }
 
-var reviewListCmd = &cobra.Command{
-	Use:   "list",
+var listReviewsCmd = &cobra.Command{
+	Use:   "reviews",
 	Short: "Print all review entries in --run as a JSON array",
-	Long: `list dumps every review entry from every reviews_<author>.jsonl
+	Long: `list reviews dumps every entry from every reviews_<author>.jsonl
 in --run as a flat, chronologically-sorted JSON array. Each entry
 includes the author derived from its filename.
 
 Empty runs (or runs with no reviews_*.jsonl files) print [].
 
 Exit codes: 0 success, 2 internal error.`,
-	RunE: runReviewList,
+	RunE: runListReviews,
 }
 
-var reviewShowFlags struct {
+var showReviewFlags struct {
 	run     string
 	finding string
 	group   string
 	all     bool
 }
 
-var reviewShowCmd = &cobra.Command{
-	Use:   "show",
+var showReviewCmd = &cobra.Command{
+	Use:   "review",
 	Short: "Print review state for one finding or group",
-	Long: `show prints review state for a single subject. Default emits the
-derived current state — for each author, the latest entry's full
-label set, plus a current_labels union across authors. With --all,
-emits every entry chronologically (including superseded entries).
+	Long: `show review prints review state for a single subject. Default
+emits the derived current state — for each author, the latest
+entry's full label set, plus a current_labels union across authors.
+With --all, emits every entry chronologically (including superseded
+entries).
 
 Exits non-zero if no review entries exist for the subject.
 
 Exit codes: 0 success, 1 validation / not-found, 2 internal error.`,
-	RunE: runReviewShow,
+	RunE: runShowReview,
 }
 
-func runReviewAdd(cmd *cobra.Command, args []string) error {
+func init() {
+	addReviewCmd.Flags().StringVar(&addReviewFlags.finding, "finding", "", "review subject is a finding with this id")
+	addReviewCmd.Flags().StringVar(&addReviewFlags.group, "group", "", "review subject is a group with this id")
+	addReviewCmd.Flags().StringSliceVar(&addReviewFlags.labels, "label", nil, "label of the form prefix:value (or any string), repeatable")
+	addReviewCmd.Flags().StringVar(&addReviewFlags.comment, "comment", "", "free-form comment")
+	addReviewCmd.Flags().BoolVar(&addReviewFlags.verbose, "verbose", false, "print the appended subject id on success")
+	addCmd.AddCommand(addReviewCmd)
+
+	listReviewsCmd.Flags().StringVar(&listReviewsFlags.run, "run", "", "path to the run folder (required)")
+	_ = listReviewsCmd.MarkFlagRequired("run")
+	listCmd.AddCommand(listReviewsCmd)
+
+	showReviewCmd.Flags().StringVar(&showReviewFlags.run, "run", "", "path to the run folder (required)")
+	showReviewCmd.Flags().StringVar(&showReviewFlags.finding, "finding", "", "subject is a finding with this id")
+	showReviewCmd.Flags().StringVar(&showReviewFlags.group, "group", "", "subject is a group with this id")
+	showReviewCmd.Flags().BoolVar(&showReviewFlags.all, "all", false, "print every review entry for the subject (default: derived current state)")
+	_ = showReviewCmd.MarkFlagRequired("run")
+	showCmd.AddCommand(showReviewCmd)
+}
+
+func runAddReview(cmd *cobra.Command, args []string) error {
 	runDir := os.Getenv(fettleRunEnv)
 	if runDir == "" {
 		return internalError(fmt.Errorf("%s is not set; this command must be invoked by the fettle harness during a review stage (or with FETTLE_RUN set explicitly)", fettleRunEnv))
@@ -126,8 +117,8 @@ func runReviewAdd(cmd *cobra.Command, args []string) error {
 	}
 
 	var problems []string
-	hasFinding := reviewAddFlags.finding != ""
-	hasGroup := reviewAddFlags.group != ""
+	hasFinding := addReviewFlags.finding != ""
+	hasGroup := addReviewFlags.group != ""
 	switch {
 	case hasFinding && hasGroup:
 		problems = append(problems, "exactly one of --finding or --group, not both")
@@ -135,14 +126,14 @@ func runReviewAdd(cmd *cobra.Command, args []string) error {
 		problems = append(problems, "exactly one of --finding or --group is required")
 	}
 
-	if len(reviewAddFlags.labels) == 0 && strings.TrimSpace(reviewAddFlags.comment) == "" {
+	if len(addReviewFlags.labels) == 0 && strings.TrimSpace(addReviewFlags.comment) == "" {
 		problems = append(problems, "at least one --label or a --comment is required")
 	}
 	if len(problems) > 0 {
 		return validationError(problems)
 	}
 
-	subject, kindErr := resolveReviewSubject(rp, manifest.Stage, hasFinding, reviewAddFlags.finding, hasGroup, reviewAddFlags.group)
+	subject, kindErr := resolveReviewSubject(rp, manifest.Stage, hasFinding, addReviewFlags.finding, hasGroup, addReviewFlags.group)
 	if kindErr != nil {
 		return validationError([]string{kindErr.Error()})
 	}
@@ -154,18 +145,18 @@ func runReviewAdd(cmd *cobra.Command, args []string) error {
 
 	review := schema.Review{
 		Subject: subject,
-		Labels:  append([]string{}, reviewAddFlags.labels...),
-		Comment: strings.TrimSpace(reviewAddFlags.comment),
+		Labels:  append([]string{}, addReviewFlags.labels...),
+		Comment: strings.TrimSpace(addReviewFlags.comment),
 		At:      time.Now().UTC(),
 	}
 	if err := rp.AppendReview(author, review); err != nil {
 		return internalError(fmt.Errorf("append review: %w", err))
 	}
-	return printAddResult(map[string]any{"subject": subject, "at": review.At}, reviewAddFlags.verbose, subject.ID)
+	return printAddResult(map[string]any{"subject": subject, "at": review.At}, addReviewFlags.verbose, subject.ID)
 }
 
-func runReviewList(cmd *cobra.Command, args []string) error {
-	rp, err := openRunForRead(reviewListFlags.run)
+func runListReviews(cmd *cobra.Command, args []string) error {
+	rp, err := openRunForRead(listReviewsFlags.run)
 	if err != nil {
 		return err
 	}
@@ -182,13 +173,13 @@ func runReviewList(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runReviewShow(cmd *cobra.Command, args []string) error {
-	rp, manifest, err := openRunForClose(reviewShowFlags.run) // same flag-+-manifest pattern as close
+func runShowReview(cmd *cobra.Command, args []string) error {
+	rp, manifest, err := openRunWithManifest(showReviewFlags.run)
 	if err != nil {
 		return err
 	}
-	hasFinding := reviewShowFlags.finding != ""
-	hasGroup := reviewShowFlags.group != ""
+	hasFinding := showReviewFlags.finding != ""
+	hasGroup := showReviewFlags.group != ""
 	switch {
 	case hasFinding && hasGroup:
 		return validationError([]string{"exactly one of --finding or --group, not both"})
@@ -196,7 +187,7 @@ func runReviewShow(cmd *cobra.Command, args []string) error {
 		return validationError([]string{"exactly one of --finding or --group is required"})
 	}
 
-	subject, kindErr := resolveReviewSubject(rp, manifest.Stage, hasFinding, reviewShowFlags.finding, hasGroup, reviewShowFlags.group)
+	subject, kindErr := resolveReviewSubject(rp, manifest.Stage, hasFinding, showReviewFlags.finding, hasGroup, showReviewFlags.group)
 	if kindErr != nil {
 		return validationError([]string{kindErr.Error()})
 	}
@@ -213,10 +204,10 @@ func runReviewShow(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if len(matching) == 0 {
-		return validationError([]string{fmt.Sprintf("no review entries for %s %q in %s", subject.Kind, subject.ID, reviewShowFlags.run)})
+		return validationError([]string{fmt.Sprintf("no review entries for %s %q in %s", subject.Kind, subject.ID, showReviewFlags.run)})
 	}
 
-	if reviewShowFlags.all {
+	if showReviewFlags.all {
 		if err := printJSON(matching); err != nil {
 			return internalError(fmt.Errorf("emit reviews: %w", err))
 		}
@@ -340,7 +331,7 @@ func deriveReviewState(entries []reviewEntry) reviewCurrent {
 // confirms the referenced id exists.
 func resolveReviewSubject(rp *run.Path, stage string, hasFinding bool, findingID string, hasGroup bool, groupID string) (schema.Subject, error) {
 	switch stage {
-	case "find", "dedupe":
+	case "find", "merge", "dedupe":
 		if !hasFinding {
 			return schema.Subject{}, fmt.Errorf("%s runs accept --finding, not --group", stage)
 		}

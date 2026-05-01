@@ -14,8 +14,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// runSummary is the per-run shape emitted by `fettle run list` and
-// `fettle run status`. It pulls a small set of identity + provenance
+// runSummary is the per-run shape emitted by `fettle list runs` and
+// `fettle show run`. It pulls a small set of identity + provenance
 // fields off the manifest plus a counts block summarizing records
 // in the run folder.
 type runSummary struct {
@@ -32,54 +32,49 @@ type runSummary struct {
 // runCounts breaks counts out by record kind. Findings and Groups
 // are stage-specific (find/merge/dedupe carry findings; group
 // carries groups), so they use pointers and omit when not applicable.
-// Reviews and Closures attach to either kind, so they're always
+// Reviews and Outcomes attach to either kind, so they're always
 // emitted (zero is meaningful).
 type runCounts struct {
 	Findings *int `json:"findings,omitempty"`
 	Groups   *int `json:"groups,omitempty"`
 	Reviews  int  `json:"reviews"`
-	Closures int  `json:"closures"`
+	Outcomes int  `json:"outcomes"`
 }
 
-var runListCmd = &cobra.Command{
-	Use:   "list",
+var listRunsCmd = &cobra.Command{
+	Use:   "runs",
 	Short: "List all runs in the project with summary counts",
-	Long: `list walks runs/ and emits one entry per run folder, sorted by
-created_at descending (newest first). Each entry has the run's
+	Long: `list runs walks runs/ and emits one entry per run folder, sorted
+by created_at descending (newest first). Each entry has the run's
 identity, provenance (input_run / input_runs / target_repo), and a
 counts block.
 
 Output is the standard {"data": [...]} envelope.`,
-	RunE: runRunList,
+	RunE: runListRuns,
 }
 
-var runStatusFlags struct {
-	run string
-}
+var showRunCmd = &cobra.Command{
+	Use:   "run PATH",
+	Short: "Print one run's summary (status + counts)",
+	Long: `show run prints a single run's summary as the {"data": {...}}
+envelope — same shape as one entry from ` + "`fettle list runs`" + `.
+PATH may be relative to the project directory or absolute.
 
-var runStatusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Print counts for one run",
-	Long: `status prints a single run's summary — same shape as one entry
-from ` + "`fettle run list`" + `. Scope is records that live in the run folder
-itself (findings/groups/reviews/closures); downstream runs are not
-counted.
+Scope is records that live in the run folder itself (findings,
+groups, reviews, outcomes); downstream runs are separate runs with
+their own status.
 
-Exit codes: 0 success, 1 not a run folder / not found, 2 internal error.`,
-	RunE: runRunStatus,
+Exit codes: 0 success, 1 not a run folder, 2 internal error.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runShowRun,
 }
 
 func init() {
-	runListCmd.GroupID = groupRunRead
-	runCmd.AddCommand(runListCmd)
-
-	runStatusCmd.Flags().StringVar(&runStatusFlags.run, "run", "", "path to the run folder (required)")
-	_ = runStatusCmd.MarkFlagRequired("run")
-	runStatusCmd.GroupID = groupRunRead
-	runCmd.AddCommand(runStatusCmd)
+	listCmd.AddCommand(listRunsCmd)
+	showCmd.AddCommand(showRunCmd)
 }
 
-func runRunList(cmd *cobra.Command, args []string) error {
+func runListRuns(cmd *cobra.Command, args []string) error {
 	dir, err := projectDir()
 	if err != nil {
 		return internalError(err)
@@ -112,8 +107,8 @@ func runRunList(cmd *cobra.Command, args []string) error {
 	return printJSON(summaries)
 }
 
-func runRunStatus(cmd *cobra.Command, args []string) error {
-	rp, err := openRunForRead(runStatusFlags.run)
+func runShowRun(cmd *cobra.Command, args []string) error {
+	rp, err := openRunForRead(args[0])
 	if err != nil {
 		return err
 	}
@@ -137,9 +132,9 @@ func summarizeRun(runDir string) (runSummary, error) {
 		return runSummary{}, err
 	}
 
-	closures, err := countLines(filepath.Join(runDir, "closures.jsonl"))
+	outcomes, err := countLines(filepath.Join(runDir, "outcomes.jsonl"))
 	if err != nil {
-		return runSummary{}, fmt.Errorf("count closures: %w", err)
+		return runSummary{}, fmt.Errorf("count outcomes: %w", err)
 	}
 
 	reviews, err := countReviews(runDir)
@@ -147,7 +142,7 @@ func summarizeRun(runDir string) (runSummary, error) {
 		return runSummary{}, fmt.Errorf("count reviews: %w", err)
 	}
 
-	counts := runCounts{Reviews: reviews, Closures: closures}
+	counts := runCounts{Reviews: reviews, Outcomes: outcomes}
 	switch m.Stage {
 	case "find", "merge", "dedupe":
 		n, err := countLines(filepath.Join(runDir, "findings.jsonl"))

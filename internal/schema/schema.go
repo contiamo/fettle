@@ -55,7 +55,7 @@ const (
 	StatusError = "error"
 )
 
-// Subject identifies what a review or closure is about.
+// Subject identifies what a review or outcome is about.
 type Subject struct {
 	Kind string `json:"kind"` // "finding" or "group"
 	ID   string `json:"id"`
@@ -125,11 +125,12 @@ func NewFindingID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// Closure is one closure event for a finding or group. Lives in
-// runs/<name>/closures.jsonl. Append-only; latest entry per subject
+// Outcome is one event recording what happened to a finding or
+// group (PR merged, won't fix, deduped, etc.). Lives in
+// runs/<name>/outcomes.jsonl. Append-only; latest entry per subject
 // wins for "current state" display, but the full history is
-// preserved (and viewable via `fettle close show --all`).
-type Closure struct {
+// preserved (and viewable via `fettle show outcome --all`).
+type Outcome struct {
 	Subject  Subject   `json:"subject"`
 	Status   string    `json:"status"`
 	PRURL    string    `json:"pr_url,omitempty"`
@@ -153,7 +154,7 @@ type Group struct {
 // NewGroupID returns a fresh random group id of the form `g_xxxxxxxx`
 // (8 hex chars). The `g_` prefix keeps groups distinguishable from
 // findings at a glance — useful when both kinds appear side by side in
-// review/closure logs.
+// review/outcome logs.
 func NewGroupID() string {
 	var b [4]byte
 	if _, err := rand.Read(b[:]); err != nil {

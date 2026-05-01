@@ -310,22 +310,22 @@ func (p *Path) AppendFileStatus(s schema.FileStatus) error {
 	return appendJSONL(filepath.Join(p.dir, "files.jsonl"), s)
 }
 
-// AppendClosure appends one closure event to closures.jsonl. Cross-
+// AppendOutcome appends one outcome event to outcomes.jsonl. Cross-
 // process safe via flock.
-func (p *Path) AppendClosure(c schema.Closure) error {
-	line, err := json.Marshal(c)
+func (p *Path) AppendOutcome(o schema.Outcome) error {
+	line, err := json.Marshal(o)
 	if err != nil {
 		return err
 	}
 	line = append(line, '\n')
-	return appendWithLock(filepath.Join(p.dir, "closures.jsonl"), line)
+	return appendWithLock(filepath.Join(p.dir, "outcomes.jsonl"), line)
 }
 
-// LoadClosures reads closures.jsonl in append order. Tolerates
+// LoadOutcomes reads outcomes.jsonl in append order. Tolerates
 // malformed lines (skipped, like other JSONL readers in the
 // harness). Empty file returns an empty slice and no error.
-func (p *Path) LoadClosures() ([]schema.Closure, error) {
-	f, err := os.Open(filepath.Join(p.dir, "closures.jsonl"))
+func (p *Path) LoadOutcomes() ([]schema.Outcome, error) {
+	f, err := os.Open(filepath.Join(p.dir, "outcomes.jsonl"))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
@@ -336,13 +336,13 @@ func (p *Path) LoadClosures() ([]schema.Closure, error) {
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<16), 1<<20)
-	var out []schema.Closure
+	var out []schema.Outcome
 	for sc.Scan() {
-		var c schema.Closure
-		if err := json.Unmarshal(sc.Bytes(), &c); err != nil {
+		var o schema.Outcome
+		if err := json.Unmarshal(sc.Bytes(), &o); err != nil {
 			continue
 		}
-		out = append(out, c)
+		out = append(out, o)
 	}
 	return out, sc.Err()
 }
@@ -363,7 +363,7 @@ func (p *Path) AppendReview(author string, review schema.Review) error {
 }
 
 // FindingExists reports whether findings.jsonl contains a row with
-// the given id. Used to validate review/close subjects.
+// the given id. Used to validate review/outcome subjects.
 func (p *Path) FindingExists(id string) (bool, error) {
 	return idExistsIn(filepath.Join(p.dir, "findings.jsonl"), id)
 }

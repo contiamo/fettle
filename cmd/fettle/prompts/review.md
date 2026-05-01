@@ -2,7 +2,7 @@
 
 You are reviewing **one {{.SubjectKind}}** produced by an upstream
 fettle stage. Decide what labels (and optional comment) to attach,
-record via `fettle review add`, and exit.
+record via `fettle add review`, and exit.
 
 - Subject kind: `{{.SubjectKind}}`
 - Repo root: `{{.RepoRoot}}`
@@ -22,7 +22,7 @@ record via `fettle review add`, and exit.
 For each subject you decide to label, run a single shell command:
 
 ```bash
-fettle review add \
+fettle add review \
   --{{.SubjectKind}} '{{.SubjectID}}' \
   --label confirmed \
   --label 'category:something' \
@@ -40,7 +40,7 @@ convention); a `--comment` for free-form reasoning.
 and shell metacharacters pass through unchanged. For literal single
 quotes, end the quote, escape the apostrophe, re-open: `'don'\''t'`.
 
-**Error handling**: if `fettle review add` exits non-zero, read its
+**Error handling**: if `fettle add review` exits non-zero, read its
 stderr and try again with corrections. Exit codes:
 - `0` — review recorded
 - `1` — validation error (your fault: missing or malformed flag)
