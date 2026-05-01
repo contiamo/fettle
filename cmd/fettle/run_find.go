@@ -80,7 +80,7 @@ func init() {
 	runFindCmd.Flags().StringVar(&findFlags.name, "name", "", "human label appended to the run folder timestamp (default: random hex)")
 	runFindCmd.Flags().StringVar(&findFlags.resume, "resume", "", "path to an existing run folder to resume")
 	runFindCmd.Flags().IntVarP(&findFlags.concurrency, "concurrency", "c", 4, "max concurrent agent invocations")
-	runFindCmd.Flags().IntVar(&findFlags.limit, "limit", 0, "scan at most N files this invocation (0 = all)")
+	runFindCmd.Flags().IntVar(&findFlags.limit, "limit", 0, "scan at most N files in this run, total across resumes (0 = all)")
 	runFindCmd.Flags().StringSliceVar(&findFlags.include, "include", nil, "include globs (overrides project config; not allowed with --resume)")
 	runFindCmd.Flags().StringSliceVar(&findFlags.exclude, "exclude", nil, "exclude globs (overrides project config; not allowed with --resume)")
 	runFindCmd.Flags().StringVar(&findFlags.agent, "agent", "", "select a built-in agent (claude or codex); mutually exclusive with --agent-script")
@@ -99,6 +99,10 @@ type findInputs struct {
 	include    []string
 	exclude    []string
 	spec       agent.Spec
+	// limit is the per-run cap on total scanned files (0 = unlimited).
+	// For new runs it comes from --limit; for resumes it's read from
+	// the manifest's args.limit so resume honors the original intent.
+	limit int
 }
 
 func runFind(cmd *cobra.Command, args []string) error {
@@ -128,8 +132,16 @@ func runFind(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load resume state: %w", err)
 	}
 	pending := pendingFiles(files, in.targetRepo, done)
-	if findFlags.limit > 0 && len(pending) > findFlags.limit {
-		pending = pending[:findFlags.limit]
+	// Limit is per-run, not per-invocation: cap pending at
+	// `limit - already_done` so resume honors the original intent.
+	if in.limit > 0 {
+		remaining := in.limit - len(done)
+		if remaining < 0 {
+			remaining = 0
+		}
+		if len(pending) > remaining {
+			pending = pending[:remaining]
+		}
 	}
 
 	logger.Info("plan",
@@ -294,11 +306,20 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 		if m.Agent == nil {
 			return nil, fmt.Errorf("run %s has no agent info in run.json — cannot resume", abs)
 		}
+		// Read the original --limit out of args.limit so resume honors
+		// the per-run cap. JSON numbers unmarshal to float64.
+		var savedLimit int
+		if v, ok := m.Args["limit"]; ok {
+			if f, ok := v.(float64); ok {
+				savedLimit = int(f)
+			}
+		}
 		return &findInputs{
 			rp:         rp,
 			targetRepo: m.TargetRepo,
 			include:    m.Include,
 			exclude:    m.Exclude,
+			limit:      savedLimit,
 			spec: agent.Spec{
 				Name:    m.Agent.Name,
 				Model:   m.Agent.Model,
@@ -428,6 +449,7 @@ Got: %q`, agentScript)
 		targetRepo: targetRepo,
 		include:    include,
 		exclude:    exclude,
+		limit:      findFlags.limit,
 		spec:       spec,
 	}, nil
 }

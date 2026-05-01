@@ -276,25 +276,23 @@ data flow is out of scope for fettle.
 
 Fettle substitutes a small, fixed set of variables when running each stage:
 
-| Stage                        | Variables available in the prompt                                            |
-|------------------------------|------------------------------------------------------------------------------|
-| find                         | `TARGET_FILE`, `REPO_ROOT`                                                   |
-| review (find/dedupe target)  | `FINDING_JSON`, `REPO_ROOT`                                                  |
-| review (group target)        | `GROUP_JSON`, `MEMBERS_JSON`, `REPO_ROOT`                                    |
-| merge                        | (no prompt — harness-only, no agent invoked)                                 |
-| dedupe                       | `FINDINGS_JSON` (annotated with `from_run` and current review state)         |
-| group                        | `FINDINGS_JSON`, `REVIEWS_JSON`                                              |
+| Stage                                | Variables available in the prompt                                       |
+|--------------------------------------|-------------------------------------------------------------------------|
+| find                                 | `TARGET_FILE`, `REPO_ROOT`                                              |
+| review (find / merge / dedupe target)| `FINDING_JSON`, `REPO_ROOT`                                             |
+| merge                                | (no prompt — harness-only, no agent invoked)                            |
+| dedupe                               | `FINDINGS_JSON` (annotated with `from_run` and current review state)    |
+| group                                | `FINDINGS_JSON`, `REVIEWS_JSON`                                         |
+
+Group-run review (where the subject is a group, with `GROUP_JSON` and
+member finding records in the prompt) is not implemented in v0.
 
 **No stage gets `OUTPUT_PATH`.** Every stage records its output by
-shelling to `fettle <kind> add` (see the CLI section). This unifies
+shelling to `fettle add <kind>` (see the CLI section). This unifies
 the agent contract: the harness owns ids, timestamps, validation, and
 file appends; the agent never writes a fettle data file directly. The
 prompt frame teaches the recording protocol; the user's
 stage-specific instructions decide what to record.
-
-`MEMBERS_JSON` (review of group runs) is the resolved finding records
-the group references — so the reviewer has the actual evidence in
-hand, not just `finding_ids[]` to chase.
 
 `REPO_ROOT` is the `target_repo` recorded on the run reviewing
 operates against. For find runs the value is direct from

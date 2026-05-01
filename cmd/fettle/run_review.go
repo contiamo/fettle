@@ -60,12 +60,15 @@ var runReviewFlags struct {
 
 var runReviewCmd = &cobra.Command{
 	Use:   "review",
-	Short: "Run the review agent on every finding (or group) of an existing run",
-	Long: `review iterates the findings (find/dedupe runs) or groups (group
-runs) of --run, invoking the configured agent on each subject not
-yet reviewed by this agent. The agent appends review entries via
-` + "`fettle add review`" + `; one entry per subject (or zero — review is
-optional per subject).
+	Short: "Run the review agent on every finding of an existing find / merge / dedupe run",
+	Long: `review iterates the findings of --run (a find / merge / dedupe
+run), invoking the configured agent on each finding not yet reviewed
+by this agent. The agent appends review entries via
+` + "`fettle add review`" + `; one entry per finding (or zero — review is
+optional per finding).
+
+Group-run review is not yet implemented; v0 supports finding-shaped
+runs only.
 
 On first invocation in --run, the active review.md template is
 snapshotted into runs/<run>/instructions/review.md. Subsequent
@@ -192,7 +195,12 @@ func runRunReview(cmd *cobra.Command, args []string) error {
 			fileLogger := logger.With("finding", f.ID, "n", i+1, "total", len(pending))
 			fileLogger.Info("reviewing")
 
-			err := reviewOne(ctx, in.rp, in.spec, string(promptBody), in.manifest.TargetRepo, f)
+			// in.spec.WorkDir carries the resolved repo root (walked
+			// back through input_runs[] for merge/dedupe inputs);
+			// in.manifest.TargetRepo is empty for those stages, so we
+			// must use the resolved value to populate REPO_ROOT in
+			// the prompt.
+			err := reviewOne(ctx, in.rp, in.spec, string(promptBody), in.spec.WorkDir, f)
 			if err != nil {
 				fail.Add(1)
 				fileLogger.Warn("failed", "error", err)
