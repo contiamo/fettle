@@ -18,30 +18,42 @@ the knowledge is yours.
 ## Pipeline
 
 ```
-  find    →    review       →    dedupe         →    group     →   resolve
-  per-file     per-finding       (optional;          cluster        track
-  agent        agent and/or      multi-run          findings into    closures
-  scan         human review      consolidation)     PR-sized
-                                                    batches
+  find    →    review       →    merge | dedupe   →    group     →   resolve
+  per-file     per-finding       (optional;            cluster        track
+  agent        agent and/or      multi-run             findings into  closures
+  scan         human review      consolidation)        PR-sized
+                                                       batches
 ```
 
-`find`, `dedupe`, and `group` each create their own **run folder**
-under `runs/`. `review` and `resolve` are operations on existing
-runs — their outputs (per-author review files, the resolutions log)
-live inside the target run, not in their own folders. Stages are
-independent — you can skip any, re-run any, or stop after the first
-one if a report is all you need.
+`find`, `merge`, `dedupe`, and `group` each create their own **run
+folder** under `runs/`. `review` and `resolve` are operations on
+existing runs — their outputs (per-author review files, the
+resolutions log) live inside the target run, not in their own
+folders. Stages are independent — you can skip any, re-run any, or
+stop after the first one if a report is all you need.
 
-**Dedupe is a multi-input stage**: it consolidates findings from
-multiple find runs (typically two agents scanning the same code) into
-canonical findings with a `members[]` field listing the source
-findings. Skip it if you only have one find run — within-run dedup is
-already the find agent's job (via `--reference`).
+**Merge and dedupe are siblings**, not alternatives — they handle
+multi-run consolidation differently:
 
-**Group is single-input**: it takes one run (a find run, or a dedupe
-run if you consolidated first) and clusters its findings into
-PR-sized batches. Multi-run grouping isn't supported directly; dedupe
-first, then group.
+- **Merge** is purely deterministic. Use it for *non-overlapping*
+  inputs (e.g. one find run on `**/*.go`, another on `**/*.ts`).
+  Cardinality preserved (1+1 = 2). No agent invocation; the harness
+  copies findings forward into a new run, stamps each with a
+  `members[]` entry pointing at its source, and propagates source
+  reviews verbatim with id remapping. Fast.
+
+- **Dedupe** uses an LLM. Use it for *overlapping* inputs (e.g. the
+  same code scanned by two different agents). Cardinality may
+  reduce (1+1 → maybe 1 canonical finding). Source reviews fed to
+  the agent as input context, but **not** copied onto canonical
+  findings (would forge authorship under N-to-1 synthesis).
+
+Both produce a run that downstream `group` can consume. Skip both
+if you only have one find run.
+
+**Group is single-input**: it takes one run (a find / merge / dedupe
+run) and clusters its findings into PR-sized batches. Multi-run
+grouping isn't supported directly; merge or dedupe first, then group.
 
 ## Project layout
 
@@ -72,6 +84,14 @@ my-audit/
       reviews_<author>.jsonl    written by `fettle run review --run …`; one per author
       resolutions.jsonl         written by `fettle resolve add --run …`
 
+    merge_20260501T091500Z_combined/
+      run.json                  manifest with input_runs: ["runs/find_go", "runs/find_ts"]
+      findings.jsonl            findings copied verbatim, stamped with members[].length=1
+      reviews_<author>.jsonl    propagated from input runs (subject ids remapped)
+      resolutions.jsonl         closures of merged findings live here
+                                (no instructions/ — merge is harness-only, no agent)
+                                (no raw/ — no agent transcript to capture)
+
     dedupe_20260501T093000Z_consolidate/
       run.json                  manifest with input_runs: ["runs/find_X", "runs/find_Y"]
       instructions/dedupe.md    snapshot
@@ -90,11 +110,11 @@ my-audit/
 ```
 
 `find` creates a new run folder on each invocation, or continues an
-existing one via `--resume runs/<name>/`. `dedupe` and `group` take
-input runs via `--run` and create a *new* output run folder —
-`dedupe` accepts multiple `--run` flags (one per input find run);
-`group` accepts exactly one `--run` (the find or dedupe run to
-cluster).
+existing one via `--resume runs/<name>/`. `merge`, `dedupe`, and
+`group` take input runs via `--run` and create a *new* output run
+folder — `merge` and `dedupe` accept multiple `--run` flags (one
+per input find run); `group` accepts exactly one `--run` (the find,
+merge, or dedupe run to cluster).
 
 `fettle run review` and `fettle resolve add` / `fettle resolve show`
 take `--run runs/<name>/` pointing at the target run; they read its
@@ -111,17 +131,17 @@ provenance. Archive the input-run chain alongside if you want full
 data portability.
 
 **Run folder naming**: `<stage>_<UTC-timestamp>_<slug>/` where
-`<stage>` is `find`, `dedupe`, or `group`. Timestamp format is
+`<stage>` is `find`, `merge`, `dedupe`, or `group`. Timestamp format is
 `YYYYMMDDTHHMMSSZ` so runs sort chronologically and same-day runs
 don't collide. The slug defaults to a short random suffix; `--name
 <slug>` overrides just the slug portion. Resuming a killed `find` is
-`fettle run find --resume runs/<name>/`. `dedupe` and `group` are
-single-shot agent invocations — no resume; if they crash mid-output
-the partial folder should be deleted and the stage re-run.
+`fettle run find --resume runs/<name>/`. `merge`, `dedupe`, and
+`group` are single-shot — no resume; if they crash mid-output the
+partial folder should be deleted and the stage re-run.
 
 **`run.json`** is the manifest of the stage that created the folder
-(find / dedupe / group). It captures everything needed to understand
-or reproduce that run. Reviews and resolves do *not* update
+(find / merge / dedupe / group). It captures everything needed to
+understand or reproduce that run. Reviews and resolves do *not* update
 `run.json` — they're attachments to a run, not stage outputs of
 their own.
 
@@ -165,6 +185,23 @@ A **find** run additionally records:
 "include": ["**/*.go"],
 "exclude": ["vendor/**", "**/*_generated.go"],
 "args": { "concurrency": 4, "limit": 0 }
+```
+
+A **merge** run records its inputs and has no `agent` /
+`source_path` / `snapshot_path` fields (no agent ran):
+
+```json
+{
+  "name": "merge_20260501T091500Z_combined",
+  "stage": "merge",
+  "fettle_version": "0.1.0",
+  "created_at": "...",
+  "completed_at": "...",
+  "input_runs": [
+    "runs/find_20260430T145233Z_go",
+    "runs/find_20260430T214041Z_ts"
+  ]
+}
 ```
 
 A **dedupe** run records its inputs:
@@ -241,6 +278,7 @@ Fettle substitutes a small, fixed set of variables when running each stage:
 | find                         | `TARGET_FILE`, `REPO_ROOT`                                                   |
 | review (find/dedupe target)  | `FINDING_JSON`, `REPO_ROOT`                                                  |
 | review (group target)        | `GROUP_JSON`, `MEMBERS_JSON`, `REPO_ROOT`                                    |
+| merge                        | (no prompt — harness-only, no agent invoked)                                 |
 | dedupe                       | `FINDINGS_JSON` (annotated with `from_run` and current review state)         |
 | group                        | `FINDINGS_JSON`, `REVIEWS_JSON`                                              |
 
@@ -325,12 +363,29 @@ fettle run review --run runs/<name>/ [--agent NAME] [--watch]
     against dedupe/group runs because their output is single-shot
     and only readable after `completed_at` is set.
 
+fettle run merge --run RUN [--run RUN]... [--name SLUG]
+    Concatenate non-overlapping runs. Harness-only — no agent
+    invocation. Each finding from each input run is copied forward
+    with a fresh id and members[{finding_id, from_run}] of length 1.
+    Source reviews are propagated verbatim with subject ids
+    remapped. Source resolutions are NOT propagated (closures should
+    be re-evaluated against the merged view). Creates
+    runs/merge_<UTC-timestamp>_<slug>/.
+
+    Use this for non-overlapping inputs (e.g. one find run on
+    `**/*.go`, another on `**/*.ts`). For overlapping inputs (same
+    code scanned by two different agents), use dedupe instead.
+
+    Warns (not fails) on exact (file, line, title) duplicates
+    across input runs — that's a hint you may have wanted dedupe.
+
 fettle run dedupe --run RUN [--run RUN]... [--name SLUG] [--agent NAME]
     Cross-run consolidation. Reads findings (annotated with current
     review state from each input run) and asks the agent to merge
     equivalent findings into canonical entries — same shape, plus a
-    members[] back-pointer. Creates runs/dedupe_<UTC-timestamp>_<slug>/.
-    Single agent invocation; no resume — re-run if it fails.
+    members[] back-pointer (length >= 1). Creates
+    runs/dedupe_<UTC-timestamp>_<slug>/. Single agent invocation;
+    no resume — re-run if it fails.
 
     Two or more --run flags is the typical case; single-input
     dedupe is allowed (degenerate but useful for re-canonicalizing
@@ -480,33 +535,43 @@ multiple find runs).
 ```
 
 `id` is generated server-side and unique. In find-run findings, `id`
-identifies a single agent observation. In dedupe-run findings, `id`
-identifies the canonical synthesis and `members[]` lists the source
-observations.
+identifies a single agent observation. In merge-run and dedupe-run
+findings, `id` identifies the relocated/canonical record; `members[]`
+lists the source observations.
 
 `members[]` is **omitted** in find-run findings (or empty array). In
-dedupe-run findings, `members[]` is the provenance trail back to the
-source observations.
+merge-run findings, `members[]` always has length 1 (one source per
+relocated finding — merge is 1-to-1). In dedupe-run findings,
+`members[]` has length >= 1 (canonical synthesis can fold one or
+many sources together).
 
-For consensus signal, count carefully — `members.length` is
-*observation count*, not agent count: one agent might flag the same
-root cause at two adjacent lines and have both observations land in
-the same canonical finding. The right counters:
+For consensus signal on **dedupe** output, count carefully —
+`members.length` is *observation count*, not agent count: one agent
+might flag the same root cause at two adjacent lines and have both
+observations land in the same canonical finding. The right counters:
 
 - `members.length` — total source observations
 - distinct `from_run` count — how many runs flagged it
 - agent count — derived by reading each `from_run`'s `run.json` for
   its `agent.name` and de-duping
 
-The dedupe agent receives source findings annotated with their
-**current review state** (labels, latest comment per author) from
-each input run. This prevents canonicalizing findings that source-run
-reviewers already labeled `false-positive`/`out-of-scope`. Reviews on
-source findings are **not** copied into the canonical finding's
-review files — that would forge authorship; canonical findings start
-with no reviews of their own. The agent should write the rejection
-into its decision (skip the finding) or into the canonical finding's
-`labels[]`/`description` synthesis.
+The merge stage doesn't need a consensus signal — `members.length`
+is always 1 by definition.
+
+**Source reviews handling differs by stage**:
+
+- **Merge** propagates each input run's `reviews_<author>.jsonl`
+  verbatim into the merge run, with `subject.id` remapped from the
+  source finding's id to the new merged id. Faithful since merge is
+  1-to-1; no authorship forging concern.
+- **Dedupe** does NOT copy source reviews onto canonical findings
+  (that would forge authorship under N-to-1 synthesis). Instead the
+  dedupe agent receives source findings annotated with their
+  **current review state** (labels, latest comment per author) as
+  input context. Canonical findings start with no reviews of their
+  own; the agent writes any rejection it sees into the canonical
+  finding's `labels[]`/`description` synthesis or skips the finding
+  entirely.
 
 `severity` is a free-form string (or null). Fettle doesn't enforce a scale —
 your prompt decides whether to use `low`/`medium`/`high`, `P1`/`P2`/`P3`, a
@@ -700,24 +765,27 @@ resume:
 - `fettle run review --watch` polls a find run's `findings.jsonl`
   and picks up new entries as `find` appends them, so review can run
   concurrently with a long find scan. `--watch` is rejected against
-  dedupe/group runs (their output is single-shot; review them after
-  `completed_at` is set).
+  merge/dedupe/group runs (their output is single-shot; review them
+  after `completed_at` is set).
 
-**Single-shot stages** (one agent invocation per run) are atomic at
-the run level — successful runs have `completed_at` set in
-`run.json`; partial runs do not.
+**Single-shot stages** are atomic at the run level — successful runs
+have `completed_at` set in `run.json`; partial runs do not.
 
-- `dedupe` — one invocation reads all input runs, calls `fettle
-  find add --canonical-of ...` per canonical record. The harness
-  sets `completed_at` after the agent exits cleanly. If the agent
-  crashes mid-output, partial findings are committed but
-  `completed_at` is missing — delete the run folder and re-run.
+- `merge` — harness-only. One pass reads all input runs and writes
+  the merged outputs (findings + remapped reviews). No agent. If
+  the harness is killed mid-write, `completed_at` is missing —
+  delete the run folder and re-run.
+- `dedupe` — one agent invocation reads all input runs, calls
+  `fettle find add --canonical-of ...` per canonical record. The
+  harness sets `completed_at` after the agent exits cleanly. If the
+  agent crashes mid-output, partial findings are committed but
+  `completed_at` is missing — delete and re-run.
 - `group` — same shape; one invocation, calls `fettle group add`
   per cluster. Same atomic semantics.
 
 (See the `run.json` description above for how readers should
 interpret missing `completed_at` — UI/`--watch` may read in-progress
-find runs, but dedupe and group inputs must be completed.)
+find runs, but merge / dedupe / group inputs must be completed.)
 
 JSONL files are append-only. You can hand-edit them between runs if
 you need to correct something, but the normal flow is "let the tools
