@@ -117,13 +117,14 @@ func runRunReview(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Currently support find/dedupe runs (subject = finding). Group
-	// runs are deferred to a follow-up — they need group iteration +
-	// MEMBERS_JSON in the prompt.
-	if in.manifest.Stage == "group" {
-		return fmt.Errorf("review of group runs is not yet implemented; v0 supports find/dedupe runs only")
-	}
-	if in.manifest.Stage != "find" && in.manifest.Stage != "dedupe" {
+	// Finding-shaped runs (find / merge / dedupe) are supported.
+	// Group-run review needs group iteration + MEMBERS_JSON in the
+	// prompt and is deferred.
+	switch in.manifest.Stage {
+	case "find", "merge", "dedupe":
+	case "group":
+		return fmt.Errorf("review of group runs is not yet implemented; v0 supports finding-shaped runs only")
+	default:
 		return fmt.Errorf("unsupported run stage %q for review", in.manifest.Stage)
 	}
 
