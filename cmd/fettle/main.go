@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -140,4 +141,45 @@ func projectDir() (string, error) {
 		return abs, nil
 	}
 	return os.Getwd()
+}
+
+// resolvePromptSource returns the absolute path of the prompt to use
+// for this stage and a project-relative (or absolute) `source_path`
+// to record on the run manifest.
+//
+// override (the value of `--prompt`) wins when non-empty and is
+// resolved relative to the caller's cwd, matching shell-CLI
+// conventions. It is recorded as project-relative when the file is
+// inside the project tree, else as the absolute path.
+//
+// Falling back, configRel is the project-relative path from
+// .fettle.json's `instructions.<stage>` field; it's joined with
+// projectDir on read. Returns an error if both are empty or if the
+// resolved file doesn't exist.
+func resolvePromptSource(projectDir, override, configRel string) (absPath, recordPath string, err error) {
+	if override != "" {
+		abs, err := filepath.Abs(override)
+		if err != nil {
+			return "", "", fmt.Errorf("resolve --prompt %q: %w", override, err)
+		}
+		if _, err := os.Stat(abs); err != nil {
+			return "", "", fmt.Errorf("--prompt %q: %w", override, err)
+		}
+		rec := abs
+		if rel, err := filepath.Rel(projectDir, abs); err == nil && !strings.HasPrefix(rel, "..") {
+			rec = rel
+		}
+		return abs, rec, nil
+	}
+	if configRel == "" {
+		return "", "", fmt.Errorf("no prompt source: pass --prompt <path> or set the relevant `instructions.*` field in .fettle.json")
+	}
+	abs := configRel
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(projectDir, configRel)
+	}
+	if _, err := os.Stat(abs); err != nil {
+		return "", "", fmt.Errorf("prompt %q (from .fettle.json): %w", configRel, err)
+	}
+	return abs, configRel, nil
 }

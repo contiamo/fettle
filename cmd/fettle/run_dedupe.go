@@ -47,6 +47,7 @@ var runDedupeFlags struct {
 	model   string
 	script  string
 	effort  string
+	prompt  string
 	timeout time.Duration
 }
 
@@ -77,6 +78,7 @@ func init() {
 	runDedupeCmd.Flags().StringVar(&runDedupeFlags.model, "model", "", "agent model override")
 	runDedupeCmd.Flags().StringVar(&runDedupeFlags.script, "agent-script", "", "run a custom agent script (path to executable)")
 	runDedupeCmd.Flags().StringVar(&runDedupeFlags.effort, "effort", "", "agent reasoning effort: low|medium|high|xhigh|max")
+	runDedupeCmd.Flags().StringVar(&runDedupeFlags.prompt, "prompt", "", "path to the dedupe prompt to use (overrides instructions.dedupe; relative to cwd)")
 	runDedupeCmd.Flags().DurationVar(&runDedupeFlags.timeout, "timeout", defaultDedupeTimeout, "agent timeout (single invocation processes all input findings)")
 	_ = runDedupeCmd.MarkFlagRequired("run")
 	runCmd.AddCommand(runDedupeCmd)
@@ -100,15 +102,20 @@ func runRunDedupe(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("load project: %w", err)
 	}
-	spec, sourcePath, err := buildDedupeSpec(cfg, targetRepo)
+	spec, err := buildDedupeSpec(cfg, targetRepo)
 	if err != nil {
 		return err
 	}
 
-	promptBody, err := readDedupePrompt(dir, cfg)
+	promptAbs, sourcePath, err := resolvePromptSource(dir, runDedupeFlags.prompt, cfg.Instructions.Dedupe)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve dedupe prompt: %w", err)
 	}
+	promptBytes, err := os.ReadFile(promptAbs)
+	if err != nil {
+		return fmt.Errorf("read dedupe prompt %s: %w", promptAbs, err)
+	}
+	promptBody := string(promptBytes)
 
 	out, err := run.CreateForDedupe(run.CreateDedupeOpts{
 		ProjectDir:       dir,
@@ -246,15 +253,15 @@ func resolveDedupeInputs(projectDir string) ([]inputRun, []string, string, error
 	return inputs, relInputs, targetRepo, nil
 }
 
-func buildDedupeSpec(cfg project.Config, targetRepo string) (agent.Spec, string, error) {
+func buildDedupeSpec(cfg project.Config, targetRepo string) (agent.Spec, error) {
 	if runDedupeFlags.agent != "" && runDedupeFlags.script != "" {
-		return agent.Spec{}, "", fmt.Errorf("--agent and --agent-script are mutually exclusive")
+		return agent.Spec{}, fmt.Errorf("--agent and --agent-script are mutually exclusive")
 	}
 	if runDedupeFlags.agent != "" {
 		switch runDedupeFlags.agent {
 		case "claude", "codex":
 		default:
-			return agent.Spec{}, "", fmt.Errorf("--agent must be claude or codex; got %q", runDedupeFlags.agent)
+			return agent.Spec{}, fmt.Errorf("--agent must be claude or codex; got %q", runDedupeFlags.agent)
 		}
 	}
 
@@ -278,13 +285,13 @@ func buildDedupeSpec(cfg project.Config, targetRepo string) (agent.Spec, string,
 	if agentScript != "" && !filepath.IsAbs(agentScript) {
 		abs, err := filepath.Abs(agentScript)
 		if err != nil {
-			return agent.Spec{}, "", fmt.Errorf("resolve agent.script %q: %w", agentScript, err)
+			return agent.Spec{}, fmt.Errorf("resolve agent.script %q: %w", agentScript, err)
 		}
 		agentScript = abs
 	}
 	if agentScript != "" {
 		if _, err := exec.LookPath(agentScript); err != nil {
-			return agent.Spec{}, "", fmt.Errorf("agent script %q not executable: %w", agentScript, err)
+			return agent.Spec{}, fmt.Errorf("agent script %q not executable: %w", agentScript, err)
 		}
 	}
 
@@ -296,22 +303,7 @@ func buildDedupeSpec(cfg project.Config, targetRepo string) (agent.Spec, string,
 		Timeout: runDedupeFlags.timeout,
 		Script:  agentScript,
 	}
-	return spec, cfg.Instructions.Dedupe, nil
-}
-
-func readDedupePrompt(projectDir string, cfg project.Config) (string, error) {
-	srcPath := cfg.Instructions.Dedupe
-	if srcPath == "" {
-		return "", fmt.Errorf("agent.instructions.dedupe is empty in .fettle.json")
-	}
-	if !filepath.IsAbs(srcPath) {
-		srcPath = filepath.Join(projectDir, srcPath)
-	}
-	body, err := os.ReadFile(srcPath)
-	if err != nil {
-		return "", fmt.Errorf("read dedupe prompt %q: %w", srcPath, err)
-	}
-	return string(body), nil
+	return spec, nil
 }
 
 // annotatedFinding is one input finding with its source-run path and

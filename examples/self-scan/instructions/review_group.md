@@ -5,10 +5,10 @@
   `fettle add review` recording protocol, and exit-code handling. You
   only describe the rubric.
 
-  This is the per-GROUP rubric. The per-finding rubric lives in
-  `review.md` next to this file. Group review is a cluster-level
-  verdict; per-finding reviews are surfaced as Member reviews for
-  context but stay independent.
+  This is the per-GROUP review prompt. The per-finding review
+  prompt lives in `review.md` next to this file. Group review is a
+  cluster-level verdict; per-finding reviews are surfaced as Member
+  reviews for context but stay independent.
 
   Replace everything below with your domain.
 -->

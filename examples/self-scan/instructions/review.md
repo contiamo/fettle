@@ -9,7 +9,7 @@
 
 For each finding (from a find / merge / dedupe run), decide which
 labels to apply and whether to write a comment. Group review uses
-its own rubric in `review_group.md`.
+its own prompt in `review_group.md`.
 
 ## Label vocabulary
 

@@ -62,6 +62,7 @@ var runReviewFlags struct {
 	model       string
 	script      string
 	effort      string
+	prompt      string
 	timeout     time.Duration
 }
 
@@ -74,14 +75,14 @@ appends review entries via ` + "`fettle add review`" + `; one entry per
 subject (or zero — review is optional per subject).
 
 Stage → subject mapping:
-- find / merge / dedupe runs → iterate findings; rubric is
+- find / merge / dedupe runs → iterate findings; prompt is
   ` + "`instructions/review.md`" + `.
-- group runs → iterate groups; rubric is
+- group runs → iterate groups; prompt is
   ` + "`instructions/review_group.md`" + ` and the agent additionally
   receives the cluster's member findings + their existing reviews
   (snapshotted at group-creation time).
 
-On first invocation in --run, the active rubric is snapshotted into
+On first invocation in --run, the active prompt is snapshotted into
 runs/<run>/instructions/<file> (review.md or review_group.md
 depending on stage). Subsequent invocations re-use the snapshot.
 
@@ -98,6 +99,7 @@ func init() {
 	runReviewCmd.Flags().StringVar(&runReviewFlags.model, "model", "", "agent model override")
 	runReviewCmd.Flags().StringVar(&runReviewFlags.script, "agent-script", "", "run a custom agent script (path to executable)")
 	runReviewCmd.Flags().StringVar(&runReviewFlags.effort, "effort", "", "agent reasoning effort: low|medium|high|xhigh|max")
+	runReviewCmd.Flags().StringVar(&runReviewFlags.prompt, "prompt", "", "path to the review prompt to use (overrides instructions.review or instructions.review_group; relative to cwd; first invocation against a run only — subsequent reviews use the snapshot)")
 	runReviewCmd.Flags().DurationVar(&runReviewFlags.timeout, "timeout", defaultReviewTimeout, "per-subject agent timeout")
 	_ = runReviewCmd.MarkFlagRequired("run")
 	runCmd.AddCommand(runReviewCmd)
@@ -139,26 +141,38 @@ func runRunReview(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load project: %w", err)
 	}
 
-	// Stage selects which user rubric to snapshot + which filename
+	// Stage selects which user prompt to snapshot + which filename
 	// it lands under inside the run folder.
-	var srcRel, snapName string
+	var configRel, snapName string
 	switch in.manifest.Stage {
 	case "find", "merge", "dedupe":
-		srcRel = cfg.Instructions.Review
+		configRel = cfg.Instructions.Review
 		snapName = "review.md"
 	case "group":
-		srcRel = cfg.Instructions.ReviewGroup
+		configRel = cfg.Instructions.ReviewGroup
 		snapName = "review_group.md"
 	}
 	snapPath := filepath.Join(in.rp.Dir(), "instructions", snapName)
-	srcAbs := srcRel
-	if srcAbs != "" && !filepath.IsAbs(srcAbs) {
-		srcAbs = filepath.Join(dir, srcRel)
+
+	// --prompt only applies on the first invocation. The snapshot is
+	// authoritative thereafter; silently ignoring the flag would be
+	// confusing, so reject explicitly.
+	if runReviewFlags.prompt != "" {
+		if _, err := os.Stat(snapPath); err == nil {
+			return fmt.Errorf("--prompt only applies on the first invocation against this run; the snapshot at %s is authoritative now (delete it to re-snapshot, or start a new run)", snapPath)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("stat snapshot %s: %w", snapPath, err)
+		}
+	}
+
+	srcAbs, _, err := resolvePromptSource(dir, runReviewFlags.prompt, configRel)
+	if err != nil {
+		if in.manifest.Stage == "group" && runReviewFlags.prompt == "" && configRel == "" {
+			return fmt.Errorf("instructions.review_group is not set in .fettle.json — add `\"review_group\": \"instructions/review_group.md\"` to the instructions block and create the file (a starter is in internal/project/stubs/review_group.md), or pass --prompt <path>")
+		}
+		return fmt.Errorf("resolve review prompt: %w", err)
 	}
 	if err := snapshotReviewPrompt(srcAbs, snapPath); err != nil {
-		if in.manifest.Stage == "group" && srcRel == "" {
-			return fmt.Errorf("instructions.review_group is not set in .fettle.json — add `\"review_group\": \"instructions/review_group.md\"` to the instructions block and create the file (a starter is in internal/project/stubs/review_group.md)")
-		}
 		return fmt.Errorf("snapshot review prompt: %w", err)
 	}
 	promptBody, err := os.ReadFile(snapPath)
@@ -478,7 +492,7 @@ func snapshotReviewPrompt(srcPath, snapPath string) error {
 		return err
 	}
 	if srcPath == "" {
-		return fmt.Errorf("source rubric path is empty")
+		return fmt.Errorf("source prompt path is empty")
 	}
 	src, err := os.ReadFile(srcPath)
 	if err != nil {

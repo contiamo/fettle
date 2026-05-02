@@ -46,6 +46,7 @@ var runGroupFlags struct {
 	model   string
 	script  string
 	effort  string
+	prompt  string
 	timeout time.Duration
 }
 
@@ -73,6 +74,7 @@ func init() {
 	runGroupCmd.Flags().StringVar(&runGroupFlags.model, "model", "", "agent model override")
 	runGroupCmd.Flags().StringVar(&runGroupFlags.script, "agent-script", "", "run a custom agent script (path to executable)")
 	runGroupCmd.Flags().StringVar(&runGroupFlags.effort, "effort", "", "agent reasoning effort: low|medium|high|xhigh|max")
+	runGroupCmd.Flags().StringVar(&runGroupFlags.prompt, "prompt", "", "path to the group prompt to use (overrides instructions.group; relative to cwd)")
 	runGroupCmd.Flags().DurationVar(&runGroupFlags.timeout, "timeout", defaultGroupTimeout, "agent timeout (single invocation processes all input findings)")
 	_ = runGroupCmd.MarkFlagRequired("run")
 	runCmd.AddCommand(runGroupCmd)
@@ -95,15 +97,20 @@ func runRunGroup(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("load project: %w", err)
 	}
-	spec, sourcePath, err := buildGroupSpec(cfg, targetRepo)
+	spec, err := buildGroupSpec(cfg, targetRepo)
 	if err != nil {
 		return err
 	}
 
-	promptBody, err := readGroupPrompt(dir, cfg)
+	promptAbs, sourcePath, err := resolvePromptSource(dir, runGroupFlags.prompt, cfg.Instructions.Group)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve group prompt: %w", err)
 	}
+	promptBytes, err := os.ReadFile(promptAbs)
+	if err != nil {
+		return fmt.Errorf("read group prompt %s: %w", promptAbs, err)
+	}
+	promptBody := string(promptBytes)
 
 	out, err := run.CreateForGroup(run.CreateGroupOpts{
 		ProjectDir:      dir,
@@ -292,15 +299,15 @@ func resolveRepoRoot(projectDir string, m schema.RunManifest) (string, error) {
 	return "", fmt.Errorf("could not resolve target_repo from input run chain")
 }
 
-func buildGroupSpec(cfg project.Config, targetRepo string) (agent.Spec, string, error) {
+func buildGroupSpec(cfg project.Config, targetRepo string) (agent.Spec, error) {
 	if runGroupFlags.agent != "" && runGroupFlags.script != "" {
-		return agent.Spec{}, "", fmt.Errorf("--agent and --agent-script are mutually exclusive")
+		return agent.Spec{}, fmt.Errorf("--agent and --agent-script are mutually exclusive")
 	}
 	if runGroupFlags.agent != "" {
 		switch runGroupFlags.agent {
 		case "claude", "codex":
 		default:
-			return agent.Spec{}, "", fmt.Errorf("--agent must be claude or codex; got %q", runGroupFlags.agent)
+			return agent.Spec{}, fmt.Errorf("--agent must be claude or codex; got %q", runGroupFlags.agent)
 		}
 	}
 
@@ -324,13 +331,13 @@ func buildGroupSpec(cfg project.Config, targetRepo string) (agent.Spec, string, 
 	if agentScript != "" && !filepath.IsAbs(agentScript) {
 		abs, err := filepath.Abs(agentScript)
 		if err != nil {
-			return agent.Spec{}, "", fmt.Errorf("resolve agent.script %q: %w", agentScript, err)
+			return agent.Spec{}, fmt.Errorf("resolve agent.script %q: %w", agentScript, err)
 		}
 		agentScript = abs
 	}
 	if agentScript != "" {
 		if _, err := exec.LookPath(agentScript); err != nil {
-			return agent.Spec{}, "", fmt.Errorf("agent script %q not executable: %w", agentScript, err)
+			return agent.Spec{}, fmt.Errorf("agent script %q not executable: %w", agentScript, err)
 		}
 	}
 
@@ -342,22 +349,7 @@ func buildGroupSpec(cfg project.Config, targetRepo string) (agent.Spec, string, 
 		Timeout: runGroupFlags.timeout,
 		Script:  agentScript,
 	}
-	return spec, cfg.Instructions.Group, nil
-}
-
-func readGroupPrompt(projectDir string, cfg project.Config) (string, error) {
-	srcPath := cfg.Instructions.Group
-	if srcPath == "" {
-		return "", fmt.Errorf("instructions.group is empty in .fettle.json")
-	}
-	if !filepath.IsAbs(srcPath) {
-		srcPath = filepath.Join(projectDir, srcPath)
-	}
-	body, err := os.ReadFile(srcPath)
-	if err != nil {
-		return "", fmt.Errorf("read group prompt %q: %w", srcPath, err)
-	}
-	return string(body), nil
+	return spec, nil
 }
 
 // reviewsJSONEntry is the per-finding shape inside REVIEWS_JSON: a

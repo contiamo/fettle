@@ -57,6 +57,7 @@ var findFlags struct {
 	model       string
 	script      string
 	effort      string
+	prompt      string
 	timeout     time.Duration
 }
 
@@ -87,6 +88,7 @@ func init() {
 	runFindCmd.Flags().StringVar(&findFlags.model, "model", "", "agent model override (overrides project config; not allowed with --resume)")
 	runFindCmd.Flags().StringVar(&findFlags.script, "agent-script", "", "run a custom agent script (path to executable); mutually exclusive with --agent")
 	runFindCmd.Flags().StringVar(&findFlags.effort, "effort", "", "agent reasoning effort: low|medium|high|xhigh|max (not allowed with --resume)")
+	runFindCmd.Flags().StringVar(&findFlags.prompt, "prompt", "", "path to the find prompt to use (overrides instructions.find; relative to cwd; not allowed with --resume)")
 	runFindCmd.Flags().DurationVar(&findFlags.timeout, "timeout", defaultFindTimeout, "per-file agent timeout")
 	runCmd.AddCommand(runFindCmd)
 }
@@ -284,6 +286,9 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 			// invocation, making the manifest lie about coverage.
 			conflicts = append(conflicts, "--limit")
 		}
+		if findFlags.prompt != "" {
+			conflicts = append(conflicts, "--prompt")
+		}
 		if len(conflicts) > 0 {
 			return nil, fmt.Errorf("cannot combine --resume with %s; the run's manifest is authoritative", strings.Join(conflicts, ", "))
 		}
@@ -422,9 +427,13 @@ Got: %q`, agentScript)
 		Script:  agentScript,
 	}
 
-	promptBody, err := os.ReadFile(filepath.Join(projectDir, cfg.Instructions.Find))
+	promptAbs, promptRecord, err := resolvePromptSource(projectDir, findFlags.prompt, cfg.Instructions.Find)
 	if err != nil {
-		return nil, fmt.Errorf("read find prompt %s: %w", cfg.Instructions.Find, err)
+		return nil, fmt.Errorf("resolve find prompt: %w", err)
+	}
+	promptBody, err := os.ReadFile(promptAbs)
+	if err != nil {
+		return nil, fmt.Errorf("read find prompt %s: %w", promptAbs, err)
 	}
 	rp, err := run.CreateForFind(run.CreateFindOpts{
 		ProjectDir:     projectDir,
@@ -433,7 +442,7 @@ Got: %q`, agentScript)
 		Include:        include,
 		Exclude:        exclude,
 		FindPrompt:     string(promptBody),
-		FindSourcePath: cfg.Instructions.Find,
+		FindSourcePath: promptRecord,
 		FindSpec:       spec,
 		Args: map[string]any{
 			"concurrency": findFlags.concurrency,

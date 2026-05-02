@@ -10,10 +10,10 @@ project.
 .fettle.json              committed; target_repo: "../.."
 instructions/
   find.md                 real Go conventions / code-smells prompt
-  review.md               per-finding review rubric
-  review_group.md         per-group (cluster-level) review rubric
-  dedupe.md               domain rubric for cross-run consolidation
-  group.md                domain rubric for clustering into PR-sized batches
+  review.md               per-finding review prompt
+  review_group.md         per-group (cluster-level) review prompt
+  dedupe.md               cross-run consolidation prompt
+  group.md                clustering prompt (PR-sized batches)
 runs/                     gitignored; created on first stage run
 ```
 

@@ -71,8 +71,8 @@ my-audit/
   .fettle.json                  marker + config; confirms this is a fettle dir
   instructions/                 editable templates (seed for new runs)
     find.md
-    review.md                   per-finding review rubric
-    review_group.md             per-group (cluster-level) review rubric
+    review.md                   per-finding review prompt
+    review_group.md             per-group (cluster-level) review prompt
     dedupe.md
     group.md
   runs/
@@ -231,11 +231,11 @@ A **group** run records its single input:
 repo, omitted otherwise.
 
 **Review prompt snapshot**: when `fettle run review --run X` runs the
-**review agent** for the first time in X, it writes the active rubric
-into `runs/X/instructions/<file>.md`. The rubric file is stage-aware:
+**review agent** for the first time in X, it writes the active prompt
+into `runs/X/instructions/<file>.md`. The prompt file is stage-aware:
 `review.md` for find / merge / dedupe runs (per-finding review),
 `review_group.md` for group runs (cluster-level review). Subsequent
-*automated* reviews in X re-use that snapshot — one rubric per run,
+*automated* reviews in X re-use that snapshot — one prompt per run,
 which is what you want when labels from multiple automated reviewers
 are merged.
 
@@ -246,8 +246,8 @@ verbatim (subset per group) so its view of member reviews is
 byte-for-byte identical to what the grouping agent saw — late
 reviews on the input run never drift the reviewer's context.
 
-Human reviewers via the UI don't consume the rubric files (they're
-making direct judgments, not following an LLM rubric), so the
+Human reviewers via the UI don't consume the prompt files (they're
+making direct judgments, not following an LLM prompt), so the
 snapshots aren't read for human reviews. To use a different automated
 review prompt, do not edit the snapshot in place — start a new run
 upstream or explicitly delete the run's `instructions/review.md` (or
@@ -383,7 +383,7 @@ fettle run find --resume runs/<name>/
 fettle run review --run runs/<name>/ [--agent NAME]
     For each subject in --run not yet reviewed by this agent, run
     the review agent. Append to runs/<name>/reviews_<agent>.jsonl.
-    Stage selects the subject and rubric: find / merge / dedupe runs
+    Stage selects the subject and prompt: find / merge / dedupe runs
     iterate findings using `instructions/review.md`; group runs
     iterate groups using `instructions/review_group.md` (the agent
     additionally receives the cluster's member findings + their
