@@ -129,6 +129,15 @@ func runRunGroup(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("marshal reviews: %w", err)
 	}
+	// Persist the same bytes that feed REVIEWS_JSON in the prompt so
+	// downstream `fettle run review --run runs/<group>` reproduces
+	// exactly the input-review state the grouping agent saw — never
+	// re-reads the live input run's reviews. Checked write: a missing
+	// snapshot makes group review impossible by design, so fail before
+	// agent invocation rather than ship a half-broken group run.
+	if err := os.WriteFile(filepath.Join(out.Dir(), "member_reviews_snapshot.json"), reviewsJSON, 0o644); err != nil {
+		return fmt.Errorf("write member_reviews_snapshot.json: %w", err)
+	}
 	findingsJSON, err := json.MarshalIndent(findings, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal findings: %w", err)

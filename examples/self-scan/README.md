@@ -10,7 +10,8 @@ project.
 .fettle.json              committed; target_repo: "../.."
 instructions/
   find.md                 real Go conventions / code-smells prompt
-  review.md               domain rubric for the review stage
+  review.md               per-finding review rubric
+  review_group.md         per-group (cluster-level) review rubric
   dedupe.md               domain rubric for cross-run consolidation
   group.md                domain rubric for clustering into PR-sized batches
 runs/                     gitignored; created on first stage run
@@ -70,6 +71,15 @@ Cluster into PR-sized batches:
 ```sh
 fettle --dir examples/self-scan run group --run runs/<run>/
 fettle --dir examples/self-scan list groups --run runs/<group-run>/
+```
+
+Review the clusters at the group level (one agent invocation per
+group, using `instructions/review_group.md`):
+
+```sh
+fettle --dir examples/self-scan run review --run runs/<group-run>/
+fettle --dir examples/self-scan list reviews --run runs/<group-run>/
+fettle --dir examples/self-scan show review --run runs/<group-run>/ --group <id>
 ```
 
 Mark outcomes as you ship fixes:

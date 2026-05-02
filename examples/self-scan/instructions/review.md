@@ -7,9 +7,9 @@
   Replace everything below with your domain.
 -->
 
-For each subject (a finding from a find/dedupe run, or a group from
-a group run), decide which labels to apply and whether to write a
-comment.
+For each finding (from a find / merge / dedupe run), decide which
+labels to apply and whether to write a comment. Group review uses
+its own rubric in `review_group.md`.
 
 ## Label vocabulary
 

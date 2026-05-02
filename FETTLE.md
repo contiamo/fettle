@@ -71,7 +71,8 @@ my-audit/
   .fettle.json                  marker + config; confirms this is a fettle dir
   instructions/                 editable templates (seed for new runs)
     find.md
-    review.md
+    review.md                   per-finding review rubric
+    review_group.md             per-group (cluster-level) review rubric
     dedupe.md
     group.md
   runs/
@@ -104,6 +105,10 @@ my-audit/
       run.json                  manifest with input_run: "runs/dedupe_X" (or a find run)
       instructions/group.md     snapshot
       groups.jsonl              clusters
+      member_reviews_snapshot.json  input-run review state captured at group-creation
+                                time; group review reads this verbatim so its
+                                view of member reviews is byte-for-byte the
+                                same as the grouping agent's
       raw/                      single agent transcript
       reviews_<author>.jsonl    reviews of groups live here
       outcomes.jsonl            outcomes of groups live here
@@ -226,18 +231,28 @@ A **group** run records its single input:
 repo, omitted otherwise.
 
 **Review prompt snapshot**: when `fettle run review --run X` runs the
-**review agent** for the first time in X, it writes the active
-`review.md` into `runs/X/instructions/review.md`. Subsequent
+**review agent** for the first time in X, it writes the active rubric
+into `runs/X/instructions/<file>.md`. The rubric file is stage-aware:
+`review.md` for find / merge / dedupe runs (per-finding review),
+`review_group.md` for group runs (cluster-level review). Subsequent
 *automated* reviews in X re-use that snapshot — one rubric per run,
 which is what you want when labels from multiple automated reviewers
 are merged.
 
-Human reviewers via the UI don't consume `review.md` (they're making
-direct judgments, not following an LLM rubric), so the snapshot
-isn't read for human reviews. To use a different automated review
-prompt, do not edit the snapshot in place — start a new run upstream
-or explicitly delete the run's `instructions/review.md` and any
-existing `reviews_*.jsonl` you don't want carried over.
+For group runs, fettle additionally captures the input run's review
+state at group-creation time into
+`runs/X/member_reviews_snapshot.json`. Group review reads this
+verbatim (subset per group) so its view of member reviews is
+byte-for-byte identical to what the grouping agent saw — late
+reviews on the input run never drift the reviewer's context.
+
+Human reviewers via the UI don't consume the rubric files (they're
+making direct judgments, not following an LLM rubric), so the
+snapshots aren't read for human reviews. To use a different automated
+review prompt, do not edit the snapshot in place — start a new run
+upstream or explicitly delete the run's `instructions/review.md` (or
+`review_group.md`) and any existing `reviews_*.jsonl` you don't want
+carried over.
 
 `.fettle.json` confirms the directory is a fettle project and records the
 fettle version that created it. It also holds the project's config:
@@ -251,10 +266,11 @@ fettle version that created it. It also holds the project's config:
   "include": ["**/*.go", "**/*.ts"],
   "exclude": ["vendor/**", "node_modules/**", "**/*_generated.go"],
   "instructions": {
-    "find":   "instructions/find.md",
-    "review": "instructions/review.md",
-    "dedupe": "instructions/dedupe.md",
-    "group":  "instructions/group.md"
+    "find":         "instructions/find.md",
+    "review":       "instructions/review.md",
+    "review_group": "instructions/review_group.md",
+    "dedupe":       "instructions/dedupe.md",
+    "group":        "instructions/group.md"
   }
 }
 ```
@@ -276,16 +292,20 @@ data flow is out of scope for fettle.
 
 Fettle substitutes a small, fixed set of variables when running each stage:
 
-| Stage                                | Variables available in the prompt                                       |
-|--------------------------------------|-------------------------------------------------------------------------|
-| find                                 | `TARGET_FILE`, `REPO_ROOT`                                              |
-| review (find / merge / dedupe target)| `FINDING_JSON`, `REPO_ROOT`                                             |
-| merge                                | (no prompt — harness-only, no agent invoked)                            |
-| dedupe                               | `FINDINGS_JSON` (annotated with `from_run` and current review state)    |
-| group                                | `FINDINGS_JSON`, `REVIEWS_JSON`                                         |
+| Stage                                  | Variables available in the prompt                                                  |
+|----------------------------------------|------------------------------------------------------------------------------------|
+| find                                   | `TARGET_FILE`, `REPO_ROOT`                                                         |
+| review (find / merge / dedupe target)  | `FINDING_JSON`, `REPO_ROOT`                                                        |
+| review (group target)                  | `GROUP_JSON`, `MEMBERS_JSON`, `MEMBER_REVIEWS_JSON`, `REPO_ROOT`                   |
+| merge                                  | (no prompt — harness-only, no agent invoked)                                       |
+| dedupe                                 | `FINDINGS_JSON` (annotated with `from_run` and current review state)               |
+| group                                  | `FINDINGS_JSON`, `REVIEWS_JSON`                                                    |
 
-Group-run review (where the subject is a group, with `GROUP_JSON` and
-member finding records in the prompt) is not implemented in v0.
+For group review, `MEMBERS_JSON` is the array of member findings
+resolved from `group.finding_ids[]` against the input run's
+findings; `MEMBER_REVIEWS_JSON` is the per-member subset of the
+input run's review state, sourced from `member_reviews_snapshot.json`
+in the group run (captured at group-creation time, not re-read live).
 
 **No stage gets `OUTPUT_PATH`.** Every stage records its output by
 shelling to `fettle add <kind>` (see the CLI section). This unifies
@@ -361,10 +381,13 @@ fettle run find --resume runs/<name>/
     are rejected; the manifest is authoritative.
 
 fettle run review --run runs/<name>/ [--agent NAME]
-    For each finding in --run not yet reviewed by this agent, run
+    For each subject in --run not yet reviewed by this agent, run
     the review agent. Append to runs/<name>/reviews_<agent>.jsonl.
-    Currently supports find / merge / dedupe runs; group-run review
-    is not yet implemented.
+    Stage selects the subject and rubric: find / merge / dedupe runs
+    iterate findings using `instructions/review.md`; group runs
+    iterate groups using `instructions/review_group.md` (the agent
+    additionally receives the cluster's member findings + their
+    snapshotted member reviews).
 
 fettle run merge --run RUN [--run RUN]... [--name SLUG]
     Concatenate non-overlapping runs. Harness-only — no agent
@@ -763,8 +786,9 @@ resume:
 
 - `fettle run find --resume <run>` skips files whose last entry in `files.jsonl`
   is `ok` or `empty`; `error` rows get retried.
-- `fettle run review --run <run> --agent codex` skips findings
-  already reviewed in `reviews_codex.jsonl`.
+- `fettle run review --run <run> --agent codex` skips subjects
+  (findings or groups, depending on the run's stage) already
+  reviewed in `reviews_codex.jsonl`.
 
 **Single-shot stages** are atomic at the run level — successful runs
 have `completed_at` set in `run.json`; partial runs do not.
@@ -796,7 +820,12 @@ by deleting the matching row from the run's `files.jsonl`. (A future
 version may track `content_sha`/`mtime` to detect drift
 automatically.) Similarly, dedupe and group only see the input that
 exists when they run; if findings or reviews change after a group
-run, just create a new group run.
+run, just create a new group run. Group review is consistent with
+this: it reads the `member_reviews_snapshot.json` captured at
+group-creation time, so late reviews on the input run never drift
+the reviewer's view — but that also means stale grouping context
+isn't refreshed by re-running review. Re-create the group run to
+pick up new input-run reviews.
 
 ## Non-goals
 

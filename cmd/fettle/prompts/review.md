@@ -12,7 +12,23 @@ record via `fettle add review`, and exit.
 ```json
 {{.SubjectJSON}}
 ```
+{{if .MembersJSON}}
+## Member findings
 
+This group clusters the following findings (from the input run):
+
+```json
+{{.MembersJSON}}
+```
+
+Existing reviews on those member findings (for context — the
+per-finding reviewers' verdicts are independent from your
+group-level verdict; do not relabel individual findings here):
+
+```json
+{{.MemberReviewsJSON}}
+```
+{{end}}
 ## What to evaluate
 
 {{.UserInstructions}}
