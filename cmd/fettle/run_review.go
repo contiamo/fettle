@@ -200,7 +200,7 @@ func runRunReview(cmd *cobra.Command, args []string) error {
 // reviewFindings is the find / merge / dedupe path: iterate findings,
 // invoke the agent per pending finding.
 func reviewFindings(ctx context.Context, logger *slog.Logger, in *reviewInputs, promptBody string, done map[string]bool) error {
-	findings, err := loadFindings(in.rp.Dir())
+	findings, err := in.rp.LoadFindings()
 	if err != nil {
 		return fmt.Errorf("load findings: %w", err)
 	}
@@ -304,7 +304,11 @@ func reviewGroups(ctx context.Context, logger *slog.Logger, projectDir string, i
 		return fmt.Errorf("input run %s is not completed (run.json missing completed_at)", in.manifest.InputRun)
 	}
 
-	inputFindings, err := loadFindingsFromRun(inputRunAbs)
+	inputRP, err := run.Open(inputRunAbs)
+	if err != nil {
+		return fmt.Errorf("open input run %s: %w", in.manifest.InputRun, err)
+	}
+	inputFindings, err := inputRP.LoadFindings()
 	if err != nil {
 		return fmt.Errorf("load input findings from %s: %w", in.manifest.InputRun, err)
 	}
@@ -318,7 +322,7 @@ func reviewGroups(ctx context.Context, logger *slog.Logger, projectDir string, i
 		return err
 	}
 
-	groups, err := loadGroupsFromRun(in.rp.Dir())
+	groups, err := in.rp.LoadGroups()
 	if err != nil {
 		return fmt.Errorf("load groups: %w", err)
 	}
@@ -585,31 +589,6 @@ func writePromptSidecar(rp *run.Path, id, prompt string) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(rp.RawDir(), "review_"+id+".prompt.txt"), []byte(prompt), 0o644)
-}
-
-// loadFindings reads findings.jsonl into memory. Tolerates malformed
-// lines (skipped, like the rest of the harness).
-func loadFindings(runDir string) ([]schema.Finding, error) {
-	f, err := os.Open(filepath.Join(runDir, "findings.jsonl"))
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	defer f.Close()
-
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<16), 1<<20)
-	var out []schema.Finding
-	for sc.Scan() {
-		var fnd schema.Finding
-		if err := json.Unmarshal(sc.Bytes(), &fnd); err != nil {
-			continue
-		}
-		out = append(out, fnd)
-	}
-	return out, sc.Err()
 }
 
 // loadReviewedSubjects returns the set of finding ids already reviewed

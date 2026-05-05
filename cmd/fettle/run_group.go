@@ -124,7 +124,11 @@ func runRunGroup(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create group run: %w", err)
 	}
 
-	findings, err := loadFindingsFromRun(input.abs)
+	inputRP, err := run.Open(input.abs)
+	if err != nil {
+		return fmt.Errorf("open input run %s: %w", relInput, err)
+	}
+	findings, err := inputRP.LoadFindings()
 	if err != nil {
 		return fmt.Errorf("read findings from %s: %w", relInput, err)
 	}
@@ -200,7 +204,7 @@ func runRunGroup(cmd *cobra.Command, args []string) error {
 		return agentErr
 	}
 
-	groupCount, err := countLines(filepath.Join(out.Dir(), "groups.jsonl"))
+	groupCount, err := run.CountLines(filepath.Join(out.Dir(), "groups.jsonl"))
 	if err != nil {
 		return fmt.Errorf("count groups: %w", err)
 	}

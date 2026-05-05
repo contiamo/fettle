@@ -1,0 +1,113 @@
+package templates
+
+import (
+	"fmt"
+	"strconv"
+
+	"github.com/contiamo/fettle/internal/run"
+	"github.com/contiamo/fettle/internal/ui/components/badge"
+)
+
+// Runs is the project-level landing page: a chronologically sorted
+// list of every run folder under runs/.
+templ Runs(projectDir string, summaries []run.Summary) {
+	@Page("Runs", nil) {
+		<section class="space-y-8">
+			<header class="space-y-2">
+				<div class="flex items-baseline justify-between gap-6 flex-wrap">
+					<h1 class="font-serif italic text-[34px] leading-none tracking-tight text-foreground">Runs</h1>
+					<span class="text-xs text-muted-foreground tabular-nums">
+						{ strconv.Itoa(len(summaries)) }
+						if len(summaries) == 1 {
+							{ " run" }
+						} else {
+							{ " runs" }
+						}
+					</span>
+				</div>
+				<p class="text-[13px] text-muted-foreground font-mono break-all">{ projectDir }</p>
+			</header>
+			if len(summaries) == 0 {
+				<div class="rounded-lg border border-border bg-card p-10 text-center text-sm text-muted-foreground">
+					No runs yet. Start one with <code class="font-mono text-foreground bg-muted px-1.5 py-0.5 rounded">fettle run find</code>.
+				</div>
+			} else {
+				<div class="rounded-lg border border-border bg-card overflow-hidden">
+					<table class="w-full text-sm">
+						<thead class="text-muted-foreground text-left text-[10px] uppercase tracking-[0.08em] font-medium">
+							<tr class="border-b border-border">
+								<th class="px-4 py-3 font-medium">Run</th>
+								<th class="px-4 py-3 font-medium">Stage</th>
+								<th class="px-4 py-3 font-medium">Created</th>
+								<th class="px-4 py-3 font-medium">Status</th>
+								<th class="px-4 py-3 font-medium text-right">Findings</th>
+								<th class="px-4 py-3 font-medium text-right">Groups</th>
+								<th class="px-4 py-3 font-medium text-right">Reviews</th>
+								<th class="px-4 py-3 font-medium text-right">Outcomes</th>
+							</tr>
+						</thead>
+						<tbody class="divide-y divide-border">
+							for _, s := range summaries {
+								@runRow(s)
+							}
+						</tbody>
+					</table>
+				</div>
+			}
+		</section>
+	}
+}
+
+templ runRow(s run.Summary) {
+	{{ href := "/runs/" + s.Name }}
+	<tr class="hover:bg-accent/60 transition-colors cursor-pointer group" data-row-link={ href }>
+		<td class="px-4 py-3 font-mono text-xs">
+			<a href={ templ.SafeURL(href) } class="text-foreground group-hover:text-primary">{ s.Name }</a>
+		</td>
+		<td class="px-4 py-3">
+			@badge.Badge(badge.Props{Variant: stageVariant(s.Stage)}) {
+				{ s.Stage }
+			}
+		</td>
+		<td class="px-4 py-3 text-muted-foreground text-xs">
+			{ s.CreatedAt.Format("2006-01-02 15:04") }
+		</td>
+		<td class="px-4 py-3 text-xs">
+			if s.CompletedAt != nil {
+				<span class="text-foreground">completed</span>
+			} else {
+				<span class="text-muted-foreground italic">in progress</span>
+			}
+		</td>
+		<td class="px-4 py-3 text-right tabular-nums text-xs">{ countCell(s.Counts.Findings) }</td>
+		<td class="px-4 py-3 text-right tabular-nums text-xs">{ countCell(s.Counts.Groups) }</td>
+		<td class="px-4 py-3 text-right tabular-nums text-xs">{ strconv.Itoa(s.Counts.Reviews) }</td>
+		<td class="px-4 py-3 text-right tabular-nums text-xs">{ strconv.Itoa(s.Counts.Outcomes) }</td>
+	</tr>
+}
+
+// countCell renders a *int as either its value or an em-dash for nil.
+// Stage-specific counts (Findings on group runs, Groups on find runs)
+// are nil pointers, which we want to render as "—" not "0".
+func countCell(n *int) string {
+	if n == nil {
+		return "—"
+	}
+	return fmt.Sprintf("%d", *n)
+}
+
+// stageVariant maps a run's stage to a badge variant. Picked so the
+// badges read at a glance: find/dedupe/group are the common stages
+// and stay neutral; merge is rare and gets the outline treatment.
+func stageVariant(stage string) badge.Variant {
+	switch stage {
+	case "merge":
+		return badge.VariantOutline
+	case "dedupe":
+		return badge.VariantSecondary
+	case "group":
+		return badge.VariantSecondary
+	default:
+		return badge.VariantDefault
+	}
+}

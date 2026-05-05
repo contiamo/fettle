@@ -1,0 +1,216 @@
+// Package templates renders the fettle web UI's HTML pages via templ.
+package templates
+
+import (
+	"context"
+	"net/url"
+	"time"
+
+	"github.com/contiamo/fettle/internal/identity"
+	"github.com/contiamo/fettle/internal/schema"
+)
+
+// reviewerKey is the unexported type used as a context key so the
+// templates and server packages can both reference one symbol without
+// risking string-collision with other middleware.
+type reviewerKey struct{}
+
+// ReviewerContextKey is the key the server's withReviewer middleware
+// uses to stash the resolved identity in the request context.
+// Templates pull it back out via ReviewerFromContext. Exported as a
+// var of an unexported-typed value so external packages can pass it
+// through context.WithValue without being able to fabricate a
+// type-equivalent key in another package.
+var ReviewerContextKey = reviewerKey{}
+
+// ReviewerFromContext returns the active reviewer identity, or nil if
+// no identity is configured. Returns nil — never an error — because a
+// missing identity is the "Set identity" branch in the header, not a
+// failure mode.
+func ReviewerFromContext(ctx context.Context) *identity.Resolved {
+	if v, ok := ctx.Value(ReviewerContextKey).(*identity.Resolved); ok {
+		return v
+	}
+	return nil
+}
+
+// requestURIKey is the context key the server's middleware uses to
+// stash the original request path so the header indicator can build
+// a "/identity?next=<current>" link without each handler having to
+// thread the URL through manually.
+type requestURIKey struct{}
+
+// RequestURIContextKey is the exported handle for that key. Same
+// pattern as ReviewerContextKey: an unexported-typed value to avoid
+// cross-package key collisions.
+var RequestURIContextKey = requestURIKey{}
+
+// identityChangeHref builds the URL the header's reviewer-indicator
+// links to. ?next= is the current page so saving on /identity bounces
+// the user back to where they came from. Falls back to /identity (no
+// next) when the request URI isn't in context — should only happen in
+// tests that bypass the middleware.
+func identityChangeHref(ctx context.Context) string {
+	uri, _ := ctx.Value(RequestURIContextKey).(string)
+	if uri == "" || uri == "/identity" {
+		return "/identity"
+	}
+	return "/identity?next=" + url.QueryEscape(uri)
+}
+
+// CSSVersion and JSVersion are short content hashes appended to the
+// asset URLs as ?v=<hash> for cache busting. They're populated by
+// internal/ui/init.go from the embedded asset hashes computed in
+// internal/ui/static. Empty string is acceptable (just disables cache
+// busting until the assets are built).
+var (
+	CSSVersion string
+	JSVersion  string
+)
+
+// BreadcrumbItem is one entry in the header breadcrumb. Title is the
+// rendered text; Href is the link target ("" renders as plain text for
+// the current page).
+type BreadcrumbItem struct {
+	Title string
+	Href  string
+}
+
+// FindingView is the data passed to the Finding detail template.
+// Bundling the manifest with the finding and the preview keeps the
+// template signature tight (one arg) and makes the data shape
+// reviewable independently of templ syntax.
+type FindingView struct {
+	Manifest schema.RunManifest
+	Finding  schema.Finding
+	Preview  CodePreview
+	Review   ReviewSectionView
+	Outcome  OutcomeSectionView
+}
+
+// RunFindingsView backs the three-pane findings workspace. Findings is
+// the full sorted list (the left+middle panes filter it client-side);
+// Selected and Detail describe the finding pre-rendered into the right
+// pane for the initial GET. Both are zero-valued for an empty run.
+type RunFindingsView struct {
+	Manifest schema.RunManifest
+	Findings []schema.Finding
+	Facets   FindingFacets
+	Selected *schema.Finding
+	Detail   FindingView
+}
+
+// FindingFacets are the filter groups on the left rail. Severity is
+// always its own group with a fixed canonical order; labels are
+// further split by their `prefix:` so a noisy free-form labels list
+// reads as several short, scannable sections (one per prefix).
+type FindingFacets struct {
+	Severities []FacetItem
+	Labels     []LabelFacetGroup
+}
+
+// LabelFacetGroup is one bucket of labels that share a `prefix:`
+// (e.g. "category:smell", "category:convention" → group "category").
+// Title is the rendered section header; Items[].Value is the full
+// label (still prefix-qualified) so the data attr stays unambiguous,
+// and Items[].Display is the shorter post-prefix string the rail
+// shows to keep the column quiet.
+type LabelFacetGroup struct {
+	Prefix string
+	Title  string
+	Items  []FacetItem
+}
+
+// FacetItem is one selectable row in a facet group. Display falls back
+// to Value when the row is unprefixed (so the rail still reads, e.g.
+// "ack" rather than nothing).
+type FacetItem struct {
+	Value   string
+	Display string
+	Count   int
+}
+
+// CodePreview is the rendered ±N-line code window for a finding.
+// Error is non-empty when the preview couldn't be produced (no
+// target_repo, file moved, traversal attempt, etc.) — the template
+// shows a placeholder in that case rather than failing the page.
+type CodePreview struct {
+	Path   string
+	Error  string
+	Lines  []CodePreviewLine
+	Target int // 1-based line number the finding points at
+}
+
+// CodePreviewLine is one row in the preview block. Highlight marks
+// the row that matches the finding's target line so the template can
+// emphasize it.
+type CodePreviewLine struct {
+	Number    int
+	Content   string
+	Highlight bool
+}
+
+// GroupView is the data passed to the GroupDetail template. Members
+// are the resolved findings from the input run (in the order recorded
+// on the group); MissingIDs are member ids the input run no longer
+// has — rendered as "missing" rather than dropped silently.
+type GroupView struct {
+	Manifest     schema.RunManifest
+	Group        schema.Group
+	InputRunName string // leaf folder name of manifest.InputRun, used for member links
+	Members      []schema.Finding
+	MissingIDs   []string
+	Review       ReviewSectionView
+	Outcome      OutcomeSectionView
+}
+
+// ReviewSectionView is the data backing the review form + history
+// feed on a finding or group detail page. The same template renders
+// for the initial GET and for the HTMX swap after a POST, so the view
+// has to carry everything the section needs (subject id + kind for
+// the form action; current state; full history; per-author latest
+// hints).
+type ReviewSectionView struct {
+	RunName       string
+	SubjectKind   string // "finding" or "group"
+	SubjectID     string
+	CurrentLabels []string          // union across authors' latest entries
+	Entries       []ReviewEntryView // oldest first
+	Error         string            // surfaced inline on validation failure
+}
+
+// ReviewEntryView is one row in the history feed. IsLatest flags the
+// author's most recent entry — earlier entries by the same author are
+// rendered as historical context rather than active state.
+type ReviewEntryView struct {
+	Author   string
+	Labels   []string
+	Comment  string
+	At       time.Time
+	IsLatest bool
+}
+
+// PostURL returns the HTMX target path for the review form on this
+// subject. Centralised so the template doesn't have to compose finding
+// vs group paths inline.
+func (v ReviewSectionView) PostURL() string {
+	return "/runs/" + v.RunName + "/" + v.SubjectKind + "/" + v.SubjectID + "/review"
+}
+
+// OutcomeSectionView is the data backing the outcome form + history
+// feed. Latest is nil when no outcome has been recorded yet (the form
+// renders alone in that case).
+type OutcomeSectionView struct {
+	RunName     string
+	SubjectKind string
+	SubjectID   string
+	Latest      *schema.Outcome
+	History     []schema.Outcome // chronological, oldest first; includes Latest as last entry
+	Error       string
+}
+
+// PostURL returns the HTMX target path for the outcome form.
+func (v OutcomeSectionView) PostURL() string {
+	return "/runs/" + v.RunName + "/" + v.SubjectKind + "/" + v.SubjectID + "/outcome"
+}
+

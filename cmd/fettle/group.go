@@ -1,11 +1,7 @@
 package main
 
 import (
-	"bufio"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -152,7 +148,7 @@ func runShowGroup(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	groups, err := loadGroupsFromRun(rp.Dir())
+	groups, err := rp.LoadGroups()
 	if err != nil {
 		return internalError(fmt.Errorf("load groups: %w", err))
 	}
@@ -172,7 +168,7 @@ func runListGroups(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	groups, err := loadGroupsFromRun(rp.Dir())
+	groups, err := rp.LoadGroups()
 	if err != nil {
 		return internalError(fmt.Errorf("load groups: %w", err))
 	}
@@ -231,28 +227,3 @@ func validateGroupMembers(rp *run.Path, manifest schema.RunManifest, raws []stri
 	return out, errs
 }
 
-// loadGroupsFromRun reads groups.jsonl. Tolerates malformed lines
-// (skipped, like other JSONL readers in the harness). Missing file
-// returns nil/empty without error.
-func loadGroupsFromRun(runDir string) ([]schema.Group, error) {
-	f, err := os.Open(filepath.Join(runDir, "groups.jsonl"))
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	defer f.Close()
-
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<16), 1<<20)
-	var out []schema.Group
-	for sc.Scan() {
-		var g schema.Group
-		if err := json.Unmarshal(sc.Bytes(), &g); err != nil {
-			continue
-		}
-		out = append(out, g)
-	}
-	return out, sc.Err()
-}

@@ -1,0 +1,204 @@
+@import "tailwindcss";
+
+@source "../templates/";
+@source "../components/";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* "fettle" leans on a refined system stack: SF Pro on Apple, Inter
+     Variable on Windows 11, system-ui everywhere else. cv11 + ss01 +
+     ss03 turn on SF Pro's straight-sided 6/9 and rounded punctuation
+     so digits and code-adjacent text feel composed. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Inter Variable",
+    "Inter", "Segoe UI Variable Display", "Segoe UI", system-ui,
+    sans-serif;
+  /* The wordmark + page titles sit in a system serif italic — a quiet
+     editorial accent that signals "well-kept" without paying for a
+     custom font. */
+  --font-serif: ui-serif, "Iowan Old Style", "Apple Garamond",
+    "Source Serif Pro", "Hoefler Text", Georgia, "Times New Roman",
+    serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo,
+    Consolas, "Liberation Mono", monospace;
+
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+}
+
+/* Stone & ink palette. Bone paper + soft ink + a single deep-teal
+   accent. Borders are barely-there so the page reads as composition,
+   not a grid of boxes. */
+:root {
+  --radius: 0.625rem;
+  --background: oklch(0.992 0.003 75);
+  --foreground: oklch(0.205 0.012 250);
+  --primary: oklch(0.43 0.062 195);
+  --primary-foreground: oklch(0.995 0 0);
+  --secondary: oklch(0.965 0.004 75);
+  --secondary-foreground: oklch(0.355 0.011 250);
+  --muted: oklch(0.972 0.003 75);
+  --muted-foreground: oklch(0.498 0.012 250);
+  --accent: oklch(0.955 0.012 195);
+  --accent-foreground: oklch(0.295 0.045 195);
+  --destructive: oklch(0.510 0.165 28);
+  --border: oklch(0.928 0.004 75);
+  --input: oklch(0.918 0.005 75);
+  --ring: oklch(0.43 0.062 195);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.205 0.012 250);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.205 0.012 250);
+  --selection: oklch(0.43 0.062 195);
+  --selection-foreground: oklch(0.995 0 0);
+
+  /* Surface-2: one notch warmer than background, used for the sidebar
+     rail and grouped headers so the workspace reads in three planes
+     instead of two. */
+  --surface-sunken: oklch(0.974 0.004 75);
+  --surface-raised: oklch(1 0 0);
+
+  /* Severity palette: a separate semantic family from the brand teal,
+     so a "high" finding doesn't compete visually with the primary
+     accent. Tints (-soft) sit behind the chip; the solid value is for
+     the dot/border. Scale: terracotta → amber → slate. */
+  --sev-high: oklch(0.560 0.155 27);
+  --sev-high-soft: oklch(0.952 0.030 27);
+  --sev-high-foreground: oklch(0.380 0.140 27);
+  --sev-medium: oklch(0.685 0.130 70);
+  --sev-medium-soft: oklch(0.962 0.030 75);
+  --sev-medium-foreground: oklch(0.420 0.105 60);
+  --sev-low: oklch(0.620 0.038 220);
+  --sev-low-soft: oklch(0.962 0.012 220);
+  --sev-low-foreground: oklch(0.400 0.030 220);
+  --sev-none: oklch(0.755 0.005 250);
+  --sev-none-soft: oklch(0.965 0.003 75);
+  --sev-none-foreground: oklch(0.498 0.012 250);
+}
+
+.dark {
+  --background: oklch(0.165 0.008 250);
+  --foreground: oklch(0.945 0.005 75);
+  --primary: oklch(0.74 0.075 195);
+  --primary-foreground: oklch(0.155 0.012 250);
+  --secondary: oklch(0.235 0.010 250);
+  --secondary-foreground: oklch(0.935 0.005 75);
+  --muted: oklch(0.215 0.010 250);
+  --muted-foreground: oklch(0.665 0.012 250);
+  --accent: oklch(0.255 0.020 195);
+  --accent-foreground: oklch(0.905 0.025 195);
+  --destructive: oklch(0.700 0.180 25);
+  --border: oklch(0.265 0.010 250);
+  --input: oklch(0.265 0.010 250);
+  --ring: oklch(0.74 0.075 195);
+  --card: oklch(0.195 0.010 250);
+  --card-foreground: oklch(0.945 0.005 75);
+  --popover: oklch(0.195 0.010 250);
+  --popover-foreground: oklch(0.945 0.005 75);
+  --selection: oklch(0.74 0.075 195);
+  --selection-foreground: oklch(0.155 0.012 250);
+
+  --surface-sunken: oklch(0.145 0.008 250);
+  --surface-raised: oklch(0.215 0.010 250);
+
+  --sev-high: oklch(0.700 0.170 27);
+  --sev-high-soft: oklch(0.290 0.080 27);
+  --sev-high-foreground: oklch(0.870 0.090 27);
+  --sev-medium: oklch(0.770 0.130 70);
+  --sev-medium-soft: oklch(0.295 0.050 65);
+  --sev-medium-foreground: oklch(0.880 0.080 70);
+  --sev-low: oklch(0.730 0.045 220);
+  --sev-low-soft: oklch(0.275 0.020 220);
+  --sev-low-foreground: oklch(0.860 0.030 220);
+  --sev-none: oklch(0.510 0.008 250);
+  --sev-none-soft: oklch(0.255 0.008 250);
+  --sev-none-foreground: oklch(0.770 0.008 250);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-selection: var(--selection);
+  --color-selection-foreground: var(--selection-foreground);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-surface-raised: var(--surface-raised);
+  --color-sev-high: var(--sev-high);
+  --color-sev-high-soft: var(--sev-high-soft);
+  --color-sev-high-foreground: var(--sev-high-foreground);
+  --color-sev-medium: var(--sev-medium);
+  --color-sev-medium-soft: var(--sev-medium-soft);
+  --color-sev-medium-foreground: var(--sev-medium-foreground);
+  --color-sev-low: var(--sev-low);
+  --color-sev-low-soft: var(--sev-low-soft);
+  --color-sev-low-foreground: var(--sev-low-foreground);
+  --color-sev-none: var(--sev-none);
+  --color-sev-none-soft: var(--sev-none-soft);
+  --color-sev-none-foreground: var(--sev-none-foreground);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-serif: var(--font-serif);
+}
+
+@layer base {
+  /* Borders default to the token; overridden where colour is needed. */
+  * {
+    @apply border-border;
+  }
+  html {
+    /* Opt into SF Pro / Inter stylistic features that make digits and
+       punctuation look intentional rather than browser-default. */
+    font-feature-settings: "cv11", "ss01", "ss03", "cv02";
+    font-optical-sizing: auto;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  ::selection {
+    background-color: var(--selection);
+    color: var(--selection-foreground);
+  }
+  /* Tabular figures by default for the data-heavy workspace tables. */
+  .tabular-nums,
+  table,
+  code,
+  kbd {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Two utility helpers used by the three-pane workspace. Pulled out of
+   the templates so the markup stays declarative. */
+@utility scroll-pane {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+/* Used on selected list rows. Bar-on-the-left is a stronger affordance
+   than a background tint at low contrast, and it avoids muddy hovers. */
+@utility row-selected {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+  box-shadow: inset 2px 0 0 0 var(--primary);
+}

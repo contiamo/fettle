@@ -5,9 +5,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -191,7 +189,7 @@ func runRunDedupe(cmd *cobra.Command, args []string) error {
 		return agentErr
 	}
 
-	canonicalCount, err := countLines(filepath.Join(out.Dir(), "findings.jsonl"))
+	canonicalCount, err := run.CountLines(filepath.Join(out.Dir(), "findings.jsonl"))
 	if err != nil {
 		return fmt.Errorf("count canonical findings: %w", err)
 	}
@@ -324,7 +322,11 @@ type reviewState struct {
 func annotateInputs(inputs []inputRun, projectDir string) ([]annotatedFinding, error) {
 	var out []annotatedFinding
 	for _, in := range inputs {
-		findings, err := loadFindingsFromRun(in.abs)
+		rp, err := run.Open(in.abs)
+		if err != nil {
+			return nil, fmt.Errorf("open input run %s: %w", in.rel, err)
+		}
+		findings, err := rp.LoadFindings()
 		if err != nil {
 			return nil, fmt.Errorf("read findings from %s: %w", in.rel, err)
 		}
@@ -347,17 +349,13 @@ func annotateInputs(inputs []inputRun, projectDir string) ([]annotatedFinding, e
 // and returns finding_id → author → latest review state. Latest entry
 // per (author, finding) wins.
 func loadReviewsByFinding(runDir string) (map[string]map[string]reviewState, error) {
-	entries, err := os.ReadDir(runDir)
+	files, err := run.ReviewFiles(runDir)
 	if err != nil {
 		return nil, err
 	}
 	out := map[string]map[string]reviewState{}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasPrefix(e.Name(), "reviews_") || !strings.HasSuffix(e.Name(), ".jsonl") {
-			continue
-		}
-		author := strings.TrimSuffix(strings.TrimPrefix(e.Name(), "reviews_"), ".jsonl")
-		f, err := os.Open(filepath.Join(runDir, e.Name()))
+	for _, rf := range files {
+		f, err := os.Open(rf.Path)
 		if err != nil {
 			return nil, err
 		}
@@ -374,7 +372,7 @@ func loadReviewsByFinding(runDir string) (map[string]map[string]reviewState, err
 			if out[r.Subject.ID] == nil {
 				out[r.Subject.ID] = map[string]reviewState{}
 			}
-			out[r.Subject.ID][author] = reviewState{
+			out[r.Subject.ID][rf.Author] = reviewState{
 				Labels:  r.Labels,
 				Comment: r.Comment,
 				At:      r.At.Format(time.RFC3339Nano),
@@ -396,22 +394,3 @@ func renderDedupePrompt(vars dedupePromptVars) (string, error) {
 	return b.String(), nil
 }
 
-func countLines(path string) (int, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return 0, nil
-		}
-		return 0, err
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<16), 1<<20)
-	count := 0
-	for sc.Scan() {
-		if len(strings.TrimSpace(sc.Text())) > 0 {
-			count++
-		}
-	}
-	return count, sc.Err()
-}

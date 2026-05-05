@@ -717,11 +717,12 @@ agrees on. Re-marking is allowed; the latest entry wins.
 
 ## Web UI
 
-`fettle ui` serves a small React app on localhost. It opens on a run
-picker (one row per `runs/<name>/`), and once you pick a run it reads
-that run's JSONL files (auto-refreshes when they change) and writes back
-to the run's `reviews_<your-slug>.jsonl` and `outcomes.jsonl` for
-actions a human takes:
+`fettle ui` serves a small server-rendered web app on localhost — Go
+binary with embedded assets (templ + Tailwind v4 + HTMX, no separate
+build step at runtime). It opens on a run picker (one row per
+`runs/<name>/`), and once you pick a run it reads that run's JSONL
+files and writes back to the run's `reviews_<your-slug>.jsonl` and
+`outcomes.jsonl` for actions a human takes:
 
 - Browse the run's findings by file, label, or group.
 - Add labels and comments — written as a new entry in the run's

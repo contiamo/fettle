@@ -1,0 +1,152 @@
+package templates
+
+import (
+	"strconv"
+
+	"github.com/contiamo/fettle/internal/schema"
+)
+
+// Finding is the standalone per-finding page. Used when the URL is hit
+// directly (deep link, refresh on the finding URL); the three-pane
+// workspace renders the same body via FindingArticle.
+templ Finding(v FindingView) {
+	@Page(v.Finding.Title, findingBreadcrumbs(v.Manifest.Name)) {
+		<div class="max-w-4xl">
+			@FindingArticle(v)
+		</div>
+	}
+}
+
+// FindingArticle is the body of a finding's detail view, with no
+// surrounding Layout. Rendered into #detail-pane on HTMX selection,
+// and embedded inside Finding for the standalone case.
+templ FindingArticle(v FindingView) {
+	<article class="px-8 py-7 space-y-7">
+		<header class="space-y-3">
+			<div class="flex items-baseline gap-3 flex-wrap">
+				@severityBadge(v.Finding.Severity)
+				<h1 class="font-serif italic text-[28px] leading-tight tracking-tight text-foreground">{ v.Finding.Title }</h1>
+			</div>
+			<div class="flex items-baseline gap-3 text-[12.5px] text-muted-foreground flex-wrap">
+				<span class="font-mono text-foreground">{ v.Finding.File }</span>
+				<span class="font-mono text-muted-foreground/80">line { strconv.Itoa(v.Finding.Line) }</span>
+				<span class="text-border" aria-hidden="true">·</span>
+				<a href={ templ.SafeURL("/runs/" + v.Manifest.Name) } class="hover:text-foreground transition-colors">{ v.Manifest.Name }</a>
+			</div>
+			if len(v.Finding.Labels) > 0 {
+				<div class="pt-1">
+					@labelChips(v.Finding.Labels)
+				</div>
+			}
+		</header>
+		@codePreviewBlock(v.Preview)
+		if v.Finding.Description != "" {
+			@findingSection("Description", v.Finding.Description)
+		}
+		if v.Finding.Suggestion != "" {
+			@findingSection("Suggestion", v.Finding.Suggestion)
+		}
+		if len(v.Finding.References) > 0 {
+			@referencesSection(v.Finding.References)
+		}
+		if len(v.Finding.Members) > 0 {
+			@membersSection(v.Finding.Members)
+		}
+		@ReviewSection(v.Review)
+		@OutcomeSection(v.Outcome)
+		<footer class="text-[11px] text-muted-foreground pt-6 border-t border-border space-y-1">
+			<div>
+				<span class="text-muted-foreground/70">id</span>
+				<code class="font-mono ml-2">{ v.Finding.ID }</code>
+			</div>
+			if v.Finding.CreatedBy != "" {
+				<div>
+					<span class="text-muted-foreground/70">created by</span>
+					<code class="font-mono ml-2">{ v.Finding.CreatedBy }</code>
+					<span class="ml-2 tabular-nums">{ v.Finding.CreatedAt.Format("2006-01-02 15:04 MST") }</span>
+				</div>
+			}
+		</footer>
+	</article>
+}
+
+templ findingSection(title, body string) {
+	<section class="space-y-2.5">
+		<h2 class="text-[10px] font-medium tracking-[0.1em] uppercase text-muted-foreground">{ title }</h2>
+		<p class="text-[13.5px] text-foreground whitespace-pre-wrap leading-relaxed">{ body }</p>
+	</section>
+}
+
+templ referencesSection(refs []schema.Reference) {
+	<section class="space-y-2.5">
+		<h2 class="text-[10px] font-medium tracking-[0.1em] uppercase text-muted-foreground">References</h2>
+		<ul class="text-sm space-y-1">
+			for _, r := range refs {
+				<li class="font-mono text-xs">
+					<span class="text-foreground">{ r.File }</span>
+					if r.Line > 0 {
+						<span class="text-muted-foreground">:{ strconv.Itoa(r.Line) }</span>
+					}
+				</li>
+			}
+		</ul>
+	</section>
+}
+
+templ membersSection(members []schema.Member) {
+	<section class="space-y-2.5">
+		<h2 class="text-[10px] font-medium tracking-[0.1em] uppercase text-muted-foreground">Members</h2>
+		<p class="text-xs text-muted-foreground">
+			if len(members) == 1 {
+				1 source observation back-pointer.
+			} else {
+				{ strconv.Itoa(len(members)) } source observations consolidated into this canonical entry.
+			}
+		</p>
+		<ul class="text-sm space-y-1">
+			for _, m := range members {
+				<li class="font-mono text-xs flex gap-2">
+					<code class="text-foreground">{ m.FindingID }</code>
+					<span class="text-muted-foreground">in</span>
+					<span class="text-muted-foreground">{ m.FromRun }</span>
+				</li>
+			}
+		</ul>
+	</section>
+}
+
+templ codePreviewBlock(p CodePreview) {
+	<section class="space-y-2.5">
+		<div class="flex items-baseline justify-between gap-3">
+			<h2 class="text-[10px] font-medium tracking-[0.1em] uppercase text-muted-foreground">Code</h2>
+			if p.Path != "" {
+				<span class="font-mono text-[11px] text-muted-foreground">{ p.Path }</span>
+			}
+		</div>
+		if p.Error != "" {
+			<div class="rounded-md border border-border bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
+				{ p.Error }
+			</div>
+		} else {
+			<pre class="rounded-md border border-border bg-surface-sunken overflow-x-auto text-[12px] leading-[1.55] font-mono"><code>for _, l := range p.Lines {
+					@codePreviewLineEl(l, p.Target)
+				}</code></pre>
+		}
+	</section>
+}
+
+templ codePreviewLineEl(l CodePreviewLine, target int) {
+	if l.Highlight {
+		<span class="block bg-primary/8 border-l-2 border-primary px-3 py-0.5"><span class="inline-block w-10 text-right pr-3 text-primary tabular-nums select-none">{ strconv.Itoa(l.Number) }</span><span class="text-foreground">{ l.Content }</span></span>
+	} else {
+		<span class="block px-3 py-0.5 border-l-2 border-transparent"><span class="inline-block w-10 text-right pr-3 text-muted-foreground/60 tabular-nums select-none">{ strconv.Itoa(l.Number) }</span><span class="text-foreground/90">{ l.Content }</span></span>
+	}
+}
+
+func findingBreadcrumbs(runName string) []BreadcrumbItem {
+	return []BreadcrumbItem{
+		{Title: "Runs", Href: "/"},
+		{Title: runName, Href: "/runs/" + runName},
+		{Title: "Finding"},
+	}
+}

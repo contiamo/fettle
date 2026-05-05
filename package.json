@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "license": "MIT",
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.2.2",
+    "esbuild": "^0.25.0",
+    "tailwindcss": "^4.2.2",
+    "typescript": "^5.8.0"
+  }
+}

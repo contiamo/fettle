@@ -1,0 +1,473 @@
+package templates
+
+import (
+	"strconv"
+
+	"github.com/contiamo/fettle/internal/schema"
+	"github.com/contiamo/fettle/internal/ui/components/badge"
+	"github.com/contiamo/fettle/internal/ui/components/icon"
+)
+
+// RunFindings is the per-run page for find / merge / dedupe stages,
+// rendered as a three-pane workspace: filters on the left, an issue
+// list in the middle, the selected finding's detail on the right.
+//
+// Selection is HTMX-driven: clicking a list row swaps #detail-pane and
+// pushes /runs/{name}?focus={id} so refresh / share lands on the same
+// finding.
+templ RunFindings(v RunFindingsView) {
+	@Workspace(v.Manifest.Name, runBreadcrumbs(v.Manifest.Name)) {
+		<div class="flex h-full">
+			@findingsFilterRail(v)
+			<div class="flex-1 flex h-full min-w-0" data-resize-container>
+				@findingsListPane(v)
+				@resizeHandle()
+				<div id="detail-pane" class="flex-1 min-w-0 scroll-pane h-full bg-background">
+					if v.Selected != nil {
+						@FindingArticle(v.Detail)
+					} else {
+						@findingsEmptyDetail("No findings yet.", "If a stage is still in progress, refresh once it completes.")
+					}
+				</div>
+			</div>
+		</div>
+	}
+}
+
+// resizeHandle is the draggable separator between the list and detail
+// panes. Pattern lifted from shadcn/react-resizable-panels: a 1px
+// visible line, a wider pseudo-element hit area, focus ring on
+// keyboard nav, and `touch-action: none` so a touch-drag doesn't
+// trigger page scroll (rrp #662). The TS controller hooks the actual
+// drag — see internal/ui/ts/resizable.ts.
+templ resizeHandle() {
+	<div
+		role="separator"
+		aria-orientation="vertical"
+		aria-label="Resize panes"
+		aria-valuemin="0"
+		aria-valuemax="100"
+		tabindex="0"
+		data-resize-handle
+		style="touch-action:none;flex-grow:0;flex-shrink:0"
+		class="relative w-px shrink-0 bg-border cursor-col-resize transition-colors hover:bg-ring focus-visible:bg-ring focus-visible:outline-none after:absolute after:inset-y-0 after:left-1/2 after:w-3 after:-translate-x-1/2 after:content-['']"
+	>
+		<span aria-hidden="true" class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10 flex h-5 w-2.5 items-center justify-center rounded-sm border border-border bg-card text-muted-foreground/70 hover:text-foreground transition-colors">
+			@icon.GripVertical(icon.Props{Class: "w-2.5 h-2.5"})
+		</span>
+	</div>
+}
+
+// RunGroups is the per-run page for group-stage runs.
+templ RunGroups(manifest schema.RunManifest, groups []schema.Group) {
+	@Page(manifest.Name, runBreadcrumbs(manifest.Name)) {
+		@runHeader(manifest)
+		if len(groups) == 0 {
+			@runEmpty("No groups yet.", "If the stage is still in progress, refresh once it completes.")
+		} else {
+			<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+				for _, g := range groups {
+					@groupCard(manifest.Name, g)
+				}
+			</div>
+		}
+	}
+}
+
+// findingsFilterRail is the left pane: search + faceted filters.
+// Filtering is client-side; rows in the middle pane carry data-* attrs
+// that match the values here.
+templ findingsFilterRail(v RunFindingsView) {
+	<aside class="w-[260px] shrink-0 border-r border-border bg-surface-sunken scroll-pane h-full" data-finding-filters>
+		<div class="px-4 pt-5 pb-4 space-y-5">
+			<div class="relative">
+				<span class="absolute inset-y-0 left-2.5 flex items-center text-muted-foreground/70 pointer-events-none">
+					@icon.Search(icon.Props{Class: "w-3.5 h-3.5"})
+				</span>
+				<input
+					type="search"
+					placeholder="Search findings…"
+					data-finding-search
+					autocomplete="off"
+					class="w-full rounded-md border border-border bg-background pl-8 pr-2 py-1.5 text-[13px] placeholder:text-muted-foreground/70 focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
+				/>
+			</div>
+			if len(v.Facets.Severities) > 0 {
+				@severityFacetGroup(v.Facets.Severities)
+			}
+			for _, g := range v.Facets.Labels {
+				@labelFacetGroup(g)
+			}
+			<button
+				type="button"
+				data-finding-clear
+				class="w-full text-[11px] text-muted-foreground hover:text-foreground border border-dashed border-border hover:border-border/80 rounded-md py-1.5 transition-colors"
+			>
+				Clear filters
+			</button>
+		</div>
+	</aside>
+}
+
+// severityFacetGroup renders the severity rail with colour-matched
+// dots so rail / list / detail share one severity language.
+templ severityFacetGroup(items []FacetItem) {
+	<section class="space-y-1">
+		<h2 class="px-1.5 text-[10px] uppercase tracking-[0.1em] text-muted-foreground/80 font-medium">Severity</h2>
+		<ul class="space-y-px">
+			for _, it := range items {
+				<li>
+					<label class="flex items-center justify-between gap-2 px-1.5 py-1 rounded hover:bg-accent/60 cursor-pointer">
+						<span class="flex items-center gap-2 min-w-0">
+							<input
+								type="checkbox"
+								class="appearance-none w-3 h-3 rounded-[3px] border border-border bg-background checked:bg-foreground checked:border-foreground cursor-pointer transition-colors shrink-0"
+								data-finding-facet="severity"
+								value={ it.Value }
+							/>
+							<span class={ "inline-block w-2 h-2 rounded-full shrink-0", severityDotClass(it.Value) }></span>
+							<span class="text-[12.5px] text-foreground truncate">{ it.Display }</span>
+						</span>
+						<span class="text-[10px] text-muted-foreground tabular-nums">{ strconv.Itoa(it.Count) }</span>
+					</label>
+				</li>
+			}
+		</ul>
+	</section>
+}
+
+// labelFacetGroup renders one prefix bucket. Items show only the
+// post-prefix display name so the column stays scannable; the data
+// attribute on the row still matches against the full label.
+templ labelFacetGroup(g LabelFacetGroup) {
+	<section class="space-y-1">
+		<h2 class="px-1.5 text-[10px] uppercase tracking-[0.1em] text-muted-foreground/80 font-medium">{ g.Title }</h2>
+		<ul class="space-y-px">
+			for _, it := range g.Items {
+				<li>
+					<label class="flex items-center justify-between gap-2 px-1.5 py-1 rounded hover:bg-accent/60 cursor-pointer">
+						<span class="flex items-center gap-2 min-w-0">
+							<input
+								type="checkbox"
+								class="appearance-none w-3 h-3 rounded-[3px] border border-border bg-background checked:bg-foreground checked:border-foreground cursor-pointer transition-colors shrink-0"
+								data-finding-facet="label"
+								value={ it.Value }
+							/>
+							<span class="text-[12.5px] text-foreground truncate">{ it.Display }</span>
+						</span>
+						<span class="text-[10px] text-muted-foreground tabular-nums">{ strconv.Itoa(it.Count) }</span>
+					</label>
+				</li>
+			}
+		</ul>
+	</section>
+}
+
+// findingsListPane is the middle column: a scroll-padded list of
+// finding cards. Each row is hx-get-driven; the active row is marked
+// with row-selected for the bar-on-the-left treatment.
+templ findingsListPane(v RunFindingsView) {
+	<section class="scroll-pane h-full bg-card min-w-[280px]" style="flex-basis:38%;flex-shrink:0;flex-grow:0" data-finding-list-pane data-resize-list>
+		<header class="sticky top-0 z-10 bg-card/95 backdrop-blur-sm border-b border-border">
+			<div class="px-4 pt-4 pb-3 space-y-1">
+				<div class="flex items-baseline justify-between gap-2">
+					<h1 class="font-mono text-[13px] text-foreground truncate">{ v.Manifest.Name }</h1>
+					@badge.Badge(badge.Props{Variant: stageVariant(v.Manifest.Stage)}) {
+						{ v.Manifest.Stage }
+					}
+				</div>
+				<div class="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+					<span>{ v.Manifest.CreatedAt.Format("2006-01-02 15:04") }</span>
+					<span data-finding-count class="tabular-nums">
+						{ strconv.Itoa(len(v.Findings)) }
+						if len(v.Findings) == 1 {
+							{ " finding" }
+						} else {
+							{ " findings" }
+						}
+					</span>
+				</div>
+			</div>
+		</header>
+		if len(v.Findings) == 0 {
+			<div class="px-4 py-10 text-center text-sm text-muted-foreground">
+				No findings yet.
+			</div>
+		} else {
+			<ul role="listbox" data-finding-list>
+				for _, f := range v.Findings {
+					@findingListItem(v.Manifest.Name, f, v.Selected != nil && v.Selected.ID == f.ID)
+				}
+			</ul>
+			<div data-finding-empty class="hidden px-4 py-10 text-center text-sm text-muted-foreground">
+				No findings match these filters.
+			</div>
+		}
+	</section>
+}
+
+// findingListItem is one row in the middle pane. Pared down to
+// severity chip + title — the right pane already carries everything
+// else (file, description, labels), so the list reads as a quiet
+// table of contents rather than a wall of metadata.
+templ findingListItem(runName string, f schema.Finding, selected bool) {
+	{{ href := "/runs/" + runName + "/finding/" + f.ID }}
+	{{ workspaceHref := "/runs/" + runName + "?focus=" + f.ID }}
+	<li
+		role="option"
+		aria-selected={ ariaBool(selected) }
+		data-finding-row
+		data-finding-id={ f.ID }
+		data-search={ findingSearchHaystack(f) }
+		data-severity={ severityValue(f.Severity) }
+		data-labels={ joinLabels(f.Labels) }
+		class={ "relative cursor-pointer border-b border-border/60 px-4 py-2 hover:bg-accent/40 transition-colors", templ.KV("row-selected", selected) }
+		hx-get={ href }
+		hx-target="#detail-pane"
+		hx-swap="innerHTML"
+		hx-push-url={ workspaceHref }
+		hx-trigger="click"
+	>
+		<a href={ templ.SafeURL(workspaceHref) } class="flex items-center gap-2.5 min-w-0 outline-none" onclick="event.stopPropagation()">
+			@severityChip(f.Severity)
+			<span class="text-[13px] leading-snug text-foreground truncate flex-1">{ f.Title }</span>
+		</a>
+	</li>
+}
+
+templ findingsEmptyDetail(title, hint string) {
+	<div class="h-full flex flex-col items-center justify-center text-center text-muted-foreground p-10 space-y-2">
+		<div class="text-foreground text-base">{ title }</div>
+		<div class="text-xs max-w-xs">{ hint }</div>
+	</div>
+}
+
+templ runHeader(m schema.RunManifest) {
+	<header class="mb-6 space-y-1.5">
+		<div class="flex items-baseline gap-3 flex-wrap">
+			<h1 class="font-mono text-2xl font-medium tracking-tight">{ m.Name }</h1>
+			@badge.Badge(badge.Props{Variant: stageVariant(m.Stage)}) {
+				{ m.Stage }
+			}
+			if m.CompletedAt == nil {
+				@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
+					{ "in progress" }
+				}
+			}
+		</div>
+		<div class="text-[13px] text-muted-foreground space-x-4">
+			<span>created { m.CreatedAt.Format("2006-01-02 15:04 MST") }</span>
+			if m.TargetRepo != "" {
+				<span class="font-mono text-xs">{ m.TargetRepo }</span>
+			}
+		</div>
+	</header>
+}
+
+templ runEmpty(title, hint string) {
+	<div class="rounded-lg border border-border bg-card p-10 text-center text-muted-foreground space-y-1">
+		<div class="text-foreground">{ title }</div>
+		<div class="text-xs">{ hint }</div>
+	</div>
+}
+
+templ groupCard(runName string, g schema.Group) {
+	{{ href := "/runs/" + runName + "/group/" + g.ID }}
+	<article class="rounded-lg border border-border bg-card p-4 space-y-2 cursor-pointer hover:border-primary/40 hover:shadow-sm transition-all group" data-row-link={ href }>
+		<header class="flex items-baseline justify-between gap-3">
+			<h2 class="font-medium text-[14px] leading-snug tracking-tight">
+				<a href={ templ.SafeURL(href) } class="text-foreground group-hover:text-primary">{ g.Title }</a>
+			</h2>
+			<span class="text-[11px] text-muted-foreground tabular-nums whitespace-nowrap">
+				{ strconv.Itoa(len(g.FindingIDs)) }
+			</span>
+		</header>
+		if g.Summary != "" {
+			<p class="text-[12.5px] text-muted-foreground line-clamp-3 leading-relaxed">{ g.Summary }</p>
+		}
+		if len(g.Labels) > 0 {
+			<div class="pt-1">
+				@miniLabelChips(g.Labels)
+			</div>
+		}
+	</article>
+}
+
+// severityBadge is the larger pill used on the detail page — same
+// colour family as the rail dots and the list chips, so the three
+// surfaces speak one severity language.
+templ severityBadge(severity *string) {
+	if severity != nil && *severity != "" {
+		<span class={ "inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-medium tracking-tight", severityChipClass(*severity) }>
+			<span class={ "inline-block w-1.5 h-1.5 rounded-full", severityDotClass(*severity) }></span>
+			{ *severity }
+		</span>
+	} else {
+		<span class="text-xs text-muted-foreground">—</span>
+	}
+}
+
+// severityChip is the compact list-row affordance: a fixed-width
+// colour-tinted pill so titles align in a column.
+templ severityChip(severity *string) {
+	if severity != nil && *severity != "" {
+		<span
+			class={ "inline-flex items-center justify-center w-[52px] shrink-0 px-1.5 py-0.5 rounded text-[10px] uppercase tracking-[0.04em] font-medium", severityChipClass(*severity) }
+			title={ "severity " + *severity }
+		>
+			{ severityShort(*severity) }
+		</span>
+	} else {
+		<span class="inline-flex items-center justify-center w-[52px] shrink-0 px-1.5 py-0.5 rounded text-[10px] uppercase tracking-[0.04em] font-medium bg-muted text-muted-foreground/70" title="no severity">·</span>
+	}
+}
+
+templ labelChips(labels []string) {
+	if len(labels) > 0 {
+		<div class="flex flex-wrap gap-1">
+			for _, l := range labels {
+				<span class="inline-flex items-center px-1.5 py-0.5 rounded border border-border bg-muted text-[11px] text-muted-foreground font-mono">
+					{ l }
+				</span>
+			}
+		</div>
+	}
+}
+
+// miniLabelChips is the denser variant used inside list rows where
+// vertical real estate is tight.
+templ miniLabelChips(labels []string) {
+	if len(labels) > 0 {
+		<div class="flex flex-wrap gap-1">
+			for _, l := range labels {
+				<span class="inline-flex items-center px-1.5 py-0 rounded text-[10px] text-muted-foreground bg-muted/70 font-mono leading-[14px]">
+					{ l }
+				</span>
+			}
+		</div>
+	}
+}
+
+func runBreadcrumbs(name string) []BreadcrumbItem {
+	return []BreadcrumbItem{
+		{Title: "Runs", Href: "/"},
+		{Title: name},
+	}
+}
+
+// findingSearchHaystack is what the client-side title search matches
+// against. We include description so a user can find a finding by a
+// distinctive word in its body, not just the title.
+func findingSearchHaystack(f schema.Finding) string {
+	out := f.Title
+	if f.Description != "" {
+		out += " " + f.Description
+	}
+	if f.File != "" {
+		out += " " + f.File
+	}
+	return out
+}
+
+// joinLabels emits a space-delimited list — the data-* attribute is
+// scanned with includes() / split(" ") on the client, which is faster
+// than parsing JSON on every keystroke.
+func joinLabels(labels []string) string {
+	if len(labels) == 0 {
+		return ""
+	}
+	out := labels[0]
+	for _, l := range labels[1:] {
+		out += " " + l
+	}
+	return out
+}
+
+func severityValue(severity *string) string {
+	if severity == nil {
+		return ""
+	}
+	return *severity
+}
+
+// ariaBool emits explicit "true"/"false" so screen readers receive a
+// well-formed aria-selected state on every listbox option.
+func ariaBool(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
+// severityChipClass picks the tinted background + foreground for the
+// chip / badge surfaces (rail dots, list chips, detail badge). Tints
+// are quiet enough to coexist with the page's calm palette but tied
+// to a recognisable colour family per bucket: terracotta / amber /
+// slate.
+func severityChipClass(s string) string {
+	switch SeverityKey(s) {
+	case "critical", "high", "p0", "p1":
+		return "bg-sev-high-soft text-sev-high-foreground"
+	case "medium", "med", "p2":
+		return "bg-sev-medium-soft text-sev-medium-foreground"
+	case "low", "info", "informational", "p3", "p4":
+		return "bg-sev-low-soft text-sev-low-foreground"
+	default:
+		return "bg-sev-none-soft text-sev-none-foreground"
+	}
+}
+
+// severityDotClass returns the solid dot colour, used inside chips
+// and on the rail to anchor the severity colour at a glance.
+func severityDotClass(s string) string {
+	switch SeverityKey(s) {
+	case "critical", "high", "p0", "p1":
+		return "bg-sev-high"
+	case "medium", "med", "p2":
+		return "bg-sev-medium"
+	case "low", "info", "informational", "p3", "p4":
+		return "bg-sev-low"
+	default:
+		return "bg-sev-none"
+	}
+}
+
+// severityShort returns the abbreviated label used in dense list
+// chips so all severities fit a fixed column. Falls back to the
+// uppercase first three letters for unrecognised values, which
+// still reads as a category marker even if it's "p0" → "P0".
+func severityShort(s string) string {
+	switch SeverityKey(s) {
+	case "critical":
+		return "crit"
+	case "high", "p0", "p1":
+		return "high"
+	case "medium", "med", "p2":
+		return "med"
+	case "low", "p3", "p4":
+		return "low"
+	case "info", "informational":
+		return "info"
+	default:
+		if len(s) <= 4 {
+			return s
+		}
+		return s[:4]
+	}
+}
+
+// SeverityKey lower-cases the severity for case-insensitive bucketing.
+// Exported so the server's facet ordering can share the same
+// canonicalisation rule as severityVariant / severityDotClass /
+// severityChipClass below — keeping all severity logic on one key.
+func SeverityKey(s string) string {
+	out := make([]byte, 0, len(s))
+	for i := range len(s) {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		out = append(out, c)
+	}
+	return string(out)
+}

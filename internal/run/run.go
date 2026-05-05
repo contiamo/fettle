@@ -22,6 +22,18 @@ import (
 	"github.com/contiamo/fettle/internal/schema"
 )
 
+// jsonlScanInitBuf and jsonlScanMaxLine size the bufio.Scanner buffers
+// every JSONL reader in this package shares. 64 KiB initial / 1 MiB max
+// fits the longest finding/group records observed in practice (a wordy
+// description with embedded code blocks) without paying the allocation
+// cost up-front. Hoisted to constants so all readers stay in lockstep —
+// raising the cap in one reader and not the others would let a record
+// load in some code paths but not others.
+const (
+	jsonlScanInitBuf = 1 << 16
+	jsonlScanMaxLine = 1 << 20
+)
+
 // Path is a handle to a run folder. Methods are safe for concurrent use
 // across goroutines and (for findings.jsonl) across processes — the
 // findings append uses flock(2). files.jsonl is harness-only, so it
@@ -322,10 +334,32 @@ func (p *Path) AppendOutcome(o schema.Outcome) error {
 }
 
 // LoadOutcomes reads outcomes.jsonl in append order. Tolerates
-// malformed lines (skipped, like other JSONL readers in the
-// harness). Empty file returns an empty slice and no error.
+// malformed lines (skipped). Missing file returns an empty slice and
+// no error.
 func (p *Path) LoadOutcomes() ([]schema.Outcome, error) {
-	f, err := os.Open(filepath.Join(p.dir, "outcomes.jsonl"))
+	return loadJSONL[schema.Outcome](filepath.Join(p.dir, "outcomes.jsonl"))
+}
+
+// LoadFindings reads findings.jsonl in append order. Same tolerant
+// semantics as LoadOutcomes — malformed lines are skipped, a missing
+// file is empty, not an error.
+func (p *Path) LoadFindings() ([]schema.Finding, error) {
+	return loadJSONL[schema.Finding](filepath.Join(p.dir, "findings.jsonl"))
+}
+
+// LoadGroups reads groups.jsonl in append order. Same tolerant
+// semantics as LoadOutcomes.
+func (p *Path) LoadGroups() ([]schema.Group, error) {
+	return loadJSONL[schema.Group](filepath.Join(p.dir, "groups.jsonl"))
+}
+
+// loadJSONL reads a JSONL file at path into a slice of T. Missing
+// file returns an empty slice and no error. Malformed lines are
+// skipped silently — the policy every record-reading helper in this
+// package shares (LoadOutcomes / LoadFindings / LoadGroups all
+// delegate here).
+func loadJSONL[T any](path string) ([]T, error) {
+	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
@@ -335,14 +369,14 @@ func (p *Path) LoadOutcomes() ([]schema.Outcome, error) {
 	defer f.Close()
 
 	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<16), 1<<20)
-	var out []schema.Outcome
+	sc.Buffer(make([]byte, jsonlScanInitBuf), jsonlScanMaxLine)
+	var out []T
 	for sc.Scan() {
-		var o schema.Outcome
-		if err := json.Unmarshal(sc.Bytes(), &o); err != nil {
+		var v T
+		if err := json.Unmarshal(sc.Bytes(), &v); err != nil {
 			continue
 		}
-		out = append(out, o)
+		out = append(out, v)
 	}
 	return out, sc.Err()
 }
@@ -387,7 +421,7 @@ func idExistsIn(path, id string) (bool, error) {
 	defer f.Close()
 
 	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<16), 1<<20)
+	sc.Buffer(make([]byte, jsonlScanInitBuf), jsonlScanMaxLine)
 	var row struct {
 		ID string `json:"id"`
 	}
@@ -433,7 +467,7 @@ func (p *Path) CountFindingsForFile(f string) (int, error) {
 	defer fh.Close()
 
 	sc := bufio.NewScanner(fh)
-	sc.Buffer(make([]byte, 1<<16), 1<<20)
+	sc.Buffer(make([]byte, jsonlScanInitBuf), jsonlScanMaxLine)
 	var row struct {
 		File string `json:"file"`
 	}
@@ -465,7 +499,7 @@ func (p *Path) LoadDoneFiles() (map[string]bool, error) {
 
 	latest := map[string]string{}
 	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<16), 1<<20)
+	sc.Buffer(make([]byte, jsonlScanInitBuf), jsonlScanMaxLine)
 	for sc.Scan() {
 		var row schema.FileStatus
 		if err := json.Unmarshal(sc.Bytes(), &row); err != nil {

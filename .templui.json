@@ -1,0 +1,7 @@
+{
+  "componentsDir": "internal/ui/components",
+  "utilsDir": "internal/ui/components/utils",
+  "moduleName": "github.com/contiamo/fettle",
+  "jsDir": "internal/ui/static/dist/js",
+  "jsPublicPath": "/static/dist/js"
+}

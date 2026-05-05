@@ -1,5 +1,11 @@
 version: "3"
 
+vars:
+  TEMPL_CMD: go run github.com/a-h/templ/cmd/templ@v0.3.1001
+  TEMPLUI_CMD: go run github.com/templui/templui/cmd/templui@v1.9.5
+  TAILWIND_CMD: pnpm exec tailwindcss
+  ESBUILD_CMD: pnpm exec esbuild
+
 tasks:
   default:
     desc: Show available tasks
@@ -8,12 +14,14 @@ tasks:
       - task --list
 
   setup:
-    desc: Verify the runtime tools fettle expects are on PATH
+    desc: Install dependencies and run code generation
     cmds:
       - task: setup:check
+      - pnpm install
+      - task: go:generate
 
   setup:check:
-    desc: Check for required tools (go + at least one agent CLI)
+    desc: Check for required tools (go, node, pnpm + at least one agent CLI)
     silent: true
     cmds:
       - |
@@ -29,6 +37,8 @@ tasks:
         echo "Checking required tools..."
         echo ""
         check "go"     "go version | sed 's/go version //'" "https://go.dev/dl/"
+        check "node"   "node --version"                     "https://nodejs.org/"
+        check "pnpm"   "pnpm --version"                     "npm install -g pnpm"
         echo ""
         echo "At least one agent CLI is required (or set agent.command to a custom script):"
         echo ""
@@ -44,18 +54,47 @@ tasks:
   # ---------------------------------------------------------------------------
   # Go
   # ---------------------------------------------------------------------------
+  go:generate:
+    desc: Run all code generation (templ + tailwind + esbuild)
+    deps: [go:templ, go:tailwind, ts:build]
+
+  go:templ:
+    desc: Generate Go code from templ templates
+    cmds:
+      - "{{.TEMPL_CMD}} generate ./internal/ui/templates/ ./internal/ui/components/"
+    sources:
+      - internal/ui/templates/**/*.templ
+      - internal/ui/components/**/*.templ
+    generates:
+      - internal/ui/templates/**/*_templ.go
+      - internal/ui/components/**/*_templ.go
+
+  go:tailwind:
+    desc: Build Tailwind CSS
+    cmds:
+      - "{{.TAILWIND_CMD}} -i internal/ui/static/input.css -o internal/ui/static/dist/styles.css --minify"
+    sources:
+      - internal/ui/static/input.css
+      - internal/ui/templates/**/*.templ
+      - internal/ui/components/**/*.templ
+    generates:
+      - internal/ui/static/dist/styles.css
+
   go:build:
     desc: Build the fettle binary into bin/
+    deps: [go:generate]
     cmds:
       - go build -o bin/fettle ./cmd/fettle
 
   go:install:
     desc: Install fettle to GOPATH/bin
+    deps: [go:generate]
     cmds:
       - go install ./cmd/fettle
 
   go:test:
     desc: Run Go tests
+    deps: [go:generate]
     cmds:
       - go test ./...
 
@@ -70,6 +109,37 @@ tasks:
       - task: go:build
       - task: go:lint
       - task: go:test
+
+  # ---------------------------------------------------------------------------
+  # TypeScript
+  # ---------------------------------------------------------------------------
+  ts:build:
+    desc: Bundle TypeScript
+    cmds:
+      - "{{.ESBUILD_CMD}} internal/ui/ts/app.ts --bundle --minify --format=esm --target=es2020 --outfile=internal/ui/static/dist/app.js"
+    sources:
+      - internal/ui/ts/**/*.ts
+    generates:
+      - internal/ui/static/dist/app.js
+
+  ts:check:
+    desc: Type-check TypeScript (no emit)
+    cmds:
+      - pnpm exec tsc --noEmit -p internal/ui/ts/tsconfig.json
+
+  ts:watch:
+    desc: Watch and rebuild TypeScript
+    cmds:
+      - "{{.ESBUILD_CMD}} internal/ui/ts/app.ts --bundle --format=esm --target=es2020 --outfile=internal/ui/static/dist/app.js --watch"
+
+  # ---------------------------------------------------------------------------
+  # Dev environment
+  # ---------------------------------------------------------------------------
+  dev:ui:
+    desc: Start the UI server pointed at examples/self-scan
+    deps: [go:build]
+    cmds:
+      - bin/fettle --dir examples/self-scan ui {{.CLI_ARGS}}
 
   # ---------------------------------------------------------------------------
   # Dogfooding
@@ -88,3 +158,5 @@ tasks:
     cmds:
       - rm -rf bin/
       - rm -rf examples/self-scan/runs/
+      - rm -f internal/ui/static/dist/styles.css
+      - rm -f internal/ui/static/dist/app.js

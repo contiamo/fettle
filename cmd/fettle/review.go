@@ -1,11 +1,8 @@
 package main
 
 import (
-	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -250,41 +247,24 @@ type reviewCurrentEntry struct {
 // and returns a flat chronological list. Tolerates malformed lines
 // (skipped, like other JSONL readers in the harness).
 func loadAllReviewEntries(runDir string) ([]reviewEntry, error) {
-	entries, err := os.ReadDir(runDir)
+	rp, err := run.Open(runDir)
 	if err != nil {
 		return nil, err
 	}
-	var out []reviewEntry
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasPrefix(e.Name(), "reviews_") || !strings.HasSuffix(e.Name(), ".jsonl") {
-			continue
-		}
-		author := strings.TrimSuffix(strings.TrimPrefix(e.Name(), "reviews_"), ".jsonl")
-		f, err := os.Open(filepath.Join(runDir, e.Name()))
-		if err != nil {
-			return nil, err
-		}
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 1<<16), 1<<20)
-		for sc.Scan() {
-			var r schema.Review
-			if err := json.Unmarshal(sc.Bytes(), &r); err != nil {
-				continue
-			}
-			out = append(out, reviewEntry{
-				Subject: r.Subject,
-				Author:  author,
-				Labels:  r.Labels,
-				Comment: r.Comment,
-				At:      r.At,
-			})
-		}
-		f.Close()
-		if err := sc.Err(); err != nil {
-			return nil, err
+	flat, err := rp.LoadAllReviews()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]reviewEntry, len(flat))
+	for i, fr := range flat {
+		out[i] = reviewEntry{
+			Subject: fr.Subject,
+			Author:  fr.Author,
+			Labels:  fr.Labels,
+			Comment: fr.Comment,
+			At:      fr.At,
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
 	return out, nil
 }
 

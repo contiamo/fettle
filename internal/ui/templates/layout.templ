@@ -1,0 +1,185 @@
+package templates
+
+import (
+	"github.com/contiamo/fettle/internal/ui/components/dropdown"
+	"github.com/contiamo/fettle/internal/ui/components/icon"
+	"github.com/contiamo/fettle/internal/ui/components/popover"
+)
+
+// LayoutMode controls how the page's <main> wrapper is composed.
+// "default" centres content with a comfortable reading width — used by
+// the run picker and detail pages. "workspace" hands a full-bleed,
+// viewport-height container to the page so the three-pane layout can
+// own the screen.
+type LayoutMode int
+
+const (
+	LayoutDefault LayoutMode = iota
+	LayoutWorkspace
+)
+
+// Layout is the base HTML shell. Most pages use it through the no-arg
+// helpers (Page / Workspace) so the call sites stay readable.
+templ Layout(title string, breadcrumbs []BreadcrumbItem, mode LayoutMode) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title } · fettle</title>
+			<link rel="stylesheet" href={ assetURL("/static/dist/styles.css", CSSVersion) }/>
+			<meta name="htmx-config" content='{"allowScriptTags": false}'/>
+			<script defer src={ assetURL("/static/dist/js/htmx.min.js", JSVersion) }></script>
+			<script type="module" src={ assetURL("/static/dist/app.js", JSVersion) }></script>
+			@popover.Script()
+			@dropdown.Script()
+			@themeInitTag()
+		</head>
+		<body class="font-sans min-h-screen bg-background text-foreground antialiased">
+			<header class="sticky top-0 z-40 bg-background/85 backdrop-blur-md border-b border-border/70">
+				<div class="px-4 h-12 flex items-center gap-3">
+					<a href="/" class="flex items-baseline gap-1.5 shrink-0 text-foreground" title="fettle">
+						<span class="inline-flex items-center justify-center w-5 h-5 rounded-[5px] bg-foreground text-background text-[10px] font-semibold leading-none tracking-tight">f</span>
+						<span class="font-serif italic text-[17px] leading-none tracking-tight">fettle</span>
+					</a>
+					if len(breadcrumbs) > 0 {
+						<span class="text-border" aria-hidden="true">·</span>
+					}
+					@headerBreadcrumb(breadcrumbs)
+					<div class="ml-auto flex items-center gap-2">
+						@reviewerIndicator()
+						@themeMenu()
+					</div>
+				</div>
+			</header>
+			if mode == LayoutWorkspace {
+				<main class="h-[calc(100dvh-3rem)]">
+					{ children... }
+				</main>
+			} else {
+				<main class="px-6 py-8 max-w-screen-xl mx-auto">
+					{ children... }
+				</main>
+			}
+		</body>
+	</html>
+}
+
+// Page is the conventional entry point for centred pages.
+templ Page(title string, breadcrumbs []BreadcrumbItem) {
+	@Layout(title, breadcrumbs, LayoutDefault) {
+		{ children... }
+	}
+}
+
+// Workspace is the entry point for full-bleed, viewport-height pages
+// (currently the three-pane findings explorer).
+templ Workspace(title string, breadcrumbs []BreadcrumbItem) {
+	@Layout(title, breadcrumbs, LayoutWorkspace) {
+		{ children... }
+	}
+}
+
+templ headerBreadcrumb(items []BreadcrumbItem) {
+	if len(items) > 0 {
+		<nav class="flex items-center gap-1.5 text-[13px] text-muted-foreground min-w-0">
+			for i, b := range items {
+				if i > 0 {
+					<span class="text-border" aria-hidden="true">/</span>
+				}
+				if b.Href != "" {
+					<a href={ templ.SafeURL(b.Href) } class="hover:text-foreground transition-colors truncate">{ b.Title }</a>
+				} else {
+					<span class="text-foreground truncate">{ b.Title }</span>
+				}
+			}
+		</nav>
+	}
+}
+
+templ themeMenu() {
+	@dropdown.Dropdown() {
+		@dropdown.Trigger(dropdown.TriggerProps{Class: "outline-none"}) {
+			<button
+				type="button"
+				class="flex items-center justify-center w-7 h-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
+				title="Theme"
+			>
+				@icon.Sun(icon.Props{Class: "w-3.5 h-3.5 dark:hidden"})
+				@icon.Moon(icon.Props{Class: "w-3.5 h-3.5 hidden dark:inline"})
+			</button>
+		}
+		@dropdown.Content(dropdown.ContentProps{Placement: dropdown.PlacementBottomEnd, Class: "min-w-[140px]"}) {
+			@dropdown.Item(dropdown.ItemProps{Attributes: templ.Attributes{"data-set-theme": "light"}}) {
+				<span class="flex items-center gap-2">
+					@icon.Sun(icon.Props{Class: "w-4 h-4"})
+					Light
+				</span>
+			}
+			@dropdown.Item(dropdown.ItemProps{Attributes: templ.Attributes{"data-set-theme": "dark"}}) {
+				<span class="flex items-center gap-2">
+					@icon.Moon(icon.Props{Class: "w-4 h-4"})
+					Dark
+				</span>
+			}
+			@dropdown.Item(dropdown.ItemProps{Attributes: templ.Attributes{"data-set-theme": "system"}}) {
+				<span class="flex items-center gap-2">
+					@icon.Monitor(icon.Props{Class: "w-4 h-4"})
+					System
+				</span>
+			}
+		}
+	}
+}
+
+// reviewerIndicator renders a small "Reviewing as: <slug>" pill in
+// the header. The slug links to /identity so the user can change it,
+// passing the current page as ?next= so save-and-continue lands them
+// back where they were. With no identity configured (FETTLE.md:732
+// first-edit state) it renders a "Set identity" prompt instead.
+templ reviewerIndicator() {
+	{{ res := ReviewerFromContext(ctx) }}
+	{{ identityHref := identityChangeHref(ctx) }}
+	if res == nil {
+		<a
+			href={ templ.SafeURL(identityHref) }
+			class="text-[11px] text-muted-foreground hover:text-foreground border border-dashed border-border rounded-md px-2 py-1 transition-colors"
+			title="Pick a reviewer slug"
+		>
+			Set identity
+		</a>
+	} else {
+		<a
+			href={ templ.SafeURL(identityHref) }
+			class="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-accent rounded-md px-2 py-1 transition-colors"
+			title="Change reviewer identity"
+		>
+			<span>reviewing as</span>
+			<code class="font-mono text-foreground">{ res.Slug }</code>
+			if res.IsAgent {
+				<span class="text-[10px] uppercase tracking-wide text-primary">agent</span>
+			}
+		</a>
+	}
+}
+
+// themeInitTag applies the saved theme preference before first paint
+// so users on dark mode don't get a flash of light. Mirrors the
+// localStorage key used by app.ts.
+templ themeInitTag() {
+	<script>
+		(function () {
+			var t = localStorage.getItem("theme") || "system";
+			var dark = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme:dark)").matches);
+			if (dark) document.documentElement.classList.add("dark");
+		})();
+	</script>
+}
+
+// assetURL appends ?v=<hash> when the hash is non-empty.
+func assetURL(path, version string) string {
+	if version == "" {
+		return path
+	}
+	return path + "?v=" + version
+}

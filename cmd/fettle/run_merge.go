@@ -3,9 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -101,7 +99,11 @@ func runRunMerge(cmd *cobra.Command, args []string) error {
 		remap := map[string]string{}
 		idRemap[in.abs] = remap
 
-		findings, err := loadFindingsFromRun(in.abs)
+		inRP, err := run.Open(in.abs)
+		if err != nil {
+			return fmt.Errorf("open input run %s: %w", in.rel, err)
+		}
+		findings, err := inRP.LoadFindings()
 		if err != nil {
 			return fmt.Errorf("read findings from %s: %w", in.rel, err)
 		}
@@ -160,28 +162,6 @@ type inputRun struct {
 	manifest schema.RunManifest
 }
 
-func loadFindingsFromRun(runDir string) ([]schema.Finding, error) {
-	f, err := os.Open(filepath.Join(runDir, "findings.jsonl"))
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	defer f.Close()
-
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<16), 1<<20)
-	var out []schema.Finding
-	for sc.Scan() {
-		var fnd schema.Finding
-		if err := json.Unmarshal(sc.Bytes(), &fnd); err != nil {
-			continue
-		}
-		out = append(out, fnd)
-	}
-	return out, sc.Err()
-}
 
 // copyReviewsRemapped finds every reviews_<author>.jsonl in srcDir,
 // rewrites each entry's subject.id via idMap, and appends the
@@ -190,16 +170,14 @@ func loadFindingsFromRun(runDir string) ([]schema.Finding, error) {
 // not present in the source run, which shouldn't happen but is safe
 // to ignore).
 func copyReviewsRemapped(srcDir, outDir string, idMap map[string]string) (int, error) {
-	entries, err := os.ReadDir(srcDir)
+	files, err := run.ReviewFiles(srcDir)
 	if err != nil {
 		return 0, err
 	}
 	count := 0
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasPrefix(e.Name(), "reviews_") || !strings.HasSuffix(e.Name(), ".jsonl") {
-			continue
-		}
-		n, err := remapAndAppendReviewFile(filepath.Join(srcDir, e.Name()), filepath.Join(outDir, e.Name()), idMap)
+	for _, rf := range files {
+		dst := filepath.Join(outDir, "reviews_"+rf.Author+".jsonl")
+		n, err := remapAndAppendReviewFile(rf.Path, dst, idMap)
 		if err != nil {
 			return count, err
 		}

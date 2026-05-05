@@ -2,3 +2,7 @@ old/
 bin/
 **/runs/
 .claude/settings.local.json
+.task/
+node_modules/
+internal/ui/static/dist/styles.css
+internal/ui/static/dist/app.js

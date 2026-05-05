@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/contiamo/fettle/internal/identity"
 	"github.com/contiamo/fettle/internal/run"
 	"github.com/contiamo/fettle/internal/schema"
 	"github.com/spf13/cobra"
@@ -15,8 +17,8 @@ import (
 
 const (
 	fettleRunEnv   = "FETTLE_RUN"
-	fettleAgentEnv = "FETTLE_AGENT"
-	fettleModelEnv = "FETTLE_MODEL"
+	fettleAgentEnv = identity.EnvAgent
+	fettleModelEnv = identity.EnvModel
 )
 
 var addFindingFlags struct {
@@ -108,7 +110,7 @@ func runShowFinding(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	findings, err := loadFindingsFromRun(rp.Dir())
+	findings, err := rp.LoadFindings()
 	if err != nil {
 		return internalError(fmt.Errorf("load findings: %w", err))
 	}
@@ -128,7 +130,7 @@ func runListFindings(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	findings, err := loadFindingsFromRun(rp.Dir())
+	findings, err := rp.LoadFindings()
 	if err != nil {
 		return internalError(fmt.Errorf("load findings: %w", err))
 	}
@@ -256,48 +258,19 @@ func runAddFinding(cmd *cobra.Command, args []string) error {
 	return printAddResult(map[string]any{"id": finding.ID}, addFindingFlags.verbose, finding.ID)
 }
 
-// resolveAuthor returns the identity to stamp on records that
-// fettle attributes back (reviews, outcomes). The chain is:
-//
-//   - FETTLE_AGENT       — agent name set by the harness during a stage
-//   - $FETTLE_AUTHOR     — explicit per-invocation override
-//   - ~/.config/fettle/identity — the slug the UI/init persisted
-//
-// Returns (slug, isAgent, error). The caller decides how to format
-// the per-record `marked_by` / `created_by` field — agents get an
-// `agent:<name>[/<model>]` prefix, humans get `human:<slug>`.
-func resolveAuthor() (string, bool, error) {
-	if a := strings.TrimSpace(os.Getenv(fettleAgentEnv)); a != "" {
-		return a, true, nil
-	}
-	if a := strings.TrimSpace(os.Getenv("FETTLE_AUTHOR")); a != "" {
-		return a, false, nil
-	}
-	home, err := os.UserHomeDir()
-	if err == nil {
-		path := filepath.Join(home, ".config", "fettle", "identity")
-		if data, err := os.ReadFile(path); err == nil {
-			if slug := strings.TrimSpace(string(data)); slug != "" {
-				return slug, false, nil
-			}
-		}
-	}
-	return "", false, fmt.Errorf("no author identity: set $FETTLE_AUTHOR, write a slug to ~/.config/fettle/identity, or run `fettle ui` once to pick one")
-}
-
 // markedBy returns the `marked_by` / `created_by` string for the
-// resolved author. Agents use the existing composeCreatedBy shape so
-// outcomes stamped by an agent match findings stamped by the same
-// agent; humans get the simpler `human:<slug>` form.
+// resolved author. Delegates the chain (env → config file → error) to
+// internal/identity so the CLI and the UI share one resolver. Agents
+// get the `agent:<name>[/<model>]` shape; humans get `human:<slug>`.
 func markedBy() (string, error) {
-	slug, isAgent, err := resolveAuthor()
+	r, err := identity.Resolve()
 	if err != nil {
+		if errors.Is(err, identity.ErrNoIdentity) {
+			return "", fmt.Errorf("%s", identity.ErrorMessage())
+		}
 		return "", err
 	}
-	if isAgent {
-		return composeCreatedBy(slug, os.Getenv(fettleModelEnv)), nil
-	}
-	return "human:" + slug, nil
+	return identity.MarkedBy(r), nil
 }
 
 // composeCreatedBy reassembles the per-finding `created_by` field from

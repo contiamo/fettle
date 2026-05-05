@@ -1,0 +1,68 @@
+package templates
+
+// IdentityView is the data passed to the Identity prompt template.
+// CurrentSlug is non-empty when an identity is already saved (the
+// page is reachable from a "change identity" link as well as the
+// first-edit redirect). Error renders inline under the input when
+// validation or persistence failed on a previous submit.
+type IdentityView struct {
+	Next        string
+	Prefill     string
+	CurrentSlug string
+	Error       string
+}
+
+// Identity is the slug-prompt page. The form posts to /identity; on
+// success the server redirects to ?next= (defaulting to /).
+templ Identity(v IdentityView) {
+	@Page("Reviewer identity", []BreadcrumbItem{{Title: "Identity"}}) {
+		<section class="max-w-md mx-auto space-y-6">
+			<header class="space-y-1">
+				<h1 class="text-2xl font-semibold tracking-tight">Pick your reviewer slug</h1>
+				<p class="text-sm text-muted-foreground">
+					Fettle stamps every label, comment, and outcome with the slug below
+					and stores it in <code class="font-mono text-foreground">~/.config/fettle/identity</code>
+					— per-user, per-machine, never written to the project.
+				</p>
+			</header>
+			<form method="POST" action="/identity" class="space-y-4">
+				<input type="hidden" name="next" value={ v.Next }/>
+				<div class="space-y-1.5">
+					<label for="slug" class="text-sm font-medium text-foreground">Slug</label>
+					<input
+						id="slug"
+						name="slug"
+						type="text"
+						value={ v.Prefill }
+						placeholder="alice"
+						required
+						pattern="[A-Za-z0-9_\-]+"
+						autocomplete="off"
+						autofocus
+						class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary"
+					/>
+					<p class="text-xs text-muted-foreground">
+						Letters, digits, hyphens, underscores. Becomes part of
+						<code class="font-mono">reviews_&lt;slug&gt;.jsonl</code>.
+					</p>
+					if v.Error != "" {
+						<p class="text-xs text-destructive">{ v.Error }</p>
+					}
+				</div>
+				<div class="flex items-center justify-between">
+					<button
+						type="submit"
+						class="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 cursor-pointer"
+					>
+						Save and continue
+					</button>
+					if v.CurrentSlug != "" {
+						<span class="text-xs text-muted-foreground">
+							Currently: <code class="font-mono text-foreground">{ v.CurrentSlug }</code>
+						</span>
+					}
+				</div>
+			</form>
+		</section>
+	}
+}
