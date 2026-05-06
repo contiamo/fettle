@@ -10,9 +10,12 @@ import (
 	"github.com/contiamo/fettle/internal/schema"
 )
 
-// gitInfo returns the target repo's git HEAD + dirty state, or nil if the
-// directory isn't a git repo or git isn't on PATH.
-func gitInfo(dir string) *schema.GitInfo {
+// ReadGit returns the target repo's git HEAD + dirty state, or nil if
+// the directory isn't a git repo or git isn't on PATH. Used at run
+// creation (snapshot into RunManifest.TargetRepoGit) and by the UI
+// at render time to detect when the working tree has drifted from
+// the scan-time commit.
+func ReadGit(dir string) *schema.GitInfo {
 	if _, err := exec.LookPath("git"); err != nil {
 		return nil
 	}

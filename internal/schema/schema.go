@@ -20,8 +20,23 @@ type Finding struct {
 	Labels      []string    `json:"labels"`
 	References  []Reference `json:"references"`
 	Members     []Member    `json:"members,omitempty"`
-	CreatedBy   string      `json:"created_by"`
-	CreatedAt   time.Time   `json:"created_at"`
+	// AnchorLine is the exact text of File[Line] at finding-creation time,
+	// truncated to anchor.MaxLen. It lets readers detect drift later: if
+	// the file changed, the same content may have shifted to a different
+	// line, or disappeared entirely.
+	//
+	// Pointer (not string) so we can distinguish three cases:
+	//   nil          — no anchor was captured (legacy finding, capture
+	//                  failed at creation time, or the run had no
+	//                  target_repo). Drift is reported as "unknown".
+	//   &""          — the anchored line is legitimately blank.
+	//   &"…"         — the anchored line's content (truncated).
+	// A plain `string` field with `omitempty` would conflate the first
+	// two cases and silently disable drift detection on blank-line
+	// findings.
+	AnchorLine *string   `json:"anchor_line,omitempty"`
+	CreatedBy  string    `json:"created_by"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // Reference is an additional code location an issue points at.
@@ -69,9 +84,14 @@ const (
 
 // Review is one row of reviews_<author>.jsonl. Append-only history;
 // each entry is the writing author's current full label set on the
-// subject. Author identity is carried by the filename, not the entry.
+// subject. The filename groups entries by author for per-author lock
+// granularity, but Author on the record is the canonical source of
+// truth — same prefixed form as Outcome.Author and Finding.CreatedBy
+// (`human:slug` or `agent:slug[/model]`), so attribution survives
+// file moves and concatenation across runs.
 type Review struct {
 	Subject Subject   `json:"subject"`
+	Author  string    `json:"author"`
 	Labels  []string  `json:"labels"`
 	Comment string    `json:"comment,omitempty"`
 	At      time.Time `json:"at"`
@@ -131,11 +151,11 @@ func NewFindingID() string {
 // wins for "current state" display, but the full history is
 // preserved (and viewable via `fettle show outcome --all`).
 type Outcome struct {
-	Subject  Subject   `json:"subject"`
-	Status   string    `json:"status"`
-	PRURL    string    `json:"pr_url,omitempty"`
-	At       time.Time `json:"at"`
-	MarkedBy string    `json:"marked_by"`
+	Subject Subject   `json:"subject"`
+	Author  string    `json:"author"`
+	Status  string    `json:"status"`
+	PRURL   string    `json:"pr_url,omitempty"`
+	At      time.Time `json:"at"`
 }
 
 // Group is one cluster of findings produced by `fettle run group`.

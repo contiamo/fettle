@@ -1,6 +1,7 @@
 package templates
 
 import (
+	"context"
 	"strings"
 )
 
@@ -19,49 +20,53 @@ templ ReviewSection(v ReviewSectionView) {
 				</div>
 			}
 		</header>
-		<form
-			hx-post={ v.PostURL() }
-			hx-target="#review-section"
-			hx-swap="outerHTML"
-			class="space-y-3 rounded-md border border-border bg-card p-3.5"
-		>
-			<div class="space-y-1.5">
-				<label for="review-labels" class="text-[11px] font-medium text-foreground">Labels</label>
-				<input
-					id="review-labels"
-					name="labels"
-					type="text"
-					placeholder="comma- or space-separated, e.g. ack, fp, severity:high"
-					class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
-					autocomplete="off"
-				/>
-				<p class="text-[11px] text-muted-foreground">
-					Replaces your previous label set on this { v.SubjectKind }.
-					Submit with no labels to clear yours.
-				</p>
-			</div>
-			<div class="space-y-1.5">
-				<label for="review-comment" class="text-[11px] font-medium text-foreground">Comment</label>
-				<textarea
-					id="review-comment"
-					name="comment"
-					rows="3"
-					placeholder="Optional"
-					class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring resize-y"
-				></textarea>
-			</div>
-			if v.Error != "" {
-				<p class="text-xs text-destructive">{ v.Error }</p>
-			}
-			<div class="flex justify-end">
-				<button
-					type="submit"
-					class="inline-flex items-center justify-center rounded-md bg-foreground text-background px-3 py-1.5 text-xs font-medium hover:bg-foreground/90 transition-colors cursor-pointer"
-				>
-					Save review
-				</button>
-			</div>
-		</form>
+		if ReviewerFromContext(ctx) == nil {
+			@identityRequired("leave a review")
+		} else {
+			<form
+				hx-post={ v.PostURL() }
+				hx-target="#review-section"
+				hx-swap="outerHTML"
+				class="space-y-3 rounded-md border border-border bg-card p-3.5"
+			>
+				<div class="space-y-1.5">
+					<label for="review-labels" class="text-[11px] font-medium text-foreground">Labels</label>
+					<input
+						id="review-labels"
+						name="labels"
+						type="text"
+						placeholder="comma- or space-separated, e.g. ack, fp, severity:high"
+						value={ strings.Join(myLatestLabels(ctx, v.Entries), ", ") }
+						class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
+						autocomplete="off"
+					/>
+					<p class="text-[11px] text-muted-foreground">
+						Your current label set on this { v.SubjectKind }; submitting saves whatever's in the box (clear it to remove all of yours).
+					</p>
+				</div>
+				<div class="space-y-1.5">
+					<label for="review-comment" class="text-[11px] font-medium text-foreground">Comment</label>
+					<textarea
+						id="review-comment"
+						name="comment"
+						rows="3"
+						placeholder="Optional"
+						class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring resize-y"
+					></textarea>
+				</div>
+				if v.Error != "" {
+					<p class="text-xs text-destructive">{ v.Error }</p>
+				}
+				<div class="flex justify-end">
+					<button
+						type="submit"
+						class="inline-flex items-center justify-center rounded-md bg-foreground text-background px-3 py-1.5 text-xs font-medium hover:bg-foreground/90 transition-colors cursor-pointer"
+					>
+						Save review
+					</button>
+				</div>
+			</form>
+		}
 		if len(v.Entries) > 0 {
 			<ol class="space-y-2 text-sm">
 				for _, e := range v.Entries {
@@ -72,6 +77,55 @@ templ ReviewSection(v ReviewSectionView) {
 			<p class="text-[11px] text-muted-foreground italic">No reviews yet.</p>
 		}
 	</section>
+}
+
+// myLatestLabels returns the current reviewer's most recent label set
+// on this subject so the form pre-fills with what you saved last
+// instead of starting blank. Returns nil when there's no identity
+// configured (the form opens empty — same as a fresh reviewer with
+// nothing saved yet) or when the current reviewer hasn't reviewed
+// this subject before.
+//
+// Pre-filling matters because the data model writes a full label-set
+// snapshot on every save: a blank submission would otherwise wipe
+// whatever you saved last, which makes the common "I just want to
+// add a comment" workflow a footgun. With the field pre-populated,
+// "save as-is" preserves your labels, "edit" modifies them, and
+// "clear the box, save" deliberately clears them — same model as a
+// regular settings form.
+func myLatestLabels(ctx context.Context, entries []ReviewEntryView) []string {
+	r := ReviewerFromContext(ctx)
+	if r == nil {
+		return nil
+	}
+	// e.Author is the prefixed stamp from the record (`human:slug` /
+	// `agent:slug[/model]`); Resolved.String() formats the current
+	// reviewer in the same shape via Stringer, so the comparison
+	// works whether the saved stamp was a human or an agent.
+	me := r.String()
+	for _, e := range entries {
+		if e.IsLatest && e.Author == me {
+			return e.Labels
+		}
+	}
+	return nil
+}
+
+// identityRequired stands in for review/outcome forms when the current
+// session has no reviewer identity configured. Submitting either
+// without an identity bounces through /identity anyway and re-types
+// the form on return — better UX is to show up-front that the action
+// is gated, with a one-click path to set up. action is the verb-
+// phrase the placeholder reads ("leave a review", "record an
+// outcome") so the same component covers both call-sites.
+templ identityRequired(action string) {
+	<div class="rounded-md border border-dashed border-border bg-card px-4 py-5 text-center space-y-2.5">
+		<p class="text-[12.5px] text-muted-foreground">Set your reviewer identity to { action }.</p>
+		<a
+			href={ templ.SafeURL(identityChangeHref(ctx)) }
+			class="inline-flex items-center justify-center rounded-md bg-foreground text-background px-3 py-1.5 text-xs font-medium hover:bg-foreground/90 transition-colors"
+		>Set identity</a>
+	</div>
 }
 
 templ reviewEntry(e ReviewEntryView) {
@@ -91,7 +145,9 @@ templ reviewEntry(e ReviewEntryView) {
 			<span class="text-[11px] text-muted-foreground italic">no labels</span>
 		}
 		if strings.TrimSpace(e.Comment) != "" {
-			<p class="text-[13.5px] text-foreground whitespace-pre-wrap leading-relaxed">{ e.Comment }</p>
+			<p class="text-[13.5px] text-foreground whitespace-pre-wrap leading-relaxed">
+				@RichText(e.Comment)
+			</p>
 		}
 	</li>
 }

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"github.com/contiamo/fettle/internal/anchor"
 	"github.com/contiamo/fettle/internal/run"
 	"github.com/contiamo/fettle/internal/schema"
 	"github.com/contiamo/fettle/internal/ui/templates"
@@ -113,7 +114,7 @@ func findingHandler(projectDir string) http.HandlerFunc {
 // runHandler (pre-render the right pane on workspace load) so both
 // paths render identical detail.
 func buildFindingDetail(rp *run.Path, manifest schema.RunManifest, f schema.Finding) (templates.FindingView, error) {
-	preview := loadPreview(manifest.TargetRepo, f.File, f.Line, previewWindow)
+	preview := loadPreview(manifest.TargetRepo, f, previewWindow)
 
 	subject := schema.Subject{Kind: schema.SubjectFinding, ID: f.ID}
 	reviewView, err := buildReviewView(rp, manifest.Name, subject)
@@ -129,14 +130,37 @@ func buildFindingDetail(rp *run.Path, manifest schema.RunManifest, f schema.Find
 		Manifest: manifest,
 		Finding:  f,
 		Preview: templates.CodePreview{
-			Path:   preview.Path,
-			Error:  preview.Error,
-			Lines:  toTemplateLines(preview.Lines),
-			Target: f.Line,
+			Path:          preview.Path,
+			Error:         preview.Error,
+			Lines:         toTemplateLines(preview.Lines),
+			Target:        f.Line,
+			Anchor:        anchorStateToTemplate(preview.Anchor),
+			OriginalLine:  preview.OriginalLine,
+			EffectiveLine: preview.EffectiveLine,
 		},
 		Review:  reviewView,
 		Outcome: outcomeView,
 	}, nil
+}
+
+// anchorStateToTemplate converts the internal anchor.State enum into
+// the small string the template switches on. Keeping it as a string
+// at the template boundary avoids importing internal/anchor from the
+// templates package and lets the template author reason about a
+// closed set of values.
+func anchorStateToTemplate(s anchor.State) string {
+	switch s {
+	case anchor.StateCurrent:
+		return "current"
+	case anchor.StateShifted:
+		return "shifted"
+	case anchor.StateAmbiguous:
+		return "ambiguous"
+	case anchor.StateStale:
+		return "stale"
+	default:
+		return "unknown"
+	}
 }
 
 func toTemplateLines(in []previewLine) []templates.CodePreviewLine {

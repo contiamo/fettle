@@ -135,21 +135,26 @@ func runAddReview(cmd *cobra.Command, args []string) error {
 		return validationError([]string{kindErr.Error()})
 	}
 
-	author := os.Getenv(fettleAgentEnv)
-	if author == "" {
+	slug := os.Getenv(fettleAgentEnv)
+	if slug == "" {
 		return internalError(fmt.Errorf("%s is not set; cannot derive reviewer slug", fettleAgentEnv))
+	}
+	authorStamp, err := stamp()
+	if err != nil {
+		return validationError([]string{err.Error()})
 	}
 
 	review := schema.Review{
 		Subject: subject,
+		Author:  authorStamp,
 		Labels:  append([]string{}, addReviewFlags.labels...),
 		Comment: strings.TrimSpace(addReviewFlags.comment),
 		At:      time.Now().UTC(),
 	}
-	if err := rp.AppendReview(author, review); err != nil {
+	if err := rp.AppendReview(slug, review); err != nil {
 		return internalError(fmt.Errorf("append review: %w", err))
 	}
-	return printAddResult(map[string]any{"subject": subject, "at": review.At}, addReviewFlags.verbose, subject.ID)
+	return printAddResult(map[string]any{"subject": subject, "at": review.At, "author": review.Author}, addReviewFlags.verbose, subject.ID)
 }
 
 func runListReviews(cmd *cobra.Command, args []string) error {

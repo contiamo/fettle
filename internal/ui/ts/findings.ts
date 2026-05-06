@@ -9,7 +9,9 @@ type FacetName = "severity" | "label";
 const ROW_SELECTOR = "[data-finding-row]";
 const FILTER_PANE = "[data-finding-filters]";
 const SEARCH_INPUT = "[data-finding-search]";
+const FILE_FILTER_INPUT = "[data-finding-file-filter]";
 const FACET_BOX = "[data-finding-facet]";
+const STALE_TOGGLE = "[data-finding-stale-toggle]";
 const COUNT_EL = "[data-finding-count]";
 const EMPTY_EL = "[data-finding-empty]";
 const CLEAR_BTN = "[data-finding-clear]";
@@ -21,18 +23,24 @@ export function initFindingFilters() {
   if (!pane) return;
 
   const search = pane.querySelector<HTMLInputElement>(SEARCH_INPUT);
+  const fileFilter = pane.querySelector<HTMLInputElement>(FILE_FILTER_INPUT);
   const facetBoxes = Array.from(
     pane.querySelectorAll<HTMLInputElement>(FACET_BOX),
   );
+  const staleToggle = pane.querySelector<HTMLInputElement>(STALE_TOGGLE);
   const clearBtn = pane.querySelector<HTMLButtonElement>(CLEAR_BTN);
 
   const apply = () => applyFilters();
 
   search?.addEventListener("input", apply);
+  fileFilter?.addEventListener("input", apply);
   facetBoxes.forEach((box) => box.addEventListener("change", apply));
+  staleToggle?.addEventListener("change", apply);
   clearBtn?.addEventListener("click", () => {
     if (search) search.value = "";
+    if (fileFilter) fileFilter.value = "";
     facetBoxes.forEach((b) => (b.checked = false));
+    if (staleToggle) staleToggle.checked = false;
     apply();
   });
 
@@ -47,12 +55,17 @@ function applyFilters() {
   const search = document.querySelector<HTMLInputElement>(SEARCH_INPUT);
   const query = (search?.value || "").trim().toLowerCase();
 
+  const fileInput = document.querySelector<HTMLInputElement>(FILE_FILTER_INPUT);
+  const fileMatcher = compileFileMatcher((fileInput?.value || "").trim());
+
   const active = collectActiveFacets();
+  const hideStale =
+    document.querySelector<HTMLInputElement>(STALE_TOGGLE)?.checked === true;
 
   const rows = document.querySelectorAll<HTMLElement>(ROW_SELECTOR);
   let visible = 0;
   rows.forEach((row) => {
-    const show = matches(row, query, active);
+    const show = matches(row, query, active, hideStale, fileMatcher);
     row.hidden = !show;
     if (show) visible++;
   });
@@ -84,15 +97,41 @@ function collectActiveFacets(): Record<FacetName, Set<string>> {
   return out;
 }
 
+// compileFileMatcher turns the file-filter input into a predicate.
+// Pattern syntax:
+//   - `*` matches any sequence of characters (including `/` and empty).
+//   - All other characters match literally.
+//   - The match is left-anchored: `internal/anchor` is treated as
+//     `internal/anchor*`. Equivalently, an implicit trailing `*` is
+//     appended unless one is already there.
+//   - Comparison is case-insensitive (consistent with the search input).
+// Empty pattern matches everything.
+function compileFileMatcher(pattern: string): (file: string) => boolean {
+  if (!pattern) return () => true;
+  // Escape regex metacharacters except `*`, then convert `*` → `.*`.
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  // Implicit trailing `*` so prefix patterns "just work" without the user
+  // remembering to add one. If the user already ended with `*`, that's
+  // already `.*` — adding another `.*` is a no-op.
+  const re = new RegExp("^" + escaped + ".*$", "i");
+  return (file) => re.test(file);
+}
+
 function matches(
   row: HTMLElement,
   query: string,
   active: Record<FacetName, Set<string>>,
+  hideStale: boolean,
+  fileMatcher: (file: string) => boolean,
 ): boolean {
   if (query) {
     const haystack = (row.getAttribute("data-search") || "").toLowerCase();
     if (!haystack.includes(query)) return false;
   }
+  // File filter is checked against the row's literal file path
+  // (data-file), not the broader data-search haystack — `*.go` should
+  // match by extension, not happen to find ".go" inside a description.
+  if (!fileMatcher(row.getAttribute("data-file") || "")) return false;
   if (active.severity.size > 0) {
     const sev = row.getAttribute("data-severity") || "";
     if (!active.severity.has(sev)) return false;
@@ -111,6 +150,9 @@ function matches(
       }
     }
     if (!any) return false;
+  }
+  if (hideStale && row.getAttribute("data-anchor") === "stale") {
+    return false;
   }
   return true;
 }

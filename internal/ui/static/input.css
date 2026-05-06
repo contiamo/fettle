@@ -74,6 +74,15 @@
   --sev-none: oklch(0.755 0.005 250);
   --sev-none-soft: oklch(0.965 0.003 75);
   --sev-none-foreground: oklch(0.498 0.012 250);
+
+  /* Inline-code colour. Warm wine-violet so identifiers in description
+     / suggestion / comment bodies pop against the bone-paper page
+     without competing with the teal primary or the severity chips.
+     hue 335 sits between magenta and rose — friendlier than blue-
+     leaning violets (~270°), which read as "system" rather than
+     editorial. */
+  --code-foreground: oklch(0.42 0.13 335);
+  --code-soft: oklch(0.965 0.024 335);
 }
 
 .dark {
@@ -113,6 +122,12 @@
   --sev-none: oklch(0.510 0.008 250);
   --sev-none-soft: oklch(0.255 0.008 250);
   --sev-none-foreground: oklch(0.770 0.008 250);
+
+  /* Code colours rotate to a lighter shade in dark mode so the warm
+     violet stays readable on the dark background, with a subtly
+     tinted backdrop instead of plain --muted. */
+  --code-foreground: oklch(0.84 0.10 335);
+  --code-soft: oklch(0.30 0.05 335);
 }
 
 @theme inline {
@@ -150,6 +165,8 @@
   --color-sev-none: var(--sev-none);
   --color-sev-none-soft: var(--sev-none-soft);
   --color-sev-none-foreground: var(--sev-none-foreground);
+  --color-code-foreground: var(--code-foreground);
+  --color-code-soft: var(--code-soft);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -201,4 +218,30 @@
   background-color: var(--accent);
   color: var(--accent-foreground);
   box-shadow: inset 2px 0 0 0 var(--primary);
+}
+
+/* Filter-rail checkboxes use appearance-none, which strips the native
+   tick. Without explicit checked styling the box just fills with
+   bg-foreground — a flat dark square that doesn't read as "checked"
+   so much as "broken". This rule paints a small white tick on the
+   primary-coloured fill, which works in both light and dark themes
+   because primary keeps a coherent identity across them. Scoped to
+   the filter pane so we don't reach into checkboxes that may live
+   in other parts of the UI later.
+
+   Placed inside @layer utilities to share the layer with Tailwind's
+   bg-background / border-border utilities the inline classes apply;
+   our selector's higher specificity then wins the cascade. Top-level
+   CSS in input.css gets implicitly wrapped into @layer base by
+   Tailwind v4's compiler, which loses to anything in @layer utilities
+   regardless of specificity — that's the trap I fell into first. */
+@layer utilities {
+  [data-finding-filters] input[type="checkbox"]:checked {
+    background-color: var(--primary);
+    border-color: var(--primary);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' d='m3 8 4 4 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 80%;
+  }
 }

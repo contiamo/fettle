@@ -19,7 +19,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/contiamo/fettle/internal/identity"
 	"github.com/contiamo/fettle/internal/run"
 	"github.com/contiamo/fettle/internal/schema"
 	"github.com/contiamo/fettle/internal/ui/templates"
@@ -76,6 +75,7 @@ func reviewPostHandler(projectDir, subjectKind string) http.HandlerFunc {
 
 		entry := schema.Review{
 			Subject: subject,
+			Author:  ident.String(),
 			Labels:  labels,
 			Comment: comment,
 			At:      time.Now().UTC(),
@@ -112,11 +112,11 @@ func outcomePostHandler(projectDir, subjectKind string) http.HandlerFunc {
 		prURL := strings.TrimSpace(r.FormValue("pr_url"))
 
 		o := schema.Outcome{
-			Subject:  subject,
-			Status:   status,
-			PRURL:    prURL,
-			At:       time.Now().UTC(),
-			MarkedBy: identity.MarkedBy(ident),
+			Subject: subject,
+			Author:  ident.String(),
+			Status:  status,
+			PRURL:   prURL,
+			At:      time.Now().UTC(),
 		}
 		if err := rp.AppendOutcome(o); err != nil {
 			renderOutcomeSwap(w, r, rp, runName, subject, fmt.Sprintf("save failed: %v", err), http.StatusInternalServerError)

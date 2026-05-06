@@ -8,16 +8,21 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/contiamo/fettle/internal/anchor"
+	"github.com/contiamo/fettle/internal/schema"
 )
 
 // previewContext is the rendered ±N-line window around a finding's
-// target line. PreviewLine.Line is the 1-based line number; Highlight
-// marks the row that the finding points at so the template can
-// emphasize it.
+// anchor line. The window is centred on EffectiveLine (which equals
+// OriginalLine when the anchor hasn't drifted).
 type previewContext struct {
-	Path  string // repo-relative path that was actually read
-	Lines []previewLine
-	Error string // non-empty if the preview couldn't be produced (template renders a placeholder)
+	Path          string // repo-relative path that was actually read
+	Lines         []previewLine
+	Error         string // non-empty if the preview couldn't be produced (template renders a placeholder)
+	Anchor        anchor.State
+	OriginalLine  int // f.Line as recorded on the finding
+	EffectiveLine int // resolved current line; 0 when stale
 }
 
 type previewLine struct {
@@ -26,79 +31,116 @@ type previewLine struct {
 	Highlight bool
 }
 
-// loadPreview returns up to (2*window+1) lines of context around
-// targetLine in repoRelPath. repoRoot is the directory the file is
-// read relative to (the run's resolved target_repo). targetLine is
-// 1-based.
+// loadPreview returns up to (2*window+1) lines of context around the
+// finding's effective line in repoRoot. repoRoot is the directory the
+// file is read relative to (the run's resolved target_repo).
 //
-// Returns a previewContext with Error set instead of an error so the
-// template can render a placeholder; we never fail the whole detail
-// page just because the preview is unavailable. Path traversal is
-// rejected at this layer — `..` segments or absolute file paths in
-// repoRelPath produce a non-empty Error and no Lines.
-func loadPreview(repoRoot, repoRelPath string, targetLine, window int) previewContext {
-	pc := previewContext{Path: repoRelPath}
+// The returned previewContext also carries the anchor drift verdict
+// (Anchor / OriginalLine / EffectiveLine) so the template can surface
+// shifted / ambiguous / stale states transparently. When the finding
+// has no AnchorLine (legacy data), Anchor is StateUnknown and the
+// window centres on the originally-recorded line, matching the
+// pre-anchor behaviour.
+//
+// Errors are surfaced via Error rather than returned, so the template
+// can render a placeholder instead of failing the whole detail page.
+// Path traversal is rejected at this layer — `..` segments or absolute
+// file paths in f.File produce a non-empty Error and no Lines.
+func loadPreview(repoRoot string, f schema.Finding, window int) previewContext {
+	pc := previewContext{
+		Path:          f.File,
+		OriginalLine:  f.Line,
+		EffectiveLine: f.Line,
+	}
 	if repoRoot == "" {
 		pc.Error = "code preview unavailable: this run has no target_repo on its manifest"
 		return pc
 	}
 
-	abs, err := safeJoin(repoRoot, repoRelPath)
+	abs, err := safeJoin(repoRoot, f.File)
 	if err != nil {
 		pc.Error = fmt.Sprintf("code preview unavailable: %v", err)
 		return pc
 	}
 
-	f, err := os.Open(abs)
+	file, err := os.Open(abs)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			pc.Error = fmt.Sprintf("file not found in target_repo: %s", repoRelPath)
+			pc.Error = fmt.Sprintf("file not found in target_repo: %s", f.File)
 		} else {
 			pc.Error = fmt.Sprintf("read file: %v", err)
 		}
 		return pc
 	}
-	defer f.Close()
+	defer file.Close()
 
-	startLine := targetLine - window
-	if startLine < 1 {
-		startLine = 1
-	}
-	endLine := targetLine + window
-
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(file)
 	// Some source files have very long generated lines (vendored single-line
 	// minified JS, long comment URLs); 1MiB matches the scanner buffer the
 	// rest of the harness uses for JSONL.
 	sc.Buffer(make([]byte, 1<<16), 1<<20)
-
-	lineNum := 0
+	var lines []string
 	for sc.Scan() {
-		lineNum++
-		if lineNum < startLine {
-			continue
-		}
-		if lineNum > endLine {
-			break
-		}
-		pc.Lines = append(pc.Lines, previewLine{
-			Number:    lineNum,
-			Content:   sc.Text(),
-			Highlight: lineNum == targetLine,
-		})
+		lines = append(lines, sc.Text())
 	}
+	// bufio.ErrTooLong means we hit a line longer than 1MiB and the
+	// scanner stopped. We keep what we read so the preview still works
+	// for findings that live before the bad line — that mirrors the
+	// pre-anchor behaviour of streaming a window and breaking out
+	// early. Other scanner errors (I/O) are still hard failures.
+	truncated := false
 	if err := sc.Err(); err != nil {
-		pc.Error = fmt.Sprintf("scan file: %v", err)
-		pc.Lines = nil
+		if errors.Is(err, bufio.ErrTooLong) {
+			truncated = true
+		} else {
+			pc.Error = fmt.Sprintf("scan file: %v", err)
+			return pc
+		}
+	}
+
+	res := anchor.ApplyTruncationDemotion(anchor.ResolveFromLines(lines, f), truncated)
+	pc.Anchor = res.State
+	pc.OriginalLine = res.OriginalLine
+	pc.EffectiveLine = res.EffectiveLine
+
+	// Centre the window on the resolved line when we know where the
+	// anchor moved to; otherwise centre on the original line. For Stale,
+	// EffectiveLine is 0 — fall back to OriginalLine so the user can
+	// still see the surrounding context, with no row highlighted.
+	target := res.OriginalLine
+	if res.State == anchor.StateShifted || res.State == anchor.StateAmbiguous {
+		target = res.EffectiveLine
+	}
+	if target < 1 || target > len(lines) {
+		// Either the anchor is gone and the original line is past EOF,
+		// or there's no anchor at all and the file shrank below f.Line.
+		// Either way, no usable window — match the pre-anchor UX of
+		// reporting the line/total mismatch explicitly.
+		pc.Error = fmt.Sprintf("file has %d lines; finding refers to line %d", len(lines), res.OriginalLine)
 		return pc
 	}
-	// lineNum is now the file's total line count. The window may have
-	// returned some lines even when targetLine > total — e.g. 10-line
-	// file, target 12, window 6 reads lines 6-10 with no highlight.
-	// That's confusing UX, so report the mismatch explicitly.
-	if targetLine > lineNum {
-		pc.Lines = nil
-		pc.Error = fmt.Sprintf("file has %d lines; finding refers to line %d", lineNum, targetLine)
+
+	startLine := target - window
+	if startLine < 1 {
+		startLine = 1
+	}
+	endLine := target + window
+	if endLine > len(lines) {
+		endLine = len(lines)
+	}
+
+	// Stale findings get no highlight: the anchored content is gone, so
+	// no current line legitimately represents the finding's target.
+	highlight := res.EffectiveLine
+	if res.State == anchor.StateStale {
+		highlight = 0
+	}
+	for i := startLine; i <= endLine; i++ {
+		pc.Lines = append(pc.Lines, previewLine{
+			Number:    i,
+			Content:   lines[i-1],
+			Highlight: i == highlight,
+		})
 	}
 	return pc
 }

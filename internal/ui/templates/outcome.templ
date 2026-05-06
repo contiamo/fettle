@@ -15,67 +15,71 @@ templ OutcomeSection(v OutcomeSectionView) {
 					<span class="text-muted-foreground">currently </span>
 					<code class="font-mono text-foreground">{ v.Latest.Status }</code>
 					<span class="text-muted-foreground"> · marked by </span>
-					<code class="font-mono text-foreground">{ v.Latest.MarkedBy }</code>
+					<code class="font-mono text-foreground">{ v.Latest.Author }</code>
 				</span>
 			}
 		</header>
-		<form
-			hx-post={ v.PostURL() }
-			hx-target="#outcome-section"
-			hx-swap="outerHTML"
-			class="space-y-3 rounded-md border border-border bg-card p-3.5"
-		>
-			<div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-				<div class="space-y-1.5 sm:col-span-1">
-					<label for="outcome-status" class="text-[11px] font-medium text-foreground">Status</label>
-					<select
-						id="outcome-status"
-						name="status"
-						required
-						class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
-					>
-						<option value="">— pick —</option>
-						<option value="merged">merged</option>
-						<option value="closed">closed</option>
-						<option value="wontfix">wontfix</option>
-						<option value="other">other</option>
-					</select>
+		if ReviewerFromContext(ctx) == nil {
+			@identityRequired("record an outcome")
+		} else {
+			<form
+				hx-post={ v.PostURL() }
+				hx-target="#outcome-section"
+				hx-swap="outerHTML"
+				class="space-y-3 rounded-md border border-border bg-card p-3.5"
+			>
+				<div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+					<div class="space-y-1.5 sm:col-span-1">
+						<label for="outcome-status" class="text-[11px] font-medium text-foreground">Status</label>
+						<select
+							id="outcome-status"
+							name="status"
+							required
+							class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
+						>
+							<option value="">— pick —</option>
+							<option value="merged">merged</option>
+							<option value="closed">closed</option>
+							<option value="wontfix">wontfix</option>
+							<option value="other">other</option>
+						</select>
+					</div>
+					<div class="space-y-1.5 sm:col-span-2">
+						<label for="outcome-status-other" class="text-[11px] font-medium text-foreground">Status (if other)</label>
+						<input
+							id="outcome-status-other"
+							name="status_other"
+							type="text"
+							placeholder="free-form, used only when status = other"
+							class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
+							autocomplete="off"
+						/>
+					</div>
 				</div>
-				<div class="space-y-1.5 sm:col-span-2">
-					<label for="outcome-status-other" class="text-[11px] font-medium text-foreground">Status (if other)</label>
+				<div class="space-y-1.5">
+					<label for="outcome-pr" class="text-[11px] font-medium text-foreground">PR / commit URL (optional)</label>
 					<input
-						id="outcome-status-other"
-						name="status_other"
-						type="text"
-						placeholder="free-form, used only when status = other"
+						id="outcome-pr"
+						name="pr_url"
+						type="url"
+						placeholder="https://…"
 						class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
 						autocomplete="off"
 					/>
 				</div>
-			</div>
-			<div class="space-y-1.5">
-				<label for="outcome-pr" class="text-[11px] font-medium text-foreground">PR / commit URL (optional)</label>
-				<input
-					id="outcome-pr"
-					name="pr_url"
-					type="url"
-					placeholder="https://…"
-					class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
-					autocomplete="off"
-				/>
-			</div>
-			if v.Error != "" {
-				<p class="text-xs text-destructive">{ v.Error }</p>
-			}
-			<div class="flex justify-end">
-				<button
-					type="submit"
-					class="inline-flex items-center justify-center rounded-md bg-foreground text-background px-3 py-1.5 text-xs font-medium hover:bg-foreground/90 transition-colors cursor-pointer"
-				>
-					Record outcome
-				</button>
-			</div>
-		</form>
+				if v.Error != "" {
+					<p class="text-xs text-destructive">{ v.Error }</p>
+				}
+				<div class="flex justify-end">
+					<button
+						type="submit"
+						class="inline-flex items-center justify-center rounded-md bg-foreground text-background px-3 py-1.5 text-xs font-medium hover:bg-foreground/90 transition-colors cursor-pointer"
+					>
+						Record outcome
+					</button>
+				</div>
+			</form>
+		}
 		if len(v.History) > 0 {
 			<ol class="space-y-2 text-sm">
 				for i, o := range v.History {
@@ -97,7 +101,7 @@ templ outcomeEntry(o schema.Outcome, isLatest bool) {
 					<span class="text-[10px] uppercase tracking-[0.06em] text-primary">latest</span>
 				}
 				<span class="text-muted-foreground">·</span>
-				<code class="font-mono text-muted-foreground">{ o.MarkedBy }</code>
+				<code class="font-mono text-muted-foreground">{ o.Author }</code>
 			</div>
 			<span class="text-muted-foreground tabular-nums">{ o.At.Format("2006-01-02 15:04 MST") }</span>
 		</div>

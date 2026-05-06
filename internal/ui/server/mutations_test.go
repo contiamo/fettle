@@ -173,8 +173,11 @@ func TestReviewPost_AppendsAndRendersSwap(t *testing.T) {
 		t.Fatalf("got %d reviews, want 1", len(all))
 	}
 	got := all[0]
-	if got.Author != "alice" {
-		t.Errorf("Author = %q", got.Author)
+	if got.Author != "human:alice" {
+		t.Errorf("Author = %q, want human:alice", got.Author)
+	}
+	if got.AuthorSlug != "alice" {
+		t.Errorf("AuthorSlug = %q, want alice", got.AuthorSlug)
 	}
 	if got.Subject.Kind != schema.SubjectFinding || got.Subject.ID != findingID {
 		t.Errorf("Subject = %+v", got.Subject)
@@ -229,7 +232,7 @@ func TestReviewPost_404OnUnknownFinding(t *testing.T) {
 	}
 }
 
-func TestOutcomePost_AppendsWithMarkedBy(t *testing.T) {
+func TestOutcomePost_AppendsWithAuthor(t *testing.T) {
 	projectDir, runName, findingID := makeFindRun(t)
 	setIdentity(t, "alice")
 
@@ -263,8 +266,8 @@ func TestOutcomePost_AppendsWithMarkedBy(t *testing.T) {
 	if got.Status != "merged" {
 		t.Errorf("Status = %q", got.Status)
 	}
-	if got.MarkedBy != "human:alice" {
-		t.Errorf("MarkedBy = %q, want human:alice", got.MarkedBy)
+	if got.Author != "human:alice" {
+		t.Errorf("Author = %q, want human:alice", got.Author)
 	}
 	if got.PRURL != "https://example.com/pr/1" {
 		t.Errorf("PRURL = %q", got.PRURL)
@@ -360,6 +363,13 @@ func TestReviewView_DerivedCurrentLabels(t *testing.T) {
 
 func mustAppendReview(t *testing.T, rp *run.Path, author string, r schema.Review) {
 	t.Helper()
+	// The author slug is what the filename uses for routing/locking;
+	// the record's Author field is the canonical "who reviewed this"
+	// stamp that buildReviewView keys on. Default it to the human form
+	// of the slug so tests don't have to repeat it on every literal.
+	if r.Author == "" {
+		r.Author = "human:" + author
+	}
 	if err := rp.AppendReview(author, r); err != nil {
 		t.Fatalf("AppendReview: %v", err)
 	}

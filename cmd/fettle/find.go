@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/contiamo/fettle/internal/anchor"
 	"github.com/contiamo/fettle/internal/identity"
 	"github.com/contiamo/fettle/internal/run"
 	"github.com/contiamo/fettle/internal/schema"
@@ -238,6 +239,25 @@ func runAddFinding(cmd *cobra.Command, args []string) error {
 	}
 
 	createdBy := composeCreatedBy(os.Getenv(fettleAgentEnv), os.Getenv(fettleModelEnv))
+
+	// Capture the line text now so future readers can detect drift if
+	// the file changes. A capture failure (file unreadable, line out of
+	// range) leaves AnchorLine nil — the finding still records, and the
+	// UI shows it with no drift annotation rather than failing the
+	// agent's add. Dedupe runs have no direct target_repo on their
+	// manifest, so AnchorLine is left nil there too. We log capture
+	// failures to stderr so silent degradation doesn't hide a
+	// configuration mistake (e.g. agent passing a wrong --line).
+	var anchorLine *string
+	if manifest.TargetRepo != "" {
+		captured, capErr := anchor.Capture(manifest.TargetRepo, addFindingFlags.file, addFindingFlags.line)
+		if capErr != nil {
+			fmt.Fprintf(os.Stderr, "fettle add finding: anchor capture failed for %s:%d: %v\n", addFindingFlags.file, addFindingFlags.line, capErr)
+		} else {
+			anchorLine = &captured
+		}
+	}
+
 	finding := schema.Finding{
 		ID:          schema.NewFindingID(),
 		File:        addFindingFlags.file,
@@ -249,6 +269,7 @@ func runAddFinding(cmd *cobra.Command, args []string) error {
 		Labels:      labels,
 		References:  references,
 		Members:     members,
+		AnchorLine:  anchorLine,
 		CreatedBy:   createdBy,
 		CreatedAt:   time.Now().UTC(),
 	}
@@ -258,11 +279,14 @@ func runAddFinding(cmd *cobra.Command, args []string) error {
 	return printAddResult(map[string]any{"id": finding.ID}, addFindingFlags.verbose, finding.ID)
 }
 
-// markedBy returns the `marked_by` / `created_by` string for the
-// resolved author. Delegates the chain (env → config file → error) to
-// internal/identity so the CLI and the UI share one resolver. Agents
-// get the `agent:<name>[/<model>]` shape; humans get `human:<slug>`.
-func markedBy() (string, error) {
+// stamp returns the canonical author/created_by string for the
+// resolved identity. Delegates the chain (env → config file → error)
+// to internal/identity so the CLI and the UI share one resolver.
+// Agents get the `agent:<name>[/<model>]` shape; humans get
+// `human:<slug>`. The stringification itself is implemented as
+// Resolved.String() (Stringer) on the identity package; this wrapper
+// just adds the common error-mapping for missing identity.
+func stamp() (string, error) {
 	r, err := identity.Resolve()
 	if err != nil {
 		if errors.Is(err, identity.ErrNoIdentity) {
@@ -270,7 +294,7 @@ func markedBy() (string, error) {
 		}
 		return "", err
 	}
-	return identity.MarkedBy(r), nil
+	return r.String(), nil
 }
 
 // composeCreatedBy reassembles the per-finding `created_by` field from

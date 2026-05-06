@@ -98,7 +98,7 @@ func requireIdentity(w http.ResponseWriter, r *http.Request) (identity.Resolved,
 		http.Error(w, fmt.Sprintf("resolve identity: %v", err), http.StatusInternalServerError)
 		return identity.Resolved{}, false
 	}
-	target := "/identity?next=" + url.QueryEscape(r.URL.RequestURI())
+	target := "/identity?next=" + url.QueryEscape(bounceTarget(r))
 	if r.Header.Get("HX-Request") == "true" {
 		w.Header().Set("HX-Redirect", target)
 		w.WriteHeader(http.StatusOK)
@@ -106,6 +106,53 @@ func requireIdentity(w http.ResponseWriter, r *http.Request) (identity.Resolved,
 		http.Redirect(w, r, target, http.StatusSeeOther)
 	}
 	return identity.Resolved{}, false
+}
+
+// bounceTarget returns the URL to send the user back to after they
+// finish setting up their identity. The natural answer is "the page
+// they were on when they tried to mutate", which is *not*
+// r.URL.RequestURI(): mutation endpoints (review, outcome) accept POST
+// only, so following the original RequestURI on the post-identity
+// GET-redirect would 405. HTMX clients send HX-Current-URL — the page
+// the form lives on — and standard browsers send Referer for the
+// non-HTMX form-submission case; either gets us back to a real page.
+//
+// Falls through to the request URI when both headers are missing or
+// reference a different host (defence against open-redirect via
+// crafted Referer). safeNextParam later in the round trip rejects
+// anything that escapes the app, so this layer is conservative
+// rather than strictly necessary.
+func bounceTarget(r *http.Request) string {
+	for _, raw := range []string{r.Header.Get("HX-Current-URL"), r.Header.Get("Referer")} {
+		if rel := sameOriginPath(r, raw); rel != "" {
+			return rel
+		}
+	}
+	return r.URL.RequestURI()
+}
+
+// sameOriginPath extracts a path+query from raw if it's same-host as
+// r (or relative). Returns "" when the URL is unparseable, points to
+// a different host, or has no path component to redirect to.
+func sameOriginPath(r *http.Request, raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	if u.Host != "" && u.Host != r.Host {
+		return ""
+	}
+	if u.Path == "" {
+		return ""
+	}
+	out := u.Path
+	if u.RawQuery != "" {
+		out += "?" + u.RawQuery
+	}
+	return out
 }
 
 // safeNextParam validates that ?next= is a relative path inside the

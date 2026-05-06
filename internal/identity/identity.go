@@ -121,10 +121,16 @@ func Resolve() (Resolved, error) {
 	return Resolved{Slug: slug, IsAgent: false, Source: SourceConfigFile}, nil
 }
 
-// MarkedBy formats a Resolved as the marked_by / created_by record
-// stamp: `agent:<name>[/<model>]` for agent stamps, `human:<slug>`
-// for humans. Mirrors the CLI's composeCreatedBy + markedBy pair.
-func MarkedBy(r Resolved) string {
+// String formats a Resolved as the canonical stamp written into
+// findings.created_by, reviews.author, and outcomes.author:
+// `agent:<name>[/<model>]` for agent stamps, `human:<slug>` for
+// humans. Implementing Stringer means an identity stringifies
+// consistently anywhere fmt.* / log/slog touches it, not just at the
+// hand-coded write sites — and the formatting rule lives on the type
+// rather than as a free function. EnvModel is read at call time so
+// agents that switch models per request still produce a faithful
+// stamp without re-resolving the identity.
+func (r Resolved) String() string {
 	if r.IsAgent {
 		model := strings.TrimSpace(os.Getenv(EnvModel))
 		if model == "" {

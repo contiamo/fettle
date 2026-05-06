@@ -2,6 +2,7 @@ package templates
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/contiamo/fettle/internal/schema"
 )
@@ -25,13 +26,27 @@ templ FindingArticle(v FindingView) {
 		<header class="space-y-3">
 			<div class="flex items-baseline gap-3 flex-wrap">
 				@severityBadge(v.Finding.Severity)
-				<h1 class="font-serif italic text-[28px] leading-tight tracking-tight text-foreground">{ v.Finding.Title }</h1>
+				@anchorTopBadge(v.Preview.Anchor)
+				if v.Preview.Anchor == "stale" {
+					<h1 class="font-serif text-[28px] leading-tight tracking-tight text-muted-foreground">{ v.Finding.Title }</h1>
+				} else {
+					<h1 class="font-serif text-[28px] leading-tight tracking-tight text-foreground">{ v.Finding.Title }</h1>
+				}
 			</div>
 			<div class="flex items-baseline gap-3 text-[12.5px] text-muted-foreground flex-wrap">
 				<span class="font-mono text-foreground">{ v.Finding.File }</span>
-				<span class="font-mono text-muted-foreground/80">line { strconv.Itoa(v.Finding.Line) }</span>
+				@anchorLineLabel(v.Finding, v.Preview)
 				<span class="text-border" aria-hidden="true">·</span>
 				<a href={ templ.SafeURL("/runs/" + v.Manifest.Name) } class="hover:text-foreground transition-colors">{ v.Manifest.Name }</a>
+			</div>
+			<div class="flex items-baseline gap-3 text-[11px] text-muted-foreground flex-wrap">
+				<span><span class="text-muted-foreground/70">id</span> <code class="font-mono ml-1">{ v.Finding.ID }</code></span>
+				if v.Finding.CreatedBy != "" {
+					<span class="text-border" aria-hidden="true">·</span>
+					<span><span class="text-muted-foreground/70">by</span> <code class="font-mono ml-1">{ v.Finding.CreatedBy }</code></span>
+					<span class="text-border" aria-hidden="true">·</span>
+					<span class="tabular-nums">{ v.Finding.CreatedAt.Format("2006-01-02 15:04 MST") }</span>
+				}
 			</div>
 			if len(v.Finding.Labels) > 0 {
 				<div class="pt-1">
@@ -54,27 +69,38 @@ templ FindingArticle(v FindingView) {
 		}
 		@ReviewSection(v.Review)
 		@OutcomeSection(v.Outcome)
-		<footer class="text-[11px] text-muted-foreground pt-6 border-t border-border space-y-1">
-			<div>
-				<span class="text-muted-foreground/70">id</span>
-				<code class="font-mono ml-2">{ v.Finding.ID }</code>
-			</div>
-			if v.Finding.CreatedBy != "" {
-				<div>
-					<span class="text-muted-foreground/70">created by</span>
-					<code class="font-mono ml-2">{ v.Finding.CreatedBy }</code>
-					<span class="ml-2 tabular-nums">{ v.Finding.CreatedAt.Format("2006-01-02 15:04 MST") }</span>
-				</div>
-			}
-		</footer>
 	</article>
 }
 
 templ findingSection(title, body string) {
 	<section class="space-y-2.5">
 		<h2 class="text-[10px] font-medium tracking-[0.1em] uppercase text-muted-foreground">{ title }</h2>
-		<p class="text-[13.5px] text-foreground whitespace-pre-wrap leading-relaxed">{ body }</p>
+		<p class="text-[13.5px] text-foreground whitespace-pre-wrap leading-relaxed">
+			@RichText(body)
+		</p>
 	</section>
+}
+
+// RichText renders a finding body (description, suggestion, comment)
+// with backtick-delimited segments treated as inline `code`. Anything
+// not in a backtick pair flows as normal prose. The output preserves
+// whitespace via the surrounding <p>'s whitespace-pre-wrap so multi-
+// line bodies still wrap as the agent wrote them.
+//
+// We deliberately do NOT recognise fenced code blocks, bold/italic,
+// links, or any other Markdown shape: agents emit short imperatives
+// where the only structure that consistently shows up is "the
+// identifier I'm referring to". Adding more would expand the parser
+// to a full Markdown one and let an unrelated `_underscore_`
+// identifier render as italics.
+templ RichText(body string) {
+	for _, seg := range splitBackticks(body) {
+		if seg.IsCode {
+			<code class="font-mono text-[12px] bg-code-soft text-code-foreground px-1 py-px rounded">{ seg.Text }</code>
+		} else {
+			{ seg.Text }
+		}
+	}
 }
 
 templ referencesSection(refs []schema.Reference) {
@@ -143,10 +169,111 @@ templ codePreviewLineEl(l CodePreviewLine, target int) {
 	}
 }
 
+// anchorLineLabel renders the "line N" affordance in the finding
+// header, plus a drift badge when the finding's anchored line has
+// moved. The four observable states map to:
+//
+//	current/unknown  → "line 142"                (no badge)
+//	shifted          → "line 142 → 158" + moved  (muted)
+//	ambiguous        → "line 142 → ~158" + moved (muted, "~" hints "best guess")
+//	stale            → "line 142" struck-through (no badge here; the stale
+//	                   indicator sits in the title row beside severity, since
+//	                   "this finding may no longer apply" is a top-level
+//	                   judgment about the whole finding rather than a footnote
+//	                   about the line number)
+//
+// "Unknown" (legacy findings without AnchorLine) renders identically
+// to "current" — we don't surface a "no anchor data" badge because it
+// would be noise on every old finding without telling the reader
+// anything they can act on.
+templ anchorLineLabel(f schema.Finding, p CodePreview) {
+	if p.Anchor == "shifted" {
+		<span class="font-mono text-muted-foreground/80">line { strconv.Itoa(p.OriginalLine) } <span class="text-muted-foreground/60">→ { strconv.Itoa(p.EffectiveLine) }</span></span>
+		<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] uppercase tracking-[0.04em] font-medium bg-muted text-muted-foreground" title="The anchored line moved; the new location is shown.">moved</span>
+	} else if p.Anchor == "ambiguous" {
+		<span class="font-mono text-muted-foreground/80">line { strconv.Itoa(p.OriginalLine) } <span class="text-muted-foreground/60">→ ~{ strconv.Itoa(p.EffectiveLine) }</span></span>
+		<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] uppercase tracking-[0.04em] font-medium bg-muted text-muted-foreground" title="The anchored line content matches multiple lines; the nearest match is shown.">moved · multi</span>
+	} else if p.Anchor == "stale" {
+		<span class="font-mono text-muted-foreground/60 line-through">line { strconv.Itoa(p.OriginalLine) }</span>
+	} else {
+		<span class="font-mono text-muted-foreground/80">line { strconv.Itoa(f.Line) }</span>
+	}
+}
+
+// anchorTopBadge renders a single "stale" pill alongside the severity
+// chip in the finding-detail title row. Pulled out of the line-number
+// affordance below because stale is a finding-level signal — "the
+// anchored content is gone, so the whole finding may no longer
+// apply" — not a footnote about the line number. The pill picks up
+// the amber sev-medium tint we already use for warnings; rendering
+// only on stale (not shifted/ambiguous) keeps the title row from
+// turning into a chip salad.
+templ anchorTopBadge(state string) {
+	if state == "stale" {
+		<span
+			class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-medium tracking-tight bg-muted text-muted-foreground"
+			title="The anchored line is no longer in the file. The finding may no longer apply."
+		>stale</span>
+	}
+}
+
 func findingBreadcrumbs(runName string) []BreadcrumbItem {
 	return []BreadcrumbItem{
 		{Title: "Runs", Href: "/"},
 		{Title: runName, Href: "/runs/" + runName},
 		{Title: "Finding"},
 	}
+}
+
+// TextSegment is one slice of a body of text after backtick splitting.
+// Plain prose has IsCode false; an inline code span has IsCode true
+// and Text holds the content between (but not including) the
+// surrounding backticks.
+type TextSegment struct {
+	Text   string
+	IsCode bool
+}
+
+// splitBackticks tokenises s into alternating plain-prose and inline-
+// code segments. A pair of backticks `like this` becomes a code span;
+// a lone backtick with no closing partner stays as literal text so a
+// half-finished sentence doesn't swallow the rest of the body. Triple-
+// backtick fences and other Markdown shapes are NOT special-cased —
+// finding bodies are short imperatives and the only structure agents
+// reliably emit is "the identifier I mean", which lone-backtick
+// handling captures completely. Empty input returns nil.
+func splitBackticks(s string) []TextSegment {
+	if s == "" {
+		return nil
+	}
+	var out []TextSegment
+	i := 0
+	for i < len(s) {
+		j := strings.IndexByte(s[i:], '`')
+		if j < 0 {
+			out = append(out, TextSegment{Text: s[i:]})
+			break
+		}
+		if j > 0 {
+			out = append(out, TextSegment{Text: s[i : i+j]})
+		}
+		// Scan for the closing backtick.
+		k := strings.IndexByte(s[i+j+1:], '`')
+		if k < 0 {
+			// Unmatched opener — keep the rest, including the tick,
+			// as plain text rather than swallowing the tail.
+			out = append(out, TextSegment{Text: s[i+j:]})
+			break
+		}
+		// Empty span (`` two adjacent ticks) — emit literal "``" so we
+		// don't render an empty <code> element.
+		if k == 0 {
+			out = append(out, TextSegment{Text: "``"})
+			i = i + j + 2
+			continue
+		}
+		out = append(out, TextSegment{Text: s[i+j+1 : i+j+1+k], IsCode: true})
+		i = i + j + 1 + k + 1
+	}
+	return out
 }

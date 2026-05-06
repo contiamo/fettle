@@ -53,13 +53,18 @@ func ReviewFiles(runDir string) ([]ReviewFile, error) {
 }
 
 // FlatReview is one schema.Review flattened with the author slug
-// (which on-disk lives in the filename, not the record).
+// extracted from the filename. AuthorSlug is the bare reviews_<slug>
+// filename component used for routing and append-locking; Author is
+// the full prefixed stamp from the record (`human:slug` or
+// `agent:slug[/model]`), the canonical "who reviewed this" carried
+// on the JSONL line itself.
 type FlatReview struct {
-	Subject schema.Subject `json:"subject"`
-	Author  string         `json:"author"`
-	Labels  []string       `json:"labels"`
-	Comment string         `json:"comment,omitempty"`
-	At      time.Time      `json:"at"`
+	Subject    schema.Subject `json:"subject"`
+	Author     string         `json:"author"`
+	AuthorSlug string         `json:"-"`
+	Labels     []string       `json:"labels"`
+	Comment    string         `json:"comment,omitempty"`
+	At         time.Time      `json:"at"`
 }
 
 // LoadAllReviews reads every reviews_<author>.jsonl in the run folder
@@ -87,7 +92,7 @@ func (p *Path) LoadAllReviews() ([]FlatReview, error) {
 	return out, nil
 }
 
-func readReviewFile(path, author string) ([]FlatReview, error) {
+func readReviewFile(path, slug string) ([]FlatReview, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -102,11 +107,12 @@ func readReviewFile(path, author string) ([]FlatReview, error) {
 			continue
 		}
 		out = append(out, FlatReview{
-			Subject: r.Subject,
-			Author:  author,
-			Labels:  r.Labels,
-			Comment: r.Comment,
-			At:      r.At,
+			Subject:    r.Subject,
+			Author:     r.Author,
+			AuthorSlug: slug,
+			Labels:     r.Labels,
+			Comment:    r.Comment,
+			At:         r.At,
 		})
 	}
 	return out, sc.Err()

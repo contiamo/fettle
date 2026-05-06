@@ -1,14 +1,17 @@
 package server
 
 import (
+	"bufio"
+	"cmp"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 
+	"github.com/contiamo/fettle/internal/anchor"
 	"github.com/contiamo/fettle/internal/run"
 	"github.com/contiamo/fettle/internal/schema"
 	"github.com/contiamo/fettle/internal/ui/templates"
@@ -76,10 +79,18 @@ func runHandler(projectDir string) http.HandlerFunc {
 			}
 			sortFindings(findings)
 
+			anchors, staleCount := computeAnchorStates(manifest.TargetRepo, findings)
+			var currentGit *schema.GitInfo
+			if manifest.TargetRepo != "" {
+				currentGit = run.ReadGit(manifest.TargetRepo)
+			}
 			view := templates.RunFindingsView{
-				Manifest: manifest,
-				Findings: findings,
-				Facets:   computeFacets(findings),
+				Manifest:   manifest,
+				Findings:   findings,
+				Facets:     computeFacets(findings),
+				Anchors:    anchors,
+				StaleCount: staleCount,
+				CurrentGit: currentGit,
 			}
 			// Pre-select the finding identified by ?focus= (the workspace
 			// pushes this on row click) so refresh / share lands on the
@@ -155,12 +166,11 @@ func orderedSeverities(counts map[string]int) []templates.FacetItem {
 	for v, c := range counts {
 		out = append(out, templates.FacetItem{Value: v, Display: v, Count: c})
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		ri, rj := severityRank(out[i].Value), severityRank(out[j].Value)
-		if ri != rj {
-			return ri < rj
-		}
-		return out[i].Value < out[j].Value
+	slices.SortStableFunc(out, func(a, b templates.FacetItem) int {
+		return cmp.Or(
+			cmp.Compare(severityRank(a.Value), severityRank(b.Value)),
+			cmp.Compare(a.Value, b.Value),
+		)
 	})
 	return out
 }
@@ -205,18 +215,23 @@ func groupedLabelFacets(counts map[string]int) []templates.LabelFacetGroup {
 	for p := range byPrefix {
 		prefixes = append(prefixes, p)
 	}
-	sort.Slice(prefixes, func(i, j int) bool {
-		if (prefixes[i] == "") != (prefixes[j] == "") {
-			return prefixes[j] == ""
+	slices.SortFunc(prefixes, func(a, b string) int {
+		// Empty prefix ("Other") sinks to the end regardless of
+		// alphabetical order; otherwise straight string compare.
+		if (a == "") != (b == "") {
+			if b == "" {
+				return -1
+			}
+			return 1
 		}
-		return prefixes[i] < prefixes[j]
+		return cmp.Compare(a, b)
 	})
 
 	groups := make([]templates.LabelFacetGroup, 0, len(prefixes))
 	for _, p := range prefixes {
 		b := byPrefix[p]
-		sort.SliceStable(b.items, func(i, j int) bool {
-			return b.items[i].Display < b.items[j].Display
+		slices.SortStableFunc(b.items, func(a, c templates.FacetItem) int {
+			return cmp.Compare(a.Display, c.Display)
 		})
 		groups = append(groups, templates.LabelFacetGroup{
 			Prefix: p,
@@ -262,15 +277,12 @@ func prefixTitle(prefix string) string {
 // a diff. Stable sort means findings that match on every key keep
 // their on-disk append order.
 func sortFindings(findings []schema.Finding) {
-	sort.SliceStable(findings, func(i, j int) bool {
-		ri, rj := severityRankOf(findings[i].Severity), severityRankOf(findings[j].Severity)
-		if ri != rj {
-			return ri < rj
-		}
-		if findings[i].File != findings[j].File {
-			return findings[i].File < findings[j].File
-		}
-		return findings[i].Line < findings[j].Line
+	slices.SortStableFunc(findings, func(a, b schema.Finding) int {
+		return cmp.Or(
+			cmp.Compare(severityRankOf(a.Severity), severityRankOf(b.Severity)),
+			cmp.Compare(a.File, b.File),
+			cmp.Compare(a.Line, b.Line),
+		)
 	})
 }
 
@@ -282,4 +294,119 @@ func severityRankOf(s *string) int {
 		return 4
 	}
 	return severityRank(*s)
+}
+
+// computeAnchorStates resolves drift state for every finding so the
+// list-view rows can carry a data-anchor attribute. Reading happens
+// once per unique file via fileLineCache below — large runs typically
+// concentrate findings into a handful of files, so caching turns
+// O(findings * file) into roughly O(unique_files * file + findings).
+//
+// repoRoot empty (merge / dedupe runs without a target_repo on the
+// manifest) returns "unknown" for every finding without any I/O —
+// drift is meaningless when we don't know which checkout to compare
+// against. Per-file read failures (missing file, traversal-rejected,
+// I/O error) likewise mark the affected findings unknown rather than
+// failing the whole page.
+func computeAnchorStates(repoRoot string, findings []schema.Finding) (map[string]string, int) {
+	states := make(map[string]string, len(findings))
+	stale := 0
+	if repoRoot == "" {
+		for _, f := range findings {
+			states[f.ID] = anchorStateName(anchor.StateUnknown)
+		}
+		return states, 0
+	}
+	cache := newFileLineCache()
+	for _, f := range findings {
+		lines, truncated, ok := cache.get(repoRoot, f.File)
+		if !ok {
+			states[f.ID] = anchorStateName(anchor.StateUnknown)
+			continue
+		}
+		res := anchor.ApplyTruncationDemotion(anchor.ResolveFromLines(lines, f), truncated)
+		name := anchorStateName(res.State)
+		states[f.ID] = name
+		if res.State == anchor.StateStale {
+			stale++
+		}
+	}
+	return states, stale
+}
+
+// anchorStateName mirrors the wire vocabulary the templates use. Kept
+// here so the templates package doesn't need to import anchor (and so
+// callers can treat the value as opaque from Go's perspective).
+func anchorStateName(s anchor.State) string {
+	switch s {
+	case anchor.StateCurrent:
+		return "current"
+	case anchor.StateShifted:
+		return "shifted"
+	case anchor.StateAmbiguous:
+		return "ambiguous"
+	case anchor.StateStale:
+		return "stale"
+	default:
+		return "unknown"
+	}
+}
+
+// fileLineCache memoises one file's contents (and whether the read
+// was truncated by bufio.ErrTooLong) for the lifetime of a single
+// request. The negative-cache entry (lines=nil, ok=false) prevents
+// retrying I/O on every finding that lives in the same broken file.
+type fileLineCache struct {
+	entries map[string]fileLineCacheEntry
+}
+
+type fileLineCacheEntry struct {
+	lines     []string
+	truncated bool
+	ok        bool
+}
+
+func newFileLineCache() *fileLineCache {
+	return &fileLineCache{entries: map[string]fileLineCacheEntry{}}
+}
+
+func (c *fileLineCache) get(repoRoot, repoRel string) ([]string, bool, bool) {
+	if e, found := c.entries[repoRel]; found {
+		return e.lines, e.truncated, e.ok
+	}
+	lines, truncated, err := readRepoFileLines(repoRoot, repoRel)
+	e := fileLineCacheEntry{lines: lines, truncated: truncated, ok: err == nil}
+	c.entries[repoRel] = e
+	return e.lines, e.truncated, e.ok
+}
+
+// readRepoFileLines is the list-view counterpart of loadPreview's file
+// scan: same buffer settings, same soft-handling of bufio.ErrTooLong.
+// We don't share code with loadPreview because that function bundles
+// safeJoin + window-rendering + drift detection in one pass and lives
+// behind a different result type; pulling out a shared scanner adds
+// more indirection than it saves.
+func readRepoFileLines(repoRoot, repoRel string) ([]string, bool, error) {
+	abs, err := safeJoin(repoRoot, repoRel)
+	if err != nil {
+		return nil, false, err
+	}
+	f, err := os.Open(abs)
+	if err != nil {
+		return nil, false, err
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<16), 1<<20)
+	var lines []string
+	for sc.Scan() {
+		lines = append(lines, sc.Text())
+	}
+	if err := sc.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			return lines, true, nil
+		}
+		return nil, false, err
+	}
+	return lines, false, nil
 }

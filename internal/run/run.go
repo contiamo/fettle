@@ -95,7 +95,7 @@ func CreateForFind(opts CreateFindOpts) (*Path, error) {
 		FettleVersion: project.Version,
 		CreatedAt:     time.Now().UTC(),
 		TargetRepo:    opts.TargetRepo,
-		TargetRepoGit: gitInfo(opts.TargetRepo),
+		TargetRepoGit: ReadGit(opts.TargetRepo),
 		Include:       opts.Include,
 		Exclude:       opts.Exclude,
 		Agent:         agentInfoFromSpec(opts.FindSpec),

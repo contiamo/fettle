@@ -92,12 +92,29 @@ type FindingView struct {
 // the full sorted list (the left+middle panes filter it client-side);
 // Selected and Detail describe the finding pre-rendered into the right
 // pane for the initial GET. Both are zero-valued for an empty run.
+//
+// Anchors maps each finding's id to its drift state ("current",
+// "shifted", "ambiguous", "stale", or "unknown") so the list-view
+// rows can carry a `data-anchor` attribute and the rail can offer a
+// "Hide stale" toggle. StaleCount is the number of findings whose
+// state resolved to "stale"; the rail uses it both to decide whether
+// to render the drift section at all and to display a count.
+//
+// CurrentGit is the target repo's git state at render time, used to
+// compare against the scan-time snapshot in Manifest.TargetRepoGit.
+// nil when git isn't available or the run has no target_repo (merge
+// / dedupe). The header surfaces a subtle indicator when the two
+// differ so reviewers don't mistake "everything turned stale" for a
+// data problem when really they switched branches.
 type RunFindingsView struct {
-	Manifest schema.RunManifest
-	Findings []schema.Finding
-	Facets   FindingFacets
-	Selected *schema.Finding
-	Detail   FindingView
+	Manifest   schema.RunManifest
+	Findings   []schema.Finding
+	Facets     FindingFacets
+	Selected   *schema.Finding
+	Detail     FindingView
+	Anchors    map[string]string
+	StaleCount int
+	CurrentGit *schema.GitInfo
 }
 
 // FindingFacets are the filter groups on the left rail. Severity is
@@ -134,11 +151,22 @@ type FacetItem struct {
 // Error is non-empty when the preview couldn't be produced (no
 // target_repo, file moved, traversal attempt, etc.) — the template
 // shows a placeholder in that case rather than failing the page.
+//
+// Anchor describes whether the finding's anchored line still sits at
+// the original location. One of "current", "shifted", "ambiguous",
+// "stale", or "unknown" (legacy findings without an AnchorLine). The
+// template branches on this string to surface drift to the reviewer.
+// OriginalLine is the line as recorded on the finding; EffectiveLine
+// is the resolved current location (0 when stale, equal to
+// OriginalLine when current/unknown).
 type CodePreview struct {
-	Path   string
-	Error  string
-	Lines  []CodePreviewLine
-	Target int // 1-based line number the finding points at
+	Path          string
+	Error         string
+	Lines         []CodePreviewLine
+	Target        int // 1-based line number the finding points at
+	Anchor        string
+	OriginalLine  int
+	EffectiveLine int
 }
 
 // CodePreviewLine is one row in the preview block. Highlight marks

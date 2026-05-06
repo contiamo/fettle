@@ -156,16 +156,16 @@ func TestSave_RejectsInvalidSlug(t *testing.T) {
 	}
 }
 
-func TestMarkedBy_Shapes(t *testing.T) {
+func TestResolved_String_Shapes(t *testing.T) {
 	withEnv(t, map[string]string{EnvModel: ""})
-	if got := MarkedBy(Resolved{Slug: "alice"}); got != "human:alice" {
+	if got := (Resolved{Slug: "alice"}).String(); got != "human:alice" {
 		t.Errorf("human shape = %q", got)
 	}
-	if got := MarkedBy(Resolved{Slug: "claude", IsAgent: true}); got != "agent:claude" {
+	if got := (Resolved{Slug: "claude", IsAgent: true}).String(); got != "agent:claude" {
 		t.Errorf("agent (no model) shape = %q", got)
 	}
 	withEnv(t, map[string]string{EnvModel: "sonnet-4-6"})
-	if got := MarkedBy(Resolved{Slug: "claude", IsAgent: true}); got != "agent:claude/sonnet-4-6" {
+	if got := (Resolved{Slug: "claude", IsAgent: true}).String(); got != "agent:claude/sonnet-4-6" {
 		t.Errorf("agent (with model) shape = %q", got)
 	}
 }

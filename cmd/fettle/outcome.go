@@ -125,25 +125,25 @@ func runAddOutcome(cmd *cobra.Command, args []string) error {
 		return validationError([]string{kindErr.Error()})
 	}
 
-	mb, err := markedBy()
+	author, err := stamp()
 	if err != nil {
 		return validationError([]string{err.Error()})
 	}
 
 	o := schema.Outcome{
-		Subject:  subject,
-		Status:   strings.TrimSpace(addOutcomeFlags.status),
-		PRURL:    strings.TrimSpace(addOutcomeFlags.prURL),
-		At:       time.Now().UTC(),
-		MarkedBy: mb,
+		Subject: subject,
+		Author:  author,
+		Status:  strings.TrimSpace(addOutcomeFlags.status),
+		PRURL:   strings.TrimSpace(addOutcomeFlags.prURL),
+		At:      time.Now().UTC(),
 	}
 	if err := rp.AppendOutcome(o); err != nil {
 		return internalError(fmt.Errorf("append outcome: %w", err))
 	}
 	return printAddResult(map[string]any{
-		"subject":   o.Subject,
-		"at":        o.At,
-		"marked_by": o.MarkedBy,
+		"subject": o.Subject,
+		"at":      o.At,
+		"author":  o.Author,
 	}, addOutcomeFlags.verbose, subject.ID)
 }
 
