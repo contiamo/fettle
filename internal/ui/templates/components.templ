@@ -148,30 +148,28 @@ templ SeverityPill(severity *string) {
 	}
 }
 
-// LabelChips renders a flat label list, grouping by prefix into
-// titled subsections so the detail page reads with the same shape
-// as the filter rail. Labels share their prefix (e.g.
-// "category:smell", "category:convention") collapse under one
-// "Category" heading, with each chip showing only the post-prefix
-// half — the prefix stays in the heading, not in chip text.
-// Unprefixed labels collapse into an "Other" group at the end.
+// LabelChips renders a flat label list, grouping by prefix with the
+// kicker label inline next to the chips so several groups can sit on
+// one row before wrapping. The detail view uses this — full-section
+// stacking (heading-above-chips) ate too much vertical space when a
+// finding had 3-4 prefix groups. Each group reads as
+// "CATEGORY chip chip   CONFIDENCE chip" and the row wraps as a unit.
 //
-// Empty input renders nothing. Order: prefixes alphabetical, then
-// "Other" last; items alphabetical within each group.
+// Labels share their prefix (e.g. "category:smell",
+// "category:convention") collapse under one "Category" kicker, with
+// each chip showing only the post-prefix half — the prefix stays in
+// the kicker, not in chip text. Unprefixed labels collapse into an
+// "Other" group at the end. Empty input renders nothing.
 templ LabelChips(labels []string) {
 	if len(labels) > 0 {
 		{{ groups := groupLabels(labels) }}
-		<div class="space-y-2.5">
+		<div class="flex flex-wrap gap-x-4 gap-y-1.5 items-baseline">
 			for _, g := range groups {
-				<div class="space-y-1">
-					@SectionHeading(g.title)
-					<div class="flex flex-wrap gap-1">
-						for _, item := range g.items {
-							<span class="inline-flex items-center px-1.5 py-0.5 rounded border border-border bg-muted text-[11px] text-muted-foreground font-mono">
-								{ item.display }
-							</span>
-						}
-					</div>
+				<div class="flex items-baseline gap-1.5 flex-wrap">
+					<span class="text-[10px] font-medium tracking-[0.1em] uppercase text-muted-foreground shrink-0">{ g.title }</span>
+					for _, item := range g.items {
+						<span class="inline-flex items-center px-1.5 py-0.5 rounded border border-border bg-muted text-[11px] text-muted-foreground font-mono">{ item.display }</span>
+					}
 				</div>
 			}
 		</div>
