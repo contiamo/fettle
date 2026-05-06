@@ -5,6 +5,9 @@ import (
 	"strings"
 
 	"github.com/contiamo/fettle/internal/ui/components/button"
+	"github.com/contiamo/fettle/internal/ui/components/form"
+	"github.com/contiamo/fettle/internal/ui/components/input"
+	"github.com/contiamo/fettle/internal/ui/components/textarea"
 )
 
 // ReviewSection renders the label/comment form alongside the per-author
@@ -31,50 +34,57 @@ templ ReviewSection(v ReviewSectionView) {
 				hx-swap="outerHTML"
 				class="space-y-3 rounded-md border border-border bg-card p-3.5"
 			>
-				<div class="space-y-1.5">
-					<label for="review-labels" class="text-[11px] font-medium text-foreground">Labels</label>
-					<input
-						id="review-labels"
-						name="labels"
-						type="text"
-						placeholder="comma- or space-separated, e.g. ack, fp"
-						value={ strings.Join(myLatestLabels(ctx, v.Entries), ", ") }
-						class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
-						autocomplete="off"
-					/>
-					<p class="text-[11px] text-muted-foreground">
+				@form.Item() {
+					@form.Label(form.LabelProps{For: "review-labels"}) {
+						Labels
+					}
+					@input.Input(input.Props{
+						ID:          "review-labels",
+						Name:        "labels",
+						Type:        input.TypeText,
+						Placeholder: "comma- or space-separated, e.g. ack, fp",
+						Value:       strings.Join(myLatestLabels(ctx, v.Entries), ", "),
+						Class:       "font-mono",
+						Attributes:  templ.Attributes{"autocomplete": "off"},
+					})
+					@form.Description() {
 						Your current label set on this { v.SubjectKind }; submitting saves whatever's in the box (clear it to remove all of yours).
-					</p>
-				</div>
+					}
+				}
 				{{ currentSev := myLatestSeverityValue(ctx, v.Entries) }}
-				<div class="space-y-1.5">
-					<label for="review-severity" class="text-[11px] font-medium text-foreground">Severity</label>
+				@form.Item() {
+					@form.Label(form.LabelProps{For: "review-severity"}) {
+						Severity
+					}
 					<select
 						id="review-severity"
 						name="severity"
-						class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
+						class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
 					>
 						<option value="" selected?={ currentSev == "" }>— defer to LLM —</option>
 						<option value="high" selected?={ currentSev == "high" }>high</option>
 						<option value="medium" selected?={ currentSev == "medium" }>medium</option>
 						<option value="low" selected?={ currentSev == "low" }>low</option>
 					</select>
-					<p class="text-[11px] text-muted-foreground">
+					@form.Description() {
 						Override the LLM's initial assessment. Defer means the find-time value stays in effect; the latest reviewer's choice across all reviewers wins.
-					</p>
-				</div>
-				<div class="space-y-1.5">
-					<label for="review-comment" class="text-[11px] font-medium text-foreground">Comment</label>
-					<textarea
-						id="review-comment"
-						name="comment"
-						rows="3"
-						placeholder="Optional"
-						class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring resize-y"
-					></textarea>
-				</div>
+					}
+				}
+				@form.Item() {
+					@form.Label(form.LabelProps{For: "review-comment"}) {
+						Comment
+					}
+					@textarea.Textarea(textarea.Props{
+						ID:          "review-comment",
+						Name:        "comment",
+						Rows:        3,
+						Placeholder: "Optional",
+					})
+				}
 				if v.Error != "" {
-					<p class="text-xs text-destructive">{ v.Error }</p>
+					@form.Message(form.MessageProps{Variant: form.MessageVariantError}) {
+						{ v.Error }
+					}
 				}
 				<div class="flex justify-end">
 					@button.Button(button.Props{Type: button.TypeSubmit, Size: button.SizeSm}) {

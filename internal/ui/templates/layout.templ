@@ -3,7 +3,10 @@ package templates
 import (
 	"github.com/contiamo/fettle/internal/ui/components/dropdown"
 	"github.com/contiamo/fettle/internal/ui/components/icon"
+	"github.com/contiamo/fettle/internal/ui/components/input"
+	"github.com/contiamo/fettle/internal/ui/components/label"
 	"github.com/contiamo/fettle/internal/ui/components/popover"
+	"github.com/contiamo/fettle/internal/ui/components/textarea"
 )
 
 // LayoutMode controls how the page's <main> wrapper is composed.
@@ -33,6 +36,9 @@ templ Layout(title string, breadcrumbs []BreadcrumbItem, mode LayoutMode) {
 			<script type="module" src={ assetURL("/static/dist/app.js", JSVersion) }></script>
 			@popover.Script()
 			@dropdown.Script()
+			@input.Script()
+			@label.Script()
+			@textarea.Script()
 			@themeInitTag()
 		</head>
 		<body class="font-sans min-h-screen bg-background text-foreground antialiased">

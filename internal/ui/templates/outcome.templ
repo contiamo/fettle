@@ -3,6 +3,8 @@ package templates
 import (
 	"github.com/contiamo/fettle/internal/schema"
 	"github.com/contiamo/fettle/internal/ui/components/button"
+	"github.com/contiamo/fettle/internal/ui/components/form"
+	"github.com/contiamo/fettle/internal/ui/components/input"
 )
 
 // OutcomeSection renders the outcome form (status + optional pr_url)
@@ -32,13 +34,15 @@ templ OutcomeSection(v OutcomeSectionView) {
 				class="space-y-3 rounded-md border border-border bg-card p-3.5"
 			>
 				<div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-					<div class="space-y-1.5 sm:col-span-1">
-						<label for="outcome-status" class="text-[11px] font-medium text-foreground">Status</label>
+					@form.Item(form.ItemProps{Class: "sm:col-span-1"}) {
+						@form.Label(form.LabelProps{For: "outcome-status"}) {
+							Status
+						}
 						<select
 							id="outcome-status"
 							name="status"
 							required
-							class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
+							class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
 						>
 							<option value="">— pick —</option>
 							<option value="merged">merged</option>
@@ -46,32 +50,38 @@ templ OutcomeSection(v OutcomeSectionView) {
 							<option value="wontfix">wontfix</option>
 							<option value="other">other</option>
 						</select>
-					</div>
-					<div class="space-y-1.5 sm:col-span-2">
-						<label for="outcome-status-other" class="text-[11px] font-medium text-foreground">Status (if other)</label>
-						<input
-							id="outcome-status-other"
-							name="status_other"
-							type="text"
-							placeholder="free-form, used only when status = other"
-							class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
-							autocomplete="off"
-						/>
-					</div>
+					}
+					@form.Item(form.ItemProps{Class: "sm:col-span-2"}) {
+						@form.Label(form.LabelProps{For: "outcome-status-other"}) {
+							Status (if other)
+						}
+						@input.Input(input.Props{
+							ID:          "outcome-status-other",
+							Name:        "status_other",
+							Type:        input.TypeText,
+							Placeholder: "free-form, used only when status = other",
+							Class:       "font-mono",
+							Attributes:  templ.Attributes{"autocomplete": "off"},
+						})
+					}
 				</div>
-				<div class="space-y-1.5">
-					<label for="outcome-pr" class="text-[11px] font-medium text-foreground">PR / commit URL (optional)</label>
-					<input
-						id="outcome-pr"
-						name="pr_url"
-						type="url"
-						placeholder="https://…"
-						class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
-						autocomplete="off"
-					/>
-				</div>
+				@form.Item() {
+					@form.Label(form.LabelProps{For: "outcome-pr"}) {
+						PR / commit URL (optional)
+					}
+					@input.Input(input.Props{
+						ID:          "outcome-pr",
+						Name:        "pr_url",
+						Type:        input.TypeURL,
+						Placeholder: "https://…",
+						Class:       "font-mono",
+						Attributes:  templ.Attributes{"autocomplete": "off"},
+					})
+				}
 				if v.Error != "" {
-					<p class="text-xs text-destructive">{ v.Error }</p>
+					@form.Message(form.MessageProps{Variant: form.MessageVariantError}) {
+						{ v.Error }
+					}
 				}
 				<div class="flex justify-end">
 					@button.Button(button.Props{Type: button.TypeSubmit, Size: button.SizeSm}) {
