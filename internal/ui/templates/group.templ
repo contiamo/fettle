@@ -13,7 +13,7 @@ templ GroupDetail(v GroupView) {
 	@Page(v.Group.Title, groupBreadcrumbs(v.Manifest.Name)) {
 		<article class="space-y-7 max-w-4xl">
 			<header class="space-y-3">
-				<h1 class="font-serif italic text-[28px] leading-tight tracking-tight">{ v.Group.Title }</h1>
+				<h1 class="font-serif text-[28px] leading-tight tracking-tight text-foreground">{ v.Group.Title }</h1>
 				<div class="flex items-baseline gap-3 text-[12.5px] text-muted-foreground">
 					<span class="tabular-nums">
 						{ strconv.Itoa(len(v.Group.FindingIDs)) }
@@ -26,9 +26,22 @@ templ GroupDetail(v GroupView) {
 					<span class="text-border" aria-hidden="true">·</span>
 					<a href={ templ.SafeURL("/runs/" + v.Manifest.Name) } class="hover:text-foreground transition-colors">{ v.Manifest.Name }</a>
 				</div>
+				<div class="flex items-baseline gap-3 text-[11px] text-muted-foreground flex-wrap">
+					<span><span class="text-muted-foreground/70">id</span> <span class="ml-1">@DataCode(DataCodeID, v.Group.ID)</span></span>
+					if v.Group.CreatedBy != "" {
+						<span class="text-border" aria-hidden="true">·</span>
+						<span><span class="text-muted-foreground/70">by</span> <span class="ml-1">@AuthorStamp(v.Group.CreatedBy)</span></span>
+						<span class="text-border" aria-hidden="true">·</span>
+						<span class="tabular-nums">{ v.Group.CreatedAt.Format("2006-01-02 15:04 MST") }</span>
+					}
+					if v.Manifest.InputRun != "" {
+						<span class="text-border" aria-hidden="true">·</span>
+						<span><span class="text-muted-foreground/70">input run</span> <span class="ml-1">@DataCode(DataCodeID, v.Manifest.InputRun)</span></span>
+					}
+				</div>
 				if len(v.Group.Labels) > 0 {
 					<div class="pt-1">
-						@labelChips(v.Group.Labels)
+						@LabelChips(v.Group.Labels)
 					</div>
 				}
 			</header>
@@ -38,32 +51,13 @@ templ GroupDetail(v GroupView) {
 			@groupMembersSection(v)
 			@ReviewSection(v.Review)
 			@OutcomeSection(v.Outcome)
-			<footer class="text-[11px] text-muted-foreground pt-6 border-t border-border space-y-1">
-				<div>
-					<span class="text-muted-foreground/70">id</span>
-					<code class="font-mono ml-2">{ v.Group.ID }</code>
-				</div>
-				if v.Group.CreatedBy != "" {
-					<div>
-						<span class="text-muted-foreground/70">created by</span>
-						<code class="font-mono ml-2">{ v.Group.CreatedBy }</code>
-						<span class="ml-2 tabular-nums">{ v.Group.CreatedAt.Format("2006-01-02 15:04 MST") }</span>
-					</div>
-				}
-				if v.Manifest.InputRun != "" {
-					<div>
-						<span class="text-muted-foreground/70">input run</span>
-						<code class="font-mono ml-2">{ v.Manifest.InputRun }</code>
-					</div>
-				}
-			</footer>
 		</article>
 	}
 }
 
 templ groupMembersSection(v GroupView) {
 	<section class="space-y-2.5">
-		<h2 class="text-[10px] font-medium tracking-[0.1em] uppercase text-muted-foreground">Members</h2>
+		@SectionHeading("Members")
 		if len(v.Members) == 0 && len(v.MissingIDs) == 0 {
 			<div class="text-sm text-muted-foreground italic">This group has no members.</div>
 		} else {
@@ -113,10 +107,10 @@ templ groupMemberRow(inputRunName string, f schema.Finding) {
 			<a href={ templ.SafeURL(href) } class="text-foreground group-hover:text-primary">{ f.Title }</a>
 		</td>
 		<td class="px-4 py-3 whitespace-nowrap">
-			@severityBadge(f.Severity)
+			@SeverityPill(f.Severity)
 		</td>
 		<td class="px-4 py-3">
-			@labelChips(f.Labels)
+			@LabelChips(f.Labels)
 		</td>
 	</tr>
 }

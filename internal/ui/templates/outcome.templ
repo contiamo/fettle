@@ -1,6 +1,9 @@
 package templates
 
-import "github.com/contiamo/fettle/internal/schema"
+import (
+	"github.com/contiamo/fettle/internal/schema"
+	"github.com/contiamo/fettle/internal/ui/components/button"
+)
 
 // OutcomeSection renders the outcome form (status + optional pr_url)
 // and the chronological history of outcome events. Latest event is
@@ -9,13 +12,13 @@ import "github.com/contiamo/fettle/internal/schema"
 templ OutcomeSection(v OutcomeSectionView) {
 	<section id="outcome-section" class="space-y-3 border-t border-border pt-6">
 		<header class="flex items-baseline justify-between gap-3">
-			<h2 class="text-[10px] font-medium tracking-[0.1em] uppercase text-muted-foreground">Outcome</h2>
+			@SectionHeading("Outcome")
 			if v.Latest != nil {
-				<span class="text-[11px]">
-					<span class="text-muted-foreground">currently </span>
-					<code class="font-mono text-foreground">{ v.Latest.Status }</code>
-					<span class="text-muted-foreground"> · marked by </span>
-					<code class="font-mono text-foreground">{ v.Latest.Author }</code>
+				<span class="text-[11px] flex items-baseline gap-2">
+					<span class="text-muted-foreground">currently</span>
+					@DataCode(DataCodeStatus, v.Latest.Status)
+					<span class="text-muted-foreground">· marked by</span>
+					@AuthorStamp(v.Latest.Author)
 				</span>
 			}
 		</header>
@@ -71,12 +74,9 @@ templ OutcomeSection(v OutcomeSectionView) {
 					<p class="text-xs text-destructive">{ v.Error }</p>
 				}
 				<div class="flex justify-end">
-					<button
-						type="submit"
-						class="inline-flex items-center justify-center rounded-md bg-foreground text-background px-3 py-1.5 text-xs font-medium hover:bg-foreground/90 transition-colors cursor-pointer"
-					>
+					@button.Button(button.Props{Type: button.TypeSubmit, Size: button.SizeSm}) {
 						Record outcome
-					</button>
+					}
 				</div>
 			</form>
 		}
@@ -87,7 +87,7 @@ templ OutcomeSection(v OutcomeSectionView) {
 				}
 			</ol>
 		} else {
-			<p class="text-[11px] text-muted-foreground italic">No outcome events yet.</p>
+			@EmptyHint("No outcome events yet.")
 		}
 	</section>
 }
@@ -96,12 +96,12 @@ templ outcomeEntry(o schema.Outcome, isLatest bool) {
 	<li class="rounded-md border border-border bg-surface-sunken p-3 space-y-1.5">
 		<div class="flex items-baseline justify-between gap-3 text-xs">
 			<div class="flex items-baseline gap-2">
-				<code class="font-mono text-foreground">{ o.Status }</code>
+				@DataCode(DataCodeStatus, o.Status)
 				if isLatest {
-					<span class="text-[10px] uppercase tracking-[0.06em] text-primary">latest</span>
+					@StatusPill(StatusToneInfo, "latest")
 				}
 				<span class="text-muted-foreground">·</span>
-				<code class="font-mono text-muted-foreground">{ o.Author }</code>
+				@AuthorStamp(o.Author)
 			</div>
 			<span class="text-muted-foreground tabular-nums">{ o.At.Format("2006-01-02 15:04 MST") }</span>
 		</div>

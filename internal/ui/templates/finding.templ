@@ -25,7 +25,7 @@ templ FindingArticle(v FindingView) {
 	<article class="px-8 py-7 space-y-7">
 		<header class="space-y-3">
 			<div class="flex items-baseline gap-3 flex-wrap">
-				@severityBadge(v.Finding.Severity)
+				@SeverityPill(v.Finding.Severity)
 				@anchorTopBadge(v.Preview.Anchor)
 				if v.Preview.Anchor == "stale" {
 					<h1 class="font-serif text-[28px] leading-tight tracking-tight text-muted-foreground">{ v.Finding.Title }</h1>
@@ -40,17 +40,17 @@ templ FindingArticle(v FindingView) {
 				<a href={ templ.SafeURL("/runs/" + v.Manifest.Name) } class="hover:text-foreground transition-colors">{ v.Manifest.Name }</a>
 			</div>
 			<div class="flex items-baseline gap-3 text-[11px] text-muted-foreground flex-wrap">
-				<span><span class="text-muted-foreground/70">id</span> <code class="font-mono ml-1">{ v.Finding.ID }</code></span>
+				<span><span class="text-muted-foreground/70">id</span> <span class="ml-1">@DataCode(DataCodeID, v.Finding.ID)</span></span>
 				if v.Finding.CreatedBy != "" {
 					<span class="text-border" aria-hidden="true">·</span>
-					<span><span class="text-muted-foreground/70">by</span> <code class="font-mono ml-1">{ v.Finding.CreatedBy }</code></span>
+					<span><span class="text-muted-foreground/70">by</span> <span class="ml-1">@AuthorStamp(v.Finding.CreatedBy)</span></span>
 					<span class="text-border" aria-hidden="true">·</span>
 					<span class="tabular-nums">{ v.Finding.CreatedAt.Format("2006-01-02 15:04 MST") }</span>
 				}
 			</div>
 			if len(v.Finding.Labels) > 0 {
 				<div class="pt-1">
-					@labelChips(v.Finding.Labels)
+					@LabelChips(v.Finding.Labels)
 				</div>
 			}
 		</header>
@@ -74,7 +74,7 @@ templ FindingArticle(v FindingView) {
 
 templ findingSection(title, body string) {
 	<section class="space-y-2.5">
-		<h2 class="text-[10px] font-medium tracking-[0.1em] uppercase text-muted-foreground">{ title }</h2>
+		@SectionHeading(title)
 		<p class="text-[13.5px] text-foreground whitespace-pre-wrap leading-relaxed">
 			@RichText(body)
 		</p>
@@ -105,7 +105,7 @@ templ RichText(body string) {
 
 templ referencesSection(refs []schema.Reference) {
 	<section class="space-y-2.5">
-		<h2 class="text-[10px] font-medium tracking-[0.1em] uppercase text-muted-foreground">References</h2>
+		@SectionHeading("References")
 		<ul class="text-sm space-y-1">
 			for _, r := range refs {
 				<li class="font-mono text-xs">
@@ -121,7 +121,7 @@ templ referencesSection(refs []schema.Reference) {
 
 templ membersSection(members []schema.Member) {
 	<section class="space-y-2.5">
-		<h2 class="text-[10px] font-medium tracking-[0.1em] uppercase text-muted-foreground">Members</h2>
+		@SectionHeading("Members")
 		<p class="text-xs text-muted-foreground">
 			if len(members) == 1 {
 				1 source observation back-pointer.
@@ -144,7 +144,7 @@ templ membersSection(members []schema.Member) {
 templ codePreviewBlock(p CodePreview) {
 	<section class="space-y-2.5">
 		<div class="flex items-baseline justify-between gap-3">
-			<h2 class="text-[10px] font-medium tracking-[0.1em] uppercase text-muted-foreground">Code</h2>
+			@SectionHeading("Code")
 			if p.Path != "" {
 				<span class="font-mono text-[11px] text-muted-foreground">{ p.Path }</span>
 			}

@@ -3,6 +3,8 @@ package templates
 import (
 	"context"
 	"strings"
+
+	"github.com/contiamo/fettle/internal/ui/components/button"
 )
 
 // ReviewSection renders the label/comment form alongside the per-author
@@ -12,14 +14,14 @@ import (
 templ ReviewSection(v ReviewSectionView) {
 	<section id="review-section" class="space-y-3 border-t border-border pt-6">
 		<header class="flex items-baseline justify-between gap-3">
-			<h2 class="text-[10px] font-medium tracking-[0.1em] uppercase text-muted-foreground">Review</h2>
-			if len(v.CurrentLabels) > 0 {
-				<div class="flex items-center gap-2 flex-wrap">
-					<span class="text-[11px] text-muted-foreground">current labels</span>
-					@labelChips(v.CurrentLabels)
-				</div>
-			}
+			@SectionHeading("Review")
 		</header>
+		if len(v.CurrentLabels) > 0 {
+			<div class="space-y-1.5">
+				<span class="text-[11px] text-muted-foreground">current labels</span>
+				@LabelChips(v.CurrentLabels)
+			</div>
+		}
 		if ReviewerFromContext(ctx) == nil {
 			@identityRequired("leave a review")
 		} else {
@@ -58,12 +60,9 @@ templ ReviewSection(v ReviewSectionView) {
 					<p class="text-xs text-destructive">{ v.Error }</p>
 				}
 				<div class="flex justify-end">
-					<button
-						type="submit"
-						class="inline-flex items-center justify-center rounded-md bg-foreground text-background px-3 py-1.5 text-xs font-medium hover:bg-foreground/90 transition-colors cursor-pointer"
-					>
+					@button.Button(button.Props{Type: button.TypeSubmit, Size: button.SizeSm}) {
 						Save review
-					</button>
+					}
 				</div>
 			</form>
 		}
@@ -74,7 +73,7 @@ templ ReviewSection(v ReviewSectionView) {
 				}
 			</ol>
 		} else {
-			<p class="text-[11px] text-muted-foreground italic">No reviews yet.</p>
+			@EmptyHint("No reviews yet.")
 		}
 	</section>
 }
@@ -121,10 +120,9 @@ func myLatestLabels(ctx context.Context, entries []ReviewEntryView) []string {
 templ identityRequired(action string) {
 	<div class="rounded-md border border-dashed border-border bg-card px-4 py-5 text-center space-y-2.5">
 		<p class="text-[12.5px] text-muted-foreground">Set your reviewer identity to { action }.</p>
-		<a
-			href={ templ.SafeURL(identityChangeHref(ctx)) }
-			class="inline-flex items-center justify-center rounded-md bg-foreground text-background px-3 py-1.5 text-xs font-medium hover:bg-foreground/90 transition-colors"
-		>Set identity</a>
+		@button.Button(button.Props{Href: identityChangeHref(ctx), Size: button.SizeSm}) {
+			Set identity
+		}
 	</div>
 }
 
@@ -132,17 +130,17 @@ templ reviewEntry(e ReviewEntryView) {
 	<li class="rounded-md border border-border bg-surface-sunken p-3 space-y-1.5">
 		<div class="flex items-baseline justify-between gap-3 text-xs">
 			<div class="flex items-baseline gap-2">
-				<code class="font-mono text-foreground">{ e.Author }</code>
+				@AuthorStamp(e.Author)
 				if e.IsLatest {
-					<span class="text-[10px] uppercase tracking-[0.06em] text-primary">latest</span>
+					@StatusPill(StatusToneInfo, "latest")
 				}
 			</div>
 			<span class="text-muted-foreground tabular-nums">{ e.At.Format("2006-01-02 15:04 MST") }</span>
 		</div>
 		if len(e.Labels) > 0 {
-			@labelChips(e.Labels)
+			@LabelChips(e.Labels)
 		} else {
-			<span class="text-[11px] text-muted-foreground italic">no labels</span>
+			@EmptyHint("no labels")
 		}
 		if strings.TrimSpace(e.Comment) != "" {
 			<p class="text-[13.5px] text-foreground whitespace-pre-wrap leading-relaxed">

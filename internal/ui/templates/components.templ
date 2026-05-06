@@ -1,0 +1,269 @@
+package templates
+
+import (
+	"cmp"
+	"slices"
+	"strings"
+)
+
+// Project-internal atoms shared across the workspace templates. Kept
+// here (rather than in internal/ui/components/) because they encode
+// fettle-specific design rules — a finding's severity vocabulary, the
+// author stamp shape, the empty-pane copy convention — that don't
+// belong in a generic component library. Templui-installed components
+// (badge, button, card, …) live in internal/ui/components/ and are
+// composed from inside these atoms when their generality fits.
+
+// SectionHeading is the small uppercase label that introduces every
+// titled section — Description, Suggestion, Code, Severity rail
+// group, etc. Pulled out so the typography is set in one place;
+// previously open-coded ~15 times with subtle opacity drift between
+// detail-page and rail-side variants.
+templ SectionHeading(title string) {
+	<h2 class="text-[10px] font-medium tracking-[0.1em] uppercase text-muted-foreground">{ title }</h2>
+}
+
+// EmptyHint is the muted italic line we drop in for "nothing here yet"
+// states inside an existing section ("No reviews yet.", "no labels",
+// "No outcome events yet."). For pane-level empty states use
+// EmptyPane instead, which gets centred + larger padding.
+templ EmptyHint(text string) {
+	<p class="text-[11px] text-muted-foreground italic">{ text }</p>
+}
+
+// EmptyPane is the centred empty placeholder for a whole pane (the
+// listing column when no findings, the detail pane on first paint
+// with no run open). Two-line shape: a foreground title and a muted
+// hint underneath.
+templ EmptyPane(title, hint string) {
+	<div class="h-full flex flex-col items-center justify-center text-center text-muted-foreground p-10 space-y-2">
+		<div class="text-foreground text-base">{ title }</div>
+		if hint != "" {
+			<div class="text-xs max-w-xs">{ hint }</div>
+		}
+	</div>
+}
+
+// DataCodeVariant picks the visual treatment for short structured
+// strings rendered with monospace. The four variants cover the four
+// roles these strings play in the UI and let the typography be tuned
+// per role without each call-site re-encoding it.
+type DataCodeVariant string
+
+const (
+	// DataCodeInline — backtick spans inside prose (description,
+	// suggestion, comment). Warm-violet palette pulls them out of the
+	// surrounding text without competing with severity or primary.
+	DataCodeInline DataCodeVariant = "inline"
+	// DataCodeStamp — a `human:slug` / `agent:slug[/model]` author
+	// stamp. Plain mono, foreground colour; the prefix carries the
+	// kind so we don't need extra ornamentation.
+	DataCodeStamp DataCodeVariant = "stamp"
+	// DataCodeID — opaque identifiers like a finding id or commit
+	// SHA. Smaller, muted; data-but-rarely-read.
+	DataCodeID DataCodeVariant = "id"
+	// DataCodeStatus — outcome statuses (`merged`, `wontfix`, free-
+	// form `other`). Same prominence as a stamp but read as state
+	// rather than identity.
+	DataCodeStatus DataCodeVariant = "status"
+)
+
+// DataCode renders a short structured string in a monospace span
+// styled per Variant. Centralises the half-dozen ad-hoc <code>
+// stylings the templates had grown.
+templ DataCode(variant DataCodeVariant, text string) {
+	switch variant {
+		case DataCodeInline:
+			<code class="font-mono text-[12px] bg-code-soft text-code-foreground px-1 py-px rounded">{ text }</code>
+		case DataCodeStamp:
+			<code class="font-mono text-foreground">{ text }</code>
+		case DataCodeID:
+			<code class="font-mono text-[11px] text-muted-foreground">{ text }</code>
+		case DataCodeStatus:
+			<code class="font-mono text-foreground">{ text }</code>
+		default:
+			<code class="font-mono">{ text }</code>
+	}
+}
+
+// AuthorStamp wraps DataCode for the common case of rendering a
+// reviewer/marker identity. It exists as its own component (rather
+// than inlining DataCodeStamp at every call site) so future tweaks —
+// a hover tooltip with the slug source, an icon for human vs agent —
+// have one place to land.
+templ AuthorStamp(stamp string) {
+	@DataCode(DataCodeStamp, stamp)
+}
+
+// StatusTone selects the colour family for a StatusPill. Kept
+// intentionally generic ("muted", "warn", "info") rather than tied
+// to specific contexts (stale, dirty, moved) so the same component
+// can serve every "this is a state" badge in the UI without growing
+// per-context variants. Severity has its own component (SeverityPill)
+// because severity carries a fixed semantic vocabulary the design
+// already speaks colour-by-colour.
+type StatusTone string
+
+const (
+	// StatusToneMuted — informational, low-key. Used for "moved",
+	// "stale" in the list, "tree dirty", and similar non-alarming
+	// drift signals.
+	StatusToneMuted StatusTone = "muted"
+	// StatusToneWarn — amber, asks for attention. Stale on the
+	// detail page, tree-changed in the listing header.
+	StatusToneWarn StatusTone = "warn"
+	// StatusToneInfo — primary-tinted, used for affirmative state
+	// markers like "latest" on review/outcome entries.
+	StatusToneInfo StatusTone = "info"
+)
+
+// StatusPill is the small uppercase chip used for non-severity
+// state labels — moved, stale, dirty, latest. Variants pick the
+// colour family; the caller provides the text. Slightly tighter
+// type than SeverityPill since these tend to share a row with one.
+templ StatusPill(tone StatusTone, text string) {
+	switch tone {
+		case StatusToneWarn:
+			<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] uppercase tracking-[0.04em] font-medium bg-sev-medium-soft text-sev-medium-foreground">{ text }</span>
+		case StatusToneInfo:
+			<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] uppercase tracking-[0.04em] font-medium text-primary">{ text }</span>
+		default:
+			<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] uppercase tracking-[0.04em] font-medium bg-muted text-muted-foreground">{ text }</span>
+	}
+}
+
+// SeverityPill is the unified severity affordance — a fixed-width
+// tinted pill (HIGH / MED / LOW / · for missing). One look across
+// the rail rows, list rows, detail header, group cards. Replaces
+// the prior triple of severityBadge / severityChip / dot+label that
+// each rendered the same data slightly differently.
+templ SeverityPill(severity *string) {
+	if severity != nil && *severity != "" {
+		<span
+			class={ "inline-flex items-center justify-center w-[52px] shrink-0 px-1.5 py-0.5 rounded text-[10px] uppercase tracking-[0.04em] font-medium", severityChipClass(*severity) }
+			title={ "severity " + *severity }
+		>{ severityShort(*severity) }</span>
+	} else {
+		<span class="inline-flex items-center justify-center w-[52px] shrink-0 px-1.5 py-0.5 rounded text-[10px] uppercase tracking-[0.04em] font-medium bg-muted text-muted-foreground/70" title="no severity">·</span>
+	}
+}
+
+// LabelChips renders a flat label list, grouping by prefix into
+// titled subsections so the detail page reads with the same shape
+// as the filter rail. Labels share their prefix (e.g.
+// "category:smell", "category:convention") collapse under one
+// "Category" heading, with each chip showing only the post-prefix
+// half — the prefix stays in the heading, not in chip text.
+// Unprefixed labels collapse into an "Other" group at the end.
+//
+// Empty input renders nothing. Order: prefixes alphabetical, then
+// "Other" last; items alphabetical within each group.
+templ LabelChips(labels []string) {
+	if len(labels) > 0 {
+		{{ groups := groupLabels(labels) }}
+		<div class="space-y-2.5">
+			for _, g := range groups {
+				<div class="space-y-1">
+					@SectionHeading(g.title)
+					<div class="flex flex-wrap gap-1">
+						for _, item := range g.items {
+							<span class="inline-flex items-center px-1.5 py-0.5 rounded border border-border bg-muted text-[11px] text-muted-foreground font-mono">
+								{ item.display }
+							</span>
+						}
+					</div>
+				</div>
+			}
+		</div>
+	}
+}
+
+// labelGroup is the in-template shape of a prefix bucket. Title is
+// the rendered heading ("Category", "Confidence", "Other"); items
+// is the post-prefix display string per chip.
+type labelGroup struct {
+	title string
+	items []labelItem
+}
+
+type labelItem struct {
+	value   string // full original label, e.g. "category:smell"
+	display string // post-prefix slice, e.g. "smell"
+}
+
+// groupLabels buckets labels by their prefix segment for LabelChips.
+// Mirrors the logic of internal/ui/server.groupedLabelFacets but
+// operates on a flat string list (no facet counts) so the detail
+// view, group cards, and any future label renderer share one
+// grouping rule. Stable order: alphabetical prefixes, "Other" last,
+// alphabetical items within.
+func groupLabels(labels []string) []labelGroup {
+	byPrefix := map[string][]labelItem{}
+	for _, l := range labels {
+		prefix, display := splitLabelPrefix(l)
+		byPrefix[prefix] = append(byPrefix[prefix], labelItem{value: l, display: display})
+	}
+	prefixes := make([]string, 0, len(byPrefix))
+	for p := range byPrefix {
+		prefixes = append(prefixes, p)
+	}
+	slices.SortFunc(prefixes, func(a, b string) int {
+		// "" (Other) sinks to the bottom regardless of alphabetical order.
+		if (a == "") != (b == "") {
+			if b == "" {
+				return -1
+			}
+			return 1
+		}
+		return cmp.Compare(a, b)
+	})
+	out := make([]labelGroup, 0, len(prefixes))
+	for _, p := range prefixes {
+		items := byPrefix[p]
+		slices.SortStableFunc(items, func(a, b labelItem) int { return cmp.Compare(a.display, b.display) })
+		out = append(out, labelGroup{title: prefixTitle(p), items: items})
+	}
+	return out
+}
+
+// splitLabelPrefix mirrors internal/ui/server.splitLabelPrefix —
+// kept template-local so the templates package doesn't need to
+// import the server package. Splits on the first colon only.
+func splitLabelPrefix(label string) (prefix, display string) {
+	if i := strings.IndexByte(label, ':'); i >= 0 {
+		return label[:i], label[i+1:]
+	}
+	return "", label
+}
+
+// prefixTitle is the human-facing heading for a prefix bucket. Empty
+// prefix renders as "Other"; otherwise the first byte gets capitalised
+// (label prefixes are ASCII in practice so byte-level handling is fine).
+func prefixTitle(prefix string) string {
+	if prefix == "" {
+		return "Other"
+	}
+	if prefix[0] >= 'a' && prefix[0] <= 'z' {
+		return string(prefix[0]-32) + prefix[1:]
+	}
+	return prefix
+}
+
+// MiniLabelChips is the compact denser variant for places where
+// vertical space is tight (the group-card peek list). Doesn't group
+// by prefix — at this size grouping would over-segment a 3-chip
+// row into more boxes than chips. Kept as a separate component
+// rather than a "compact" prop on LabelChips so the call-site reads
+// declaratively about which surface it's targeting.
+templ MiniLabelChips(labels []string) {
+	if len(labels) > 0 {
+		<div class="flex flex-wrap gap-1">
+			for _, l := range labels {
+				<span class="inline-flex items-center px-1.5 py-0 rounded text-[10px] text-muted-foreground bg-muted/70 font-mono leading-[14px]">
+					{ l }
+				</span>
+			}
+		</div>
+	}
+}
+
