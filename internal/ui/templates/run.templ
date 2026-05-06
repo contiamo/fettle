@@ -249,7 +249,7 @@ templ findingsListPane(v RunFindingsView) {
 		} else {
 			<ul role="listbox" data-finding-list>
 				for _, f := range v.Findings {
-					@findingListItem(v.Manifest.Name, f, v.Selected != nil && v.Selected.ID == f.ID, v.Anchors[f.ID])
+					@findingListItem(v.Manifest.Name, f, v.Selected != nil && v.Selected.ID == f.ID, v.Anchors[f.ID], v.EffectiveSeverityOf(f))
 				}
 			</ul>
 			<div data-finding-empty class="hidden px-4 py-10 text-center text-sm text-muted-foreground">No findings match these filters.</div>
@@ -264,7 +264,7 @@ templ findingsListPane(v RunFindingsView) {
 // pre-resolved drift state ("current", "shifted", "ambiguous",
 // "stale", or "unknown"), exposed as data-anchor so the rail's
 // "Hide stale" toggle can filter rows client-side without a refetch.
-templ findingListItem(runName string, f schema.Finding, selected bool, anchor string) {
+templ findingListItem(runName string, f schema.Finding, selected bool, anchor string, effectiveSeverity *string) {
 	{{ href := "/runs/" + runName + "/finding/" + f.ID }}
 	{{ workspaceHref := "/runs/" + runName + "?focus=" + f.ID }}
 	<li
@@ -274,7 +274,7 @@ templ findingListItem(runName string, f schema.Finding, selected bool, anchor st
 		data-finding-id={ f.ID }
 		data-search={ findingSearchHaystack(f) }
 		data-file={ f.File }
-		data-severity={ severityValue(f.Severity) }
+		data-severity={ severityValue(effectiveSeverity) }
 		data-labels={ joinLabels(f.Labels) }
 		data-anchor={ anchor }
 		class={ "relative cursor-pointer border-b border-border/60 px-4 py-2 hover:bg-accent/40 transition-colors", templ.KV("row-selected", selected), templ.KV("opacity-60", anchor == "stale") }
@@ -285,7 +285,7 @@ templ findingListItem(runName string, f schema.Finding, selected bool, anchor st
 		hx-trigger="click"
 	>
 		<a href={ templ.SafeURL(workspaceHref) } class="flex items-center gap-2.5 min-w-0 outline-none" onclick="event.stopPropagation()">
-			@SeverityPill(f.Severity)
+			@SeverityPill(effectiveSeverity)
 			<span class="flex flex-col min-w-0 flex-1 gap-0.5">
 				<span class="flex items-baseline gap-1.5 min-w-0">
 					<span class="text-[13px] leading-snug text-foreground truncate flex-1">{ f.Title }</span>

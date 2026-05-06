@@ -37,13 +37,30 @@ templ ReviewSection(v ReviewSectionView) {
 						id="review-labels"
 						name="labels"
 						type="text"
-						placeholder="comma- or space-separated, e.g. ack, fp, severity:high"
+						placeholder="comma- or space-separated, e.g. ack, fp"
 						value={ strings.Join(myLatestLabels(ctx, v.Entries), ", ") }
 						class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
 						autocomplete="off"
 					/>
 					<p class="text-[11px] text-muted-foreground">
 						Your current label set on this { v.SubjectKind }; submitting saves whatever's in the box (clear it to remove all of yours).
+					</p>
+				</div>
+				{{ currentSev := myLatestSeverityValue(ctx, v.Entries) }}
+				<div class="space-y-1.5">
+					<label for="review-severity" class="text-[11px] font-medium text-foreground">Severity</label>
+					<select
+						id="review-severity"
+						name="severity"
+						class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
+					>
+						<option value="" selected?={ currentSev == "" }>— defer to LLM —</option>
+						<option value="high" selected?={ currentSev == "high" }>high</option>
+						<option value="medium" selected?={ currentSev == "medium" }>medium</option>
+						<option value="low" selected?={ currentSev == "low" }>low</option>
+					</select>
+					<p class="text-[11px] text-muted-foreground">
+						Override the LLM's initial assessment. Defer means the find-time value stays in effect; the latest reviewer's choice across all reviewers wins.
 					</p>
 				</div>
 				<div class="space-y-1.5">
@@ -92,6 +109,25 @@ templ ReviewSection(v ReviewSectionView) {
 // "save as-is" preserves your labels, "edit" modifies them, and
 // "clear the box, save" deliberately clears them — same model as a
 // regular settings form.
+// myLatestSeverityValue returns the current reviewer's most recent
+// severity choice on this subject so the form's select can pre-select
+// the right option. Returns "" (no choice) when there's no identity,
+// no prior review by this user, or the prior review left severity
+// unset. Mirrors myLatestLabels' shape but unwraps the *string for
+// the select-comparison templ syntax (`selected?={ value == "high" }`).
+func myLatestSeverityValue(ctx context.Context, entries []ReviewEntryView) string {
+	r := ReviewerFromContext(ctx)
+	if r == nil {
+		return ""
+	}
+	for _, e := range entries {
+		if e.IsLatest && e.Author == r.String() && e.Severity != nil {
+			return *e.Severity
+		}
+	}
+	return ""
+}
+
 func myLatestLabels(ctx context.Context, entries []ReviewEntryView) []string {
 	r := ReviewerFromContext(ctx)
 	if r == nil {
@@ -133,6 +169,10 @@ templ reviewEntry(e ReviewEntryView) {
 				@AuthorStamp(e.Author)
 				if e.IsLatest {
 					@StatusPill(StatusToneInfo, "latest")
+				}
+				if e.Severity != nil {
+					<span class="text-muted-foreground">set severity to</span>
+					@SeverityPill(e.Severity)
 				}
 			</div>
 			<span class="text-muted-foreground tabular-nums">{ e.At.Format("2006-01-02 15:04 MST") }</span>

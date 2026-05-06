@@ -13,11 +13,12 @@ import (
 )
 
 var addReviewFlags struct {
-	finding string
-	group   string
-	labels  []string
-	comment string
-	verbose bool
+	finding  string
+	group    string
+	labels   []string
+	severity string
+	comment  string
+	verbose  bool
 }
 
 var addReviewCmd = &cobra.Command{
@@ -83,6 +84,7 @@ func init() {
 	addReviewCmd.Flags().StringVar(&addReviewFlags.finding, "finding", "", "review subject is a finding with this id")
 	addReviewCmd.Flags().StringVar(&addReviewFlags.group, "group", "", "review subject is a group with this id")
 	addReviewCmd.Flags().StringSliceVar(&addReviewFlags.labels, "label", nil, "label of the form prefix:value (or any string), repeatable")
+	addReviewCmd.Flags().StringVar(&addReviewFlags.severity, "severity", "", "reviewer's severity judgment (overrides the LLM's initial value); leave unset to defer")
 	addReviewCmd.Flags().StringVar(&addReviewFlags.comment, "comment", "", "free-form comment")
 	addReviewCmd.Flags().BoolVar(&addReviewFlags.verbose, "verbose", false, "print the appended subject id on success")
 	addCmd.AddCommand(addReviewCmd)
@@ -144,12 +146,17 @@ func runAddReview(cmd *cobra.Command, args []string) error {
 		return validationError([]string{err.Error()})
 	}
 
+	var severity *string
+	if s := strings.TrimSpace(addReviewFlags.severity); s != "" {
+		severity = &s
+	}
 	review := schema.Review{
-		Subject: subject,
-		Author:  authorStamp,
-		Labels:  append([]string{}, addReviewFlags.labels...),
-		Comment: strings.TrimSpace(addReviewFlags.comment),
-		At:      time.Now().UTC(),
+		Subject:  subject,
+		Author:   authorStamp,
+		Labels:   append([]string{}, addReviewFlags.labels...),
+		Severity: severity,
+		Comment:  strings.TrimSpace(addReviewFlags.comment),
+		At:       time.Now().UTC(),
 	}
 	if err := rp.AppendReview(slug, review); err != nil {
 		return internalError(fmt.Errorf("append review: %w", err))

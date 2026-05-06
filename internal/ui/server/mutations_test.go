@@ -210,7 +210,7 @@ func TestReviewPost_RejectsEmptySubmit(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "label or a comment") {
+	if !strings.Contains(rec.Body.String(), "label, a comment, or a severity") {
 		t.Errorf("body missing inline error: %s", rec.Body.String())
 	}
 }

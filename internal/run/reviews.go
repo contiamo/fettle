@@ -63,6 +63,7 @@ type FlatReview struct {
 	Author     string         `json:"author"`
 	AuthorSlug string         `json:"-"`
 	Labels     []string       `json:"labels"`
+	Severity   *string        `json:"severity,omitempty"`
 	Comment    string         `json:"comment,omitempty"`
 	At         time.Time      `json:"at"`
 }
@@ -111,6 +112,7 @@ func readReviewFile(path, slug string) ([]FlatReview, error) {
 			Author:     r.Author,
 			AuthorSlug: slug,
 			Labels:     r.Labels,
+			Severity:   r.Severity,
 			Comment:    r.Comment,
 			At:         r.At,
 		})

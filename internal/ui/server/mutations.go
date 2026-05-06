@@ -63,22 +63,25 @@ func reviewPostHandler(projectDir, subjectKind string) http.HandlerFunc {
 		}
 		labels := parseLabels(r.FormValue("labels"))
 		comment := strings.TrimSpace(r.FormValue("comment"))
+		severity := parseReviewSeverity(r.FormValue("severity"))
 
-		// Empty submit (no labels and no comment) rejected. The CLI
-		// makes the same call — see review.go's "at least one --label
-		// or a --comment is required". Renders inline so the user sees
-		// what's missing without losing their place.
-		if len(labels) == 0 && comment == "" {
-			renderReviewSwap(w, r, rp, runName, subject, "Add at least one label or a comment.", http.StatusBadRequest)
+		// Empty submit (no labels, no comment, no severity change)
+		// rejected. The form is the user's whole review action — at
+		// least one of labels / comment / severity must be set for
+		// the entry to carry meaning. Renders inline so the user
+		// sees what's missing without losing their place.
+		if len(labels) == 0 && comment == "" && severity == nil {
+			renderReviewSwap(w, r, rp, runName, subject, "Add at least one label, a comment, or a severity.", http.StatusBadRequest)
 			return
 		}
 
 		entry := schema.Review{
-			Subject: subject,
-			Author:  ident.String(),
-			Labels:  labels,
-			Comment: comment,
-			At:      time.Now().UTC(),
+			Subject:  subject,
+			Author:   ident.String(),
+			Labels:   labels,
+			Severity: severity,
+			Comment:  comment,
+			At:       time.Now().UTC(),
 		}
 		if err := rp.AppendReview(ident.Slug, entry); err != nil {
 			renderReviewSwap(w, r, rp, runName, subject, fmt.Sprintf("save failed: %v", err), http.StatusInternalServerError)
@@ -202,6 +205,21 @@ func stageAccepts(stage, subjectKind string) error {
 		return fmt.Errorf("unsupported run stage %q", stage)
 	}
 	return nil
+}
+
+// parseReviewSeverity reads the "severity" form value. Empty (the
+// "— defer —" select option, or omission) returns nil so the entry
+// carries no severity opinion and the effective severity falls back
+// to whatever the LLM set. Anything non-empty becomes a *string
+// override; we trust the value rather than enforcing a fixed enum
+// here so reviewers can score a finding "p0" or "blocker" if their
+// project's vocabulary differs from high/medium/low.
+func parseReviewSeverity(raw string) *string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 // parseLabels splits the labels input on commas and whitespace,

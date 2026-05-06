@@ -80,12 +80,19 @@ type BreadcrumbItem struct {
 // Bundling the manifest with the finding and the preview keeps the
 // template signature tight (one arg) and makes the data shape
 // reviewable independently of templ syntax.
+//
+// EffectiveSeverity is the severity the detail SHOULD render —
+// resolves to the latest reviewer override on this finding (across
+// all reviewers), falling back to Finding.Severity when no override
+// exists. The boundary computes it once so every surface (header
+// pill, sort, rail, list) speaks the same value.
 type FindingView struct {
-	Manifest schema.RunManifest
-	Finding  schema.Finding
-	Preview  CodePreview
-	Review   ReviewSectionView
-	Outcome  OutcomeSectionView
+	Manifest          schema.RunManifest
+	Finding           schema.Finding
+	EffectiveSeverity *string
+	Preview           CodePreview
+	Review            ReviewSectionView
+	Outcome           OutcomeSectionView
 }
 
 // RunFindingsView backs the three-pane findings workspace. Findings is
@@ -115,6 +122,25 @@ type RunFindingsView struct {
 	Anchors    map[string]string
 	StaleCount int
 	CurrentGit *schema.GitInfo
+	// EffectiveSeverity maps a finding id to its reviewer-overridden
+	// severity. Findings absent from the map keep their LLM-set
+	// Finding.Severity. EffectiveSeverityOf is the helper templates
+	// call to resolve a finding to its display severity.
+	EffectiveSeverity map[string]string
+}
+
+// EffectiveSeverityOf returns the severity that should drive every
+// display surface (rail facet, list pill, detail badge, sort) for f:
+// the latest reviewer override if any, otherwise the Finding's own
+// Severity. Returning a *string preserves the "no severity at all"
+// case (both LLM and reviewer left it unset).
+func (v RunFindingsView) EffectiveSeverityOf(f schema.Finding) *string {
+	if v.EffectiveSeverity != nil {
+		if s, ok := v.EffectiveSeverity[f.ID]; ok {
+			return &s
+		}
+	}
+	return f.Severity
 }
 
 // FindingFacets are the filter groups on the left rail. Severity is
@@ -209,10 +235,14 @@ type ReviewSectionView struct {
 
 // ReviewEntryView is one row in the history feed. IsLatest flags the
 // author's most recent entry — earlier entries by the same author are
-// rendered as historical context rather than active state.
+// rendered as historical context rather than active state. Severity
+// is non-nil when this entry expressed a severity judgment; the
+// effective severity for the finding is the latest such entry across
+// authors, falling back to Finding.Severity when none is set.
 type ReviewEntryView struct {
 	Author   string
 	Labels   []string
+	Severity *string
 	Comment  string
 	At       time.Time
 	IsLatest bool

@@ -90,11 +90,22 @@ const (
 // (`human:slug` or `agent:slug[/model]`), so attribution survives
 // file moves and concatenation across runs.
 type Review struct {
-	Subject Subject   `json:"subject"`
-	Author  string    `json:"author"`
-	Labels  []string  `json:"labels"`
-	Comment string    `json:"comment,omitempty"`
-	At      time.Time `json:"at"`
+	Subject Subject `json:"subject"`
+	Author  string  `json:"author"`
+	Labels  []string `json:"labels"`
+	// Severity, when non-nil, is the reviewer's judgment that
+	// overrides the LLM's initial Finding.Severity for display and
+	// sorting. nil means "no judgment" — defer to the find-time
+	// value. The effective severity for a finding at any point in
+	// time is "the latest review entry whose Severity is non-nil,
+	// across all reviewers", falling back to Finding.Severity when
+	// no reviewer has set one. This lets reviewers up- or down-grade
+	// severity through the same per-author append-only review log
+	// the labels and comment use, with a full audit trail (who
+	// changed it, when, with what comment) for free.
+	Severity *string   `json:"severity,omitempty"`
+	Comment  string    `json:"comment,omitempty"`
+	At       time.Time `json:"at"`
 }
 
 // RunManifest is the contents of run.json.

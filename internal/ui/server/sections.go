@@ -60,6 +60,7 @@ func buildReviewView(rp *run.Path, runName string, subject schema.Subject) (temp
 		entries[i] = templates.ReviewEntryView{
 			Author:   e.Author,
 			Labels:   e.Labels,
+			Severity: e.Severity,
 			Comment:  e.Comment,
 			At:       e.At,
 			IsLatest: latestByAuthor[e.Author] == i,

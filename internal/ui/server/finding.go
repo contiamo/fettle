@@ -113,6 +113,12 @@ func findingHandler(projectDir string) http.HandlerFunc {
 // outcome sections. Shared by findingHandler (standalone page) and
 // runHandler (pre-render the right pane on workspace load) so both
 // paths render identical detail.
+//
+// Reviews are loaded once here and used for two things: building the
+// review section (per-author entries + current-labels union) and
+// resolving effective severity (latest reviewer Severity override
+// across authors, falling back to Finding.Severity). The detail
+// header's SeverityPill renders the resolved value.
 func buildFindingDetail(rp *run.Path, manifest schema.RunManifest, f schema.Finding) (templates.FindingView, error) {
 	preview := loadPreview(manifest.TargetRepo, f, previewWindow)
 
@@ -126,9 +132,15 @@ func buildFindingDetail(rp *run.Path, manifest schema.RunManifest, f schema.Find
 		return templates.FindingView{}, fmt.Errorf("load outcomes: %w", err)
 	}
 
+	effective := f.Severity
+	if override, ok := latestReviewerSeverity(reviewView.Entries); ok {
+		effective = &override
+	}
+
 	return templates.FindingView{
-		Manifest: manifest,
-		Finding:  f,
+		Manifest:          manifest,
+		Finding:           f,
+		EffectiveSeverity: effective,
 		Preview: templates.CodePreview{
 			Path:          preview.Path,
 			Error:         preview.Error,
@@ -141,6 +153,21 @@ func buildFindingDetail(rp *run.Path, manifest schema.RunManifest, f schema.Find
 		Review:  reviewView,
 		Outcome: outcomeView,
 	}, nil
+}
+
+// latestReviewerSeverity scans review entries (in chronological order
+// — sections.go preserves that) and returns the most recent non-nil
+// Severity along with true. Returns "", false when no reviewer has
+// expressed a severity opinion. Mirrors severityOverrides but on the
+// already-built ReviewEntryView slice so callers don't need to
+// re-load reviews.
+func latestReviewerSeverity(entries []templates.ReviewEntryView) (string, bool) {
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].Severity != nil {
+			return *entries[i].Severity, true
+		}
+	}
+	return "", false
 }
 
 // anchorStateToTemplate converts the internal anchor.State enum into

@@ -77,7 +77,17 @@ func runHandler(projectDir string) http.HandlerFunc {
 				http.Error(w, fmt.Sprintf("load findings: %v", err), http.StatusInternalServerError)
 				return
 			}
-			sortFindings(findings)
+			// Reviews are loaded once at run-render time (rather than per
+			// finding) so we can resolve effective severity in one pass
+			// before sort + facet bucketing — both need to read the
+			// reviewer-overridden value, not f.Severity.
+			reviews, err := rp.LoadAllReviews()
+			if err != nil {
+				http.Error(w, fmt.Sprintf("load reviews: %v", err), http.StatusInternalServerError)
+				return
+			}
+			sevOverrides := severityOverrides(reviews)
+			sortFindingsBySeverity(findings, sevOverrides)
 
 			anchors, staleCount := computeAnchorStates(manifest.TargetRepo, findings)
 			var currentGit *schema.GitInfo
@@ -85,12 +95,13 @@ func runHandler(projectDir string) http.HandlerFunc {
 				currentGit = run.ReadGit(manifest.TargetRepo)
 			}
 			view := templates.RunFindingsView{
-				Manifest:   manifest,
-				Findings:   findings,
-				Facets:     computeFacets(findings),
-				Anchors:    anchors,
-				StaleCount: staleCount,
-				CurrentGit: currentGit,
+				Manifest:           manifest,
+				Findings:           findings,
+				Facets:             computeFacetsWithOverrides(findings, sevOverrides),
+				Anchors:            anchors,
+				StaleCount:         staleCount,
+				CurrentGit:         currentGit,
+				EffectiveSeverity:  sevOverrides,
 			}
 			// Pre-select the finding identified by ?focus= (the workspace
 			// pushes this on row click) so refresh / share lands on the
@@ -133,30 +144,6 @@ func pickSelected(findings []schema.Finding, focus string) *schema.Finding {
 	return &findings[0]
 }
 
-// computeFacets extracts the unique severities and labels present in
-// the run, with counts. Severities are bucketed into a fixed canonical
-// order (high → medium → low → unrecognised → none) so the rail reads
-// the same regardless of which value the agent emitted first. Labels
-// are split into one group per `prefix:` (e.g. "category:smell" sits
-// in the "category" group); unprefixed labels collapse into a single
-// "Other" bucket.
-func computeFacets(findings []schema.Finding) templates.FindingFacets {
-	sevCounts := map[string]int{}
-	labelCounts := map[string]int{}
-	for _, f := range findings {
-		if f.Severity != nil && *f.Severity != "" {
-			sevCounts[*f.Severity]++
-		}
-		for _, l := range f.Labels {
-			labelCounts[l]++
-		}
-	}
-
-	return templates.FindingFacets{
-		Severities: orderedSeverities(sevCounts),
-		Labels:     groupedLabelFacets(labelCounts),
-	}
-}
 
 // orderedSeverities ranks severities by their canonical bucket so the
 // rail reads high → low even if the agent emitted them in mixed order.
@@ -270,20 +257,90 @@ func prefixTitle(prefix string) string {
 	return prefix
 }
 
-// sortFindings orders findings by severity bucket (high → medium →
-// low → unrecognised → none) so the most pressing items lead the
-// list. Within a bucket we fall back to file then line, which keeps
-// the in-bucket reading order aligned with how a reviewer would skim
-// a diff. Stable sort means findings that match on every key keep
-// their on-disk append order.
-func sortFindings(findings []schema.Finding) {
+// sortFindingsBySeverity orders findings by EFFECTIVE severity (the
+// latest reviewer override on a finding wins, falling back to the
+// LLM's Finding.Severity) so a downgraded finding sinks below same-
+// LLM-severity peers. Within a severity bucket we tie-break by file
+// then line — keeps the in-bucket reading order aligned with how a
+// reviewer would skim a diff. Stable sort preserves on-disk append
+// order on full ties.
+func sortFindingsBySeverity(findings []schema.Finding, overrides map[string]string) {
 	slices.SortStableFunc(findings, func(a, b schema.Finding) int {
+		ra := severityRankOfEffective(a, overrides)
+		rb := severityRankOfEffective(b, overrides)
 		return cmp.Or(
-			cmp.Compare(severityRankOf(a.Severity), severityRankOf(b.Severity)),
+			cmp.Compare(ra, rb),
 			cmp.Compare(a.File, b.File),
 			cmp.Compare(a.Line, b.Line),
 		)
 	})
+}
+
+// severityOverrides scans all reviews and returns finding-id →
+// severity-string for findings that have a reviewer-set severity.
+// "Latest non-nil severity across reviewers wins" — we take the most
+// recent review entry whose Severity is non-nil, regardless of which
+// author made the call. Findings whose reviewers all left severity
+// unset (or have no reviews) stay out of the map and inherit
+// Finding.Severity at display time.
+func severityOverrides(reviews []run.FlatReview) map[string]string {
+	type stamped struct {
+		at       run.FlatReview
+		severity string
+	}
+	latest := map[string]stamped{}
+	for _, r := range reviews {
+		if r.Subject.Kind != schema.SubjectFinding || r.Subject.ID == "" || r.Severity == nil {
+			continue
+		}
+		existing, ok := latest[r.Subject.ID]
+		if !ok || r.At.After(existing.at.At) {
+			latest[r.Subject.ID] = stamped{at: r, severity: *r.Severity}
+		}
+	}
+	out := make(map[string]string, len(latest))
+	for id, s := range latest {
+		out[id] = s.severity
+	}
+	return out
+}
+
+// severityRankOfEffective is severityRankOf applied to the effective
+// severity of f. Inlined wrapper rather than a method on Finding so
+// the override map dependency stays at the call site instead of
+// leaking into the schema package.
+func severityRankOfEffective(f schema.Finding, overrides map[string]string) int {
+	if s, ok := overrides[f.ID]; ok {
+		return severityRank(s)
+	}
+	return severityRankOf(f.Severity)
+}
+
+// computeFacetsWithOverrides counts severity buckets using the
+// effective severity per finding, so a downgraded "high" → "medium"
+// shifts the rail counts the way the reviewer would expect. Labels
+// are unaffected — they're independent of severity.
+func computeFacetsWithOverrides(findings []schema.Finding, overrides map[string]string) templates.FindingFacets {
+	sevCounts := map[string]int{}
+	labelCounts := map[string]int{}
+	for _, f := range findings {
+		sev := ""
+		if s, ok := overrides[f.ID]; ok {
+			sev = s
+		} else if f.Severity != nil {
+			sev = *f.Severity
+		}
+		if sev != "" {
+			sevCounts[sev]++
+		}
+		for _, l := range f.Labels {
+			labelCounts[l]++
+		}
+	}
+	return templates.FindingFacets{
+		Severities: orderedSeverities(sevCounts),
+		Labels:     groupedLabelFacets(labelCounts),
+	}
 }
 
 // severityRankOf is the *string-aware variant of severityRank: a nil

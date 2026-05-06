@@ -693,7 +693,7 @@ func findingsListPane(v RunFindingsView) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			for _, f := range v.Findings {
-				templ_7745c5c3_Err = findingListItem(v.Manifest.Name, f, v.Selected != nil && v.Selected.ID == f.ID, v.Anchors[f.ID]).Render(ctx, templ_7745c5c3_Buffer)
+				templ_7745c5c3_Err = findingListItem(v.Manifest.Name, f, v.Selected != nil && v.Selected.ID == f.ID, v.Anchors[f.ID], v.EffectiveSeverityOf(f)).Render(ctx, templ_7745c5c3_Buffer)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -718,7 +718,7 @@ func findingsListPane(v RunFindingsView) templ.Component {
 // pre-resolved drift state ("current", "shifted", "ambiguous",
 // "stale", or "unknown"), exposed as data-anchor so the rail's
 // "Hide stale" toggle can filter rows client-side without a refetch.
-func findingListItem(runName string, f schema.Finding, selected bool, anchor string) templ.Component {
+func findingListItem(runName string, f schema.Finding, selected bool, anchor string, effectiveSeverity *string) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -803,9 +803,9 @@ func findingListItem(runName string, f schema.Finding, selected bool, anchor str
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var31 string
-		templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(severityValue(f.Severity))
+		templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(severityValue(effectiveSeverity))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/templates/run.templ`, Line: 277, Col: 43}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/templates/run.templ`, Line: 277, Col: 50}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
 		if templ_7745c5c3_Err != nil {
@@ -893,7 +893,7 @@ func findingListItem(runName string, f schema.Finding, selected bool, anchor str
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = SeverityPill(f.Severity).Render(ctx, templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = SeverityPill(effectiveSeverity).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

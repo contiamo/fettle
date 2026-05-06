@@ -25,7 +25,7 @@ templ FindingArticle(v FindingView) {
 	<article class="px-8 py-7 space-y-7">
 		<header class="space-y-3">
 			<div class="flex items-baseline gap-3 flex-wrap">
-				@SeverityPill(v.Finding.Severity)
+				@SeverityPill(v.EffectiveSeverity)
 				@anchorTopBadge(v.Preview.Anchor)
 				if v.Preview.Anchor == "stale" {
 					<h1 class="font-serif text-[28px] leading-tight tracking-tight text-muted-foreground">{ v.Finding.Title }</h1>
@@ -36,8 +36,6 @@ templ FindingArticle(v FindingView) {
 			<div class="flex items-baseline gap-3 text-[12.5px] text-muted-foreground flex-wrap">
 				<span class="font-mono text-foreground">{ v.Finding.File }</span>
 				@anchorLineLabel(v.Finding, v.Preview)
-				<span class="text-border" aria-hidden="true">·</span>
-				<a href={ templ.SafeURL("/runs/" + v.Manifest.Name) } class="hover:text-foreground transition-colors">{ v.Manifest.Name }</a>
 			</div>
 			<div class="flex items-baseline gap-3 text-[11px] text-muted-foreground flex-wrap">
 				<span><span class="text-muted-foreground/70">id</span> <span class="ml-1">@DataCode(DataCodeID, v.Finding.ID)</span></span>
