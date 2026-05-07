@@ -6,7 +6,10 @@ import (
 	"github.com/contiamo/fettle/internal/schema"
 	"github.com/contiamo/fettle/internal/ui/components/badge"
 	"github.com/contiamo/fettle/internal/ui/components/button"
+	"github.com/contiamo/fettle/internal/ui/components/form"
 	"github.com/contiamo/fettle/internal/ui/components/icon"
+	"github.com/contiamo/fettle/internal/ui/components/input"
+	"github.com/contiamo/fettle/internal/ui/components/textarea"
 )
 
 // RunFindings is the per-run page for find / merge / dedupe stages,
@@ -223,15 +226,29 @@ templ labelFacetGroup(g LabelFacetGroup) {
 templ findingsListPane(v RunFindingsView) {
 	<section class="scroll-pane h-full bg-card min-w-[280px]" style="flex-basis:38%;flex-shrink:0;flex-grow:0" data-finding-list-pane data-resize-list>
 		<header class="sticky top-0 z-10 bg-card/95 backdrop-blur-sm border-b border-border">
-			<div class="px-4 pt-4 pb-3 space-y-1">
+			<div class="px-4 pt-4 pb-2 space-y-1.5">
 				<div class="flex items-baseline justify-between gap-2">
-					<h1 class="font-mono text-[13px] text-foreground truncate">{ v.Manifest.Name }</h1>
-					@badge.Badge(badge.Props{Variant: stageVariant(v.Manifest.Stage)}) {
-						{ v.Manifest.Stage }
-					}
+					<div class="flex items-baseline gap-2 min-w-0">
+						@badge.Badge(badge.Props{Variant: stageVariant(v.Manifest.Stage)}) {
+							{ v.Manifest.Stage }
+						}
+						<h1 class="font-mono text-[13px] text-foreground truncate">{ v.Manifest.Name }</h1>
+					</div>
+					<span class="text-[11px] text-muted-foreground tabular-nums shrink-0">{ v.Manifest.CreatedAt.Format("2006-01-02 15:04") }</span>
 				</div>
-				<div class="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-					<span>{ v.Manifest.CreatedAt.Format("2006-01-02 15:04") }</span>
+				@gitDriftLine(v.GitDrift)
+				<div class="flex items-center gap-3 text-[12.5px] text-muted-foreground" data-bulk-summary-row>
+					<button
+						type="button"
+						data-bulk-toggle
+						aria-pressed="false"
+						title="Toggle bulk-action mode"
+						class="inline-flex items-center gap-1.5 cursor-pointer hover:text-foreground aria-pressed:text-foreground aria-pressed:font-medium transition-colors"
+					>
+						@icon.ListChecks(icon.Props{Class: "w-4 h-4"})
+						<span>Bulk</span>
+					</button>
+					<span class="text-border" aria-hidden="true">|</span>
 					<span data-finding-count class="tabular-nums">
 						{ strconv.Itoa(len(v.Findings)) }
 						if len(v.Findings) == 1 {
@@ -241,7 +258,7 @@ templ findingsListPane(v RunFindingsView) {
 						}
 					</span>
 				</div>
-				@gitDriftIndicator(v.Manifest.TargetRepoGit, v.CurrentGit)
+				@bulkControls(v.Manifest.Name)
 			</div>
 		</header>
 		if len(v.Findings) == 0 {
@@ -284,7 +301,24 @@ templ findingListItem(runName string, f schema.Finding, selected bool, anchor st
 		hx-push-url={ workspaceHref }
 		hx-trigger="click"
 	>
-		<a href={ templ.SafeURL(workspaceHref) } class="flex items-center gap-2.5 min-w-0 outline-none" onclick="event.stopPropagation()">
+		<a
+			href={ templ.SafeURL(workspaceHref) }
+			class="flex items-center gap-2.5 min-w-0 outline-none"
+			onclick="if(!(event.ctrlKey||event.metaKey||event.shiftKey)){event.preventDefault();}"
+		>
+			<label
+				class="bulk-row-hit shrink-0 hidden -m-2 p-2 cursor-pointer"
+				onclick="event.stopPropagation()"
+				title="Select for bulk action"
+			>
+				<input
+					type="checkbox"
+					class="appearance-none w-4 h-4 rounded-[3px] border border-border bg-background cursor-pointer transition-colors block"
+					data-bulk-row-checkbox
+					value={ f.ID }
+					aria-label="select for bulk action"
+				/>
+			</label>
 			@SeverityPill(effectiveSeverity)
 			<span class="flex flex-col min-w-0 flex-1 gap-0.5">
 				<span class="flex items-baseline gap-1.5 min-w-0">
@@ -301,47 +335,167 @@ templ findingListItem(runName string, f schema.Finding, selected bool, anchor st
 	</li>
 }
 
-// gitDriftIndicator surfaces a small badge in the listing-pane header
-// when the target repo's working tree has moved since the run was
-// created. Three states the reviewer can act on:
-//
-//   • commits match, tree clean   — nothing rendered (the common case
-//     during active review).
-//   • commits match, tree dirty   — "tree dirty" badge; matches what
-//     drift detection sees right now.
-//   • commits differ              — "abc1234 → def5678" badge so a
-//     branch switch or rebase is recognisable at a glance and doesn't
-//     get mistaken for a sea of false-stale findings.
-//
-// Returns nothing for runs without a captured TargetRepoGit (merge /
-// dedupe with no target_repo) or when the current git read failed
-// (e.g. .git was removed) — there's no useful comparison to draw.
-templ gitDriftIndicator(scanned, current *schema.GitInfo) {
-	if scanned != nil && current != nil {
-		if scanned.Head != current.Head {
-			<div class="pt-1">
-				<span
-					class="inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[10px] font-mono bg-sev-medium-soft text-sev-medium-foreground"
-					title={ gitDriftTitle(scanned, current) }
-				>
-					<span class="uppercase tracking-[0.04em] font-sans font-medium">tree</span>
-					<span>{ shortSHA(scanned.Head) } → { shortSHA(current.Head) }</span>
-					if current.Dirty {
-						<span class="font-sans">· dirty</span>
+// bulkControls is the listing-pane header strip that appears when
+// bulk-action mode is enabled. It carries the select-all toggle, the
+// running selection count, and the action button(s); the inline form
+// for the chosen action expands below the strip on click. The whole
+// block lives behind data-bulk-controls so the JS can show / hide
+// it as a unit (CSS in input.css selects on the parent's bulk-on
+// class). Rendered always so the markup is server-stable; visibility
+// is purely a runtime toggle.
+templ bulkControls(runName string) {
+	<div data-bulk-controls hidden class="space-y-2 pt-2">
+		<div class="flex items-center justify-between gap-2 text-[12px]">
+			<div class="flex items-center gap-2 min-w-0">
+				<label class="flex items-center gap-2 cursor-pointer shrink-0" title="Toggle: include all / exclude all">
+					<input
+						type="checkbox"
+						class="appearance-none w-4 h-4 rounded-[3px] border border-border bg-background cursor-pointer transition-colors shrink-0"
+						data-bulk-select-all
+						aria-label="toggle all"
+					/>
+					<span data-bulk-count class="text-muted-foreground tabular-nums">All</span>
+				</label>
+				<span data-bulk-review-button-wrap hidden>
+					@button.Button(button.Props{
+						Type:       button.TypeButton,
+						Size:       button.SizeSm,
+						Attributes: templ.Attributes{"data-bulk-review-toggle": true},
+					}) {
+						Review
 					}
 				</span>
 			</div>
-		} else if current.Dirty {
-			<div class="pt-1">
-				<span
-					class="inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[10px] font-mono bg-muted text-muted-foreground"
-					title={ gitDirtyTitle(scanned) }
-				>
-					<span class="uppercase tracking-[0.04em] font-sans font-medium">tree</span>
-					<span class="font-sans">dirty</span>
-				</span>
-			</div>
+			@button.Button(button.Props{
+				Type:       button.TypeButton,
+				Variant:    button.VariantGhost,
+				Size:       button.SizeSm,
+				Attributes: templ.Attributes{"data-bulk-cancel-mode": true, "title": "Exit bulk-action mode"},
+			}) {
+				Cancel
+			}
+		</div>
+		@bulkReviewForm(runName)
+	</div>
+}
+
+// bulkReviewForm is the inline form that opens when the reviewer
+// clicks "Review" on the bulk-controls strip. Mirrors the per-finding
+// review form's shape (labels / severity / comment) but with no
+// pre-fill from history — bulk is "apply this same payload to all
+// selected", so starting from empty is the conservative default.
+//
+// finding_ids[] are injected by JS at submit time from the live
+// selection state (resolved against the visible rows when in
+// matching mode). Server-side validation ensures every id is real.
+templ bulkReviewForm(runName string) {
+	<form
+		method="POST"
+		action={ templ.SafeURL("/runs/" + runName + "/bulk/review") }
+		data-bulk-review-form
+		hidden
+		class="rounded-md border border-border bg-card p-3 space-y-3"
+	>
+		@form.Item() {
+			@form.Label(form.LabelProps{For: "bulk-review-labels"}) {
+				Labels
+			}
+			@input.Input(input.Props{
+				ID:          "bulk-review-labels",
+				Name:        "labels",
+				Type:        input.TypeText,
+				Placeholder: "comma- or space-separated, e.g. ack, fp",
+				Class:       "font-mono text-xs",
+				Attributes:  templ.Attributes{"autocomplete": "off"},
+			})
+			@form.Description() {
+				Each selected finding gets a new review entry with these labels.
+			}
 		}
+		@form.Item() {
+			@form.Label(form.LabelProps{For: "bulk-review-severity"}) {
+				Severity
+			}
+			<select
+				id="bulk-review-severity"
+				name="severity"
+				class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
+			>
+				<option value="" selected>— defer —</option>
+				<option value="high">high</option>
+				<option value="medium">medium</option>
+				<option value="low">low</option>
+			</select>
+		}
+		@form.Item() {
+			@form.Label(form.LabelProps{For: "bulk-review-comment"}) {
+				Comment
+			}
+			@textarea.Textarea(textarea.Props{
+				ID:          "bulk-review-comment",
+				Name:        "comment",
+				Rows:        2,
+				Placeholder: "Optional",
+			})
+		}
+		<div class="flex items-center justify-between gap-2">
+			@button.Button(button.Props{
+				Type:       button.TypeButton,
+				Variant:    button.VariantGhost,
+				Size:       button.SizeSm,
+				Attributes: templ.Attributes{"data-bulk-cancel": true},
+			}) {
+				Cancel
+			}
+			@button.Button(button.Props{Type: button.TypeSubmit, Size: button.SizeSm}) {
+				<span data-bulk-submit-label>Save reviews</span>
+			}
+		</div>
+	</form>
+}
+
+// gitDriftLine renders the "Run on abc → now at def (N ahead)
+// · uncommitted changes" line in the listing-pane header. Builds
+// off the precomputed templates.GitDrift, which has already filtered
+// out the uninteresting "refs match, tree clean" case server-side
+// (returns nil), so this template doesn't need to know the rules.
+//
+// The wording is borrowed from `git status`: ahead/behind counts
+// rather than a single bidirectional "(N commits)", and "uncommitted
+// changes" rather than the value-laden "dirty". Both match what every
+// git user already reads from their shell prompt.
+templ gitDriftLine(d *GitDrift) {
+	if d != nil && d.Show {
+		<p class="text-[11px] text-muted-foreground" title={ d.TooltipFull }>
+			Run on
+			<span class="font-mono">{ d.ScannedShort }</span>
+			if d.HeadChanged {
+				<span aria-hidden="true">→</span>
+				now at
+				<span class="font-mono">{ d.CurrentShort }</span>
+				@gitDivergenceCounts(d.Ahead, d.Behind)
+			}
+			if d.Dirty {
+				<span class="text-border" aria-hidden="true">·</span>
+				<span>uncommitted changes</span>
+			}
+		</p>
+	}
+}
+
+// gitDivergenceCounts renders the "(2 ahead)", "(2 ahead, 1 behind)",
+// or "(1 behind)" parenthetical, dropping it entirely when both
+// counts are zero or uncomputable. Mirrors `git status` framing —
+// "ahead" means the working tree has commits the scan didn't see
+// (forward progress); "behind" means the scan had commits the
+// working tree no longer reaches (rebase, branch switch).
+templ gitDivergenceCounts(ahead, behind int) {
+	if ahead > 0 && behind > 0 {
+		<span>({ strconv.Itoa(ahead) } ahead, { strconv.Itoa(behind) } behind)</span>
+	} else if ahead > 0 {
+		<span>({ strconv.Itoa(ahead) } ahead)</span>
+	} else if behind > 0 {
+		<span>({ strconv.Itoa(behind) } behind)</span>
 	}
 }
 
@@ -401,45 +555,6 @@ func runBreadcrumbs(name string) []BreadcrumbItem {
 		{Title: "Runs", Href: "/"},
 		{Title: name},
 	}
-}
-
-// shortSHA returns the conventional 7-character abbreviation of a git
-// commit hash. Anything shorter is left alone (degraded gracefully if
-// `git rev-parse HEAD` ever returns a short ref).
-func shortSHA(s string) string {
-	if len(s) > 7 {
-		return s[:7]
-	}
-	return s
-}
-
-// gitDriftTitle is the tooltip text on the tree-drift badge. We spell
-// out scan vs. current with full SHAs and dirty state so the reviewer
-// can copy-paste either commit into git without having to dig through
-// run.json.
-func gitDriftTitle(scanned, current *schema.GitInfo) string {
-	scannedDirty := ""
-	if scanned.Dirty {
-		scannedDirty = " (dirty)"
-	}
-	currentDirty := ""
-	if current.Dirty {
-		currentDirty = " (dirty)"
-	}
-	return "scanned at " + scanned.Head + scannedDirty + "; now at " + current.Head + currentDirty
-}
-
-// gitDirtyTitle is the tooltip on the "tree dirty" badge (commits
-// match). When the scan was also dirty, we say so — the reviewer
-// can't assume the current uncommitted edits are the same ones that
-// were present at scan time, so drift detection vs. scan content is
-// fundamentally fuzzy here.
-func gitDirtyTitle(scanned *schema.GitInfo) string {
-	base := "Working tree has uncommitted changes (HEAD " + shortSHA(scanned.Head) + ")."
-	if scanned.Dirty {
-		return base + " The scan also ran against a dirty tree, so current edits may not match what drift detection compared against."
-	}
-	return base
 }
 
 // findingSearchHaystack is what the client-side title search matches

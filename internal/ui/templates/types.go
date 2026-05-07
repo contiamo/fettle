@@ -122,6 +122,12 @@ type RunFindingsView struct {
 	Anchors    map[string]string
 	StaleCount int
 	CurrentGit *schema.GitInfo
+	// GitDrift carries the rendered git-state comparison for the
+	// listing-pane header. Computed server-side from Manifest.TargetRepoGit
+	// + the live git read so the template doesn't need to know the
+	// rules ("hide when refs match clean", "uncomputable counts get
+	// dropped"). When nil or .Show is false, the indicator is skipped.
+	GitDrift *GitDrift
 	// EffectiveSeverity maps a finding id to its reviewer-overridden
 	// severity. Findings absent from the map keep their LLM-set
 	// Finding.Severity. EffectiveSeverityOf is the helper templates
@@ -171,6 +177,30 @@ type FacetItem struct {
 	Value   string
 	Display string
 	Count   int
+}
+
+// GitDrift is the resolved view of "what changed in the target repo
+// between scan time and now". Built server-side once per render so
+// the template doesn't need to re-do the comparisons or call git.
+//
+//   Show is false when there's nothing meaningful to surface (no scan
+//   git info on the manifest, no current git readable, or both refs
+//   match with a clean tree). Templates skip the indicator in that
+//   case so the header stays quiet during normal review flow.
+//
+//   ScannedShort / CurrentShort are the 7-char abbreviations rendered
+//   inline. Ahead / Behind are the rev-list --count results when the
+//   refs differ; -1 means "uncomputable" (force-pushed away, weird
+//   detached HEAD, git not on PATH at the time of the read) and the
+//   template suppresses just that piece of data, not the whole line.
+type GitDrift struct {
+	Show          bool
+	ScannedShort  string
+	CurrentShort  string
+	HeadChanged   bool
+	Dirty         bool
+	Ahead, Behind int
+	TooltipFull   string // both full SHAs + dirty state, copy-paste friendly
 }
 
 // CodePreview is the rendered ±N-line code window for a finding.

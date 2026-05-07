@@ -236,12 +236,36 @@
    Tailwind v4's compiler, which loses to anything in @layer utilities
    regardless of specificity — that's the trap I fell into first. */
 @layer utilities {
-  [data-finding-filters] input[type="checkbox"]:checked {
+  [data-finding-filters] input[type="checkbox"]:checked,
+  [data-finding-list-pane] input[type="checkbox"]:checked {
     background-color: var(--primary);
     border-color: var(--primary);
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round' d='m3 8 4 4 6-6'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: center;
     background-size: 80%;
+  }
+  /* Indeterminate state on the select-all checkbox: render a horizontal
+     bar (no full check) so "all matching, except some" reads as
+     "partially selected" — standard table convention. */
+  [data-finding-list-pane] input[type="checkbox"]:indeterminate {
+    background-color: var(--primary);
+    border-color: var(--primary);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' d='M3 8h10'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 80%;
+  }
+  /* Bulk-mode is a class on the listing pane root. Toggling it via JS
+     reveals the row checkbox + its hit zone (template-renders the
+     wrapping label with `hidden` so non-bulk pages start clean).
+     The label is the click target — a checkbox is only ~16px square,
+     too small to hit reliably; padding on the label expands the
+     interactive zone without changing the chip-and-title row layout
+     because the label uses negative margin to "borrow" the surrounding
+     gap (-m-2 p-2). */
+  [data-finding-list-pane].bulk-on .bulk-row-hit {
+    display: inline-flex;
+    align-items: center;
   }
 }

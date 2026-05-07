@@ -50,6 +50,7 @@ func New(projectDir string, cfg project.Config) Handler {
 	r.Post("/runs/{name}/group/{id}/review", groupReviewHandler(projectDir))
 	r.Post("/runs/{name}/finding/{id}/outcome", findingOutcomeHandler(projectDir))
 	r.Post("/runs/{name}/group/{id}/outcome", groupOutcomeHandler(projectDir))
+	r.Post("/runs/{name}/bulk/review", bulkReviewHandler(projectDir))
 
 	// Quietly 404 favicon requests. We don't ship one yet; without a
 	// dedicated route, chi would 404 anyway, but this stops console

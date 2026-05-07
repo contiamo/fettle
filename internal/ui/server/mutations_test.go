@@ -81,6 +81,37 @@ func makeFindRun(t *testing.T) (string, string, string) {
 	return projectDir, runName, findingID
 }
 
+// makeFindRunMulti is the multi-finding twin of makeFindRun for tests
+// that need a bulk-action target. Returns (projectDir, runName, ids).
+func makeFindRunMulti(t *testing.T, ids ...string) (string, string, []string) {
+	t.Helper()
+	projectDir := t.TempDir()
+	runName := "find_20260101T000000Z_bulk"
+	runDir := filepath.Join(projectDir, "runs", runName)
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{
+  "name": "` + runName + `",
+  "stage": "find",
+  "fettle_version": "0.1.0",
+  "created_at": "2026-01-01T00:00:00Z",
+  "target_repo": "/tmp/repo"
+}
+`
+	if err := os.WriteFile(filepath.Join(runDir, "run.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var lines string
+	for _, id := range ids {
+		lines += `{"id":"` + id + `","file":"x.go","line":1,"title":"T","description":"D","suggestion":"S","severity":"medium","labels":[],"references":[],"created_by":"agent:claude","created_at":"2026-01-01T00:00:00Z"}` + "\n"
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "findings.jsonl"), []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return projectDir, runName, ids
+}
+
 func newTestHandler(projectDir string) http.Handler {
 	return New(projectDir, project.Config{})
 }
@@ -427,5 +458,105 @@ func TestIdentitySave_RejectsExternalNext(t *testing.T) {
 	// Open-redirect prevention: next must be a relative path.
 	if got := rec.Header().Get("Location"); got != "/" {
 		t.Errorf("Location = %q, want / (rejected external)", got)
+	}
+}
+
+func TestBulkReview_AppendsOneEntryPerFinding(t *testing.T) {
+	projectDir, runName, ids := makeFindRunMulti(t, "f1", "f2", "f3")
+	setIdentity(t, "alice")
+
+	form := url.Values{
+		"finding_ids": ids,
+		"labels":      {"ack, fp"},
+		"severity":    {"low"},
+		"comment":     {"sweep"},
+	}
+	req := httptest.NewRequest(http.MethodPost,
+		"/runs/"+runName+"/bulk/review",
+		strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	newTestHandler(projectDir).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303", rec.Code)
+	}
+	rp, err := run.Open(filepath.Join(projectDir, "runs", runName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	all, err := rp.LoadAllReviews()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != len(ids) {
+		t.Fatalf("got %d entries, want %d", len(all), len(ids))
+	}
+	seen := map[string]bool{}
+	for _, e := range all {
+		seen[e.Subject.ID] = true
+		if e.Author != "human:alice" {
+			t.Errorf("Author = %q, want human:alice", e.Author)
+		}
+		if e.Severity == nil || *e.Severity != "low" {
+			t.Errorf("Severity = %v, want low", e.Severity)
+		}
+		if e.Comment != "sweep" {
+			t.Errorf("Comment = %q, want sweep", e.Comment)
+		}
+		if len(e.Labels) != 2 {
+			t.Errorf("Labels = %v, want 2 entries", e.Labels)
+		}
+	}
+	for _, id := range ids {
+		if !seen[id] {
+			t.Errorf("missing entry for %s", id)
+		}
+	}
+}
+
+func TestBulkReview_RejectsUnknownID(t *testing.T) {
+	projectDir, runName, ids := makeFindRunMulti(t, "f1", "f2")
+	setIdentity(t, "alice")
+
+	// f3 was never created — whole call must fail rather than write
+	// partial entries.
+	form := url.Values{
+		"finding_ids": append(ids, "f3"),
+		"labels":      {"ack"},
+	}
+	req := httptest.NewRequest(http.MethodPost,
+		"/runs/"+runName+"/bulk/review",
+		strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	newTestHandler(projectDir).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+	rp, _ := run.Open(filepath.Join(projectDir, "runs", runName))
+	all, _ := rp.LoadAllReviews()
+	if len(all) != 0 {
+		t.Errorf("got %d entries, want 0 (rejected, no partial writes)", len(all))
+	}
+}
+
+func TestBulkReview_RejectsEmptyPayload(t *testing.T) {
+	projectDir, runName, ids := makeFindRunMulti(t, "f1")
+	setIdentity(t, "alice")
+
+	// finding_ids set but no labels / severity / comment — there's
+	// nothing to write.
+	form := url.Values{"finding_ids": ids}
+	req := httptest.NewRequest(http.MethodPost,
+		"/runs/"+runName+"/bulk/review",
+		strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	newTestHandler(projectDir).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
 	}
 }

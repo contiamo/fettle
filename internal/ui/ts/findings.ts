@@ -8,6 +8,7 @@ type FacetName = "severity" | "label";
 
 const ROW_SELECTOR = "[data-finding-row]";
 const FILTER_PANE = "[data-finding-filters]";
+const LIST_PANE = "[data-finding-list-pane]";
 const SEARCH_INPUT = "[data-finding-search]";
 const FILE_FILTER_INPUT = "[data-finding-file-filter]";
 const FACET_BOX = "[data-finding-facet]";
@@ -16,6 +17,41 @@ const COUNT_EL = "[data-finding-count]";
 const EMPTY_EL = "[data-finding-empty]";
 const CLEAR_BTN = "[data-finding-clear]";
 
+const BULK_TOGGLE = "[data-bulk-toggle]";
+const BULK_CONTROLS = "[data-bulk-controls]";
+const BULK_SUMMARY_ROW = "[data-bulk-summary-row]";
+const BULK_SELECT_ALL = "[data-bulk-select-all]";
+const BULK_COUNT = "[data-bulk-count]";
+const BULK_REVIEW_BUTTON_WRAP = "[data-bulk-review-button-wrap]";
+const BULK_REVIEW_TOGGLE = "[data-bulk-review-toggle]";
+const BULK_REVIEW_FORM = "[data-bulk-review-form]";
+const BULK_CANCEL = "[data-bulk-cancel]";
+const BULK_CANCEL_MODE = "[data-bulk-cancel-mode]";
+const BULK_SUBMIT_LABEL = "[data-bulk-submit-label]";
+const BULK_ROW_CHECKBOX = "[data-bulk-row-checkbox]";
+
+// Bulk-selection model — single explicit allow-list.
+//
+// Entering bulk mode starts the selection empty. The reviewer ticks
+// rows to add to it (or clicks the header checkbox to flip between
+// "all visible" and "none"). The "All" label shown when nothing is
+// selected is informational — it identifies the implicit pool the
+// reviewer is picking from, not a pre-applied state. Review only
+// surfaces when the selection is non-empty.
+//
+// Filter changes keep bulk-mode on but reset the selection, since
+// the scope just shifted; carrying a stale set into a new filter
+// would silently change the meaning of the next action.
+//
+// Single mode (no positive/negative duality) is enough here because
+// findings are loaded entirely client-side — there's no "rows you
+// haven't loaded yet" case where the pattern's matching-with-exclude
+// earned its keep.
+type BulkState =
+  | { kind: "off" }
+  | { kind: "on"; selected: Set<string> };
+
+let bulkState: BulkState = { kind: "off" };
 let scrolledToSelection = false;
 
 export function initFindingFilters() {
@@ -30,7 +66,13 @@ export function initFindingFilters() {
   const staleToggle = pane.querySelector<HTMLInputElement>(STALE_TOGGLE);
   const clearBtn = pane.querySelector<HTMLButtonElement>(CLEAR_BTN);
 
-  const apply = () => applyFilters();
+  const apply = () => {
+    applyFilters();
+    // Filter scope changed — selection's meaning depends on scope
+    // (especially in matching mode), so resetting is the safe move.
+    // No-op when bulk mode is off.
+    resetBulkOnFilterChange();
+  };
 
   search?.addEventListener("input", apply);
   fileFilter?.addEventListener("input", apply);
@@ -43,6 +85,8 @@ export function initFindingFilters() {
     if (staleToggle) staleToggle.checked = false;
     apply();
   });
+
+  initBulkSelection();
 
   // Reflect the initial selection (server-rendered) and scroll the
   // active row into view once. Subsequent selections happen through
@@ -190,4 +234,214 @@ function scrollSelectedIntoView() {
   // already on screen — common case on first paint of the workspace.
   selected.scrollIntoView({ block: "nearest" });
   scrolledToSelection = true;
+}
+
+// ---------------------------------------------------------------------------
+// Bulk selection
+// ---------------------------------------------------------------------------
+
+function initBulkSelection() {
+  const toggle = document.querySelector<HTMLButtonElement>(BULK_TOGGLE);
+  if (!toggle) return;
+
+  toggle.addEventListener("click", () => {
+    if (bulkState.kind === "off") {
+      bulkState = { kind: "on", selected: new Set() };
+    } else {
+      bulkState = { kind: "off" };
+    }
+    syncBulkUI();
+  });
+
+  document
+    .querySelector<HTMLInputElement>(BULK_SELECT_ALL)
+    ?.addEventListener("change", () => {
+      if (bulkState.kind !== "on") return;
+      // Bidirectional shortcut: when nothing's selected (or some-but-
+      // not-all), select every visible row; otherwise clear the
+      // selection. Saves the reviewer ticking 60+ checkboxes by hand.
+      const total = countVisibleRows();
+      if (bulkState.selected.size < total) {
+        const all = new Set<string>();
+        document.querySelectorAll<HTMLElement>(ROW_SELECTOR).forEach((row) => {
+          if (row.hidden) return;
+          const id = row.getAttribute("data-finding-id");
+          if (id) all.add(id);
+        });
+        bulkState = { kind: "on", selected: all };
+      } else {
+        bulkState = { kind: "on", selected: new Set() };
+      }
+      syncBulkUI();
+    });
+
+  document.querySelectorAll<HTMLInputElement>(BULK_ROW_CHECKBOX).forEach((cb) => {
+    cb.addEventListener("change", () => onRowCheckboxChange(cb));
+  });
+
+  document
+    .querySelector<HTMLButtonElement>(BULK_CANCEL_MODE)
+    ?.addEventListener("click", () => {
+      bulkState = { kind: "off" };
+      syncBulkUI();
+    });
+
+  document
+    .querySelector<HTMLButtonElement>(BULK_REVIEW_TOGGLE)
+    ?.addEventListener("click", () => {
+      const form = document.querySelector<HTMLFormElement>(BULK_REVIEW_FORM);
+      if (form) form.hidden = false;
+    });
+
+  document.querySelector<HTMLButtonElement>(BULK_CANCEL)?.addEventListener("click", () => {
+    const form = document.querySelector<HTMLFormElement>(BULK_REVIEW_FORM);
+    if (form) form.hidden = true;
+  });
+
+  document
+    .querySelector<HTMLFormElement>(BULK_REVIEW_FORM)
+    ?.addEventListener("submit", onBulkFormSubmit);
+}
+
+function onRowCheckboxChange(cb: HTMLInputElement) {
+  if (bulkState.kind !== "on") {
+    cb.checked = false;
+    return;
+  }
+  const id = cb.value;
+  if (cb.checked) bulkState.selected.add(id);
+  else bulkState.selected.delete(id);
+  syncBulkUI();
+}
+
+function onBulkFormSubmit(ev: SubmitEvent) {
+  const form = ev.currentTarget as HTMLFormElement;
+  // Strip any prior finding_ids hidden inputs (in case the form was
+  // shown, dismissed, then submitted twice in one page life).
+  form
+    .querySelectorAll<HTMLInputElement>('input[name="finding_ids"]')
+    .forEach((i) => i.remove());
+  const ids = resolveSelectionIds();
+  if (ids.length === 0) {
+    ev.preventDefault();
+    return;
+  }
+  for (const id of ids) {
+    const hidden = document.createElement("input");
+    hidden.type = "hidden";
+    hidden.name = "finding_ids";
+    hidden.value = id;
+    form.appendChild(hidden);
+  }
+}
+
+// resolveSelectionIds turns the bulk state into a concrete id list
+// at submit time. We intersect with currently-visible rows so a
+// selection that was made before the user changed the filter scope
+// can't accidentally re-include rows that no longer match — though
+// resetBulkOnFilterChange already empties the set on filter change,
+// the intersect is belt-and-suspenders against any future code that
+// shifts visibility without going through the filter handlers.
+function resolveSelectionIds(): string[] {
+  if (bulkState.kind !== "on") return [];
+  const visibleIds = new Set<string>();
+  document.querySelectorAll<HTMLElement>(ROW_SELECTOR).forEach((row) => {
+    if (row.hidden) return;
+    const id = row.getAttribute("data-finding-id");
+    if (id) visibleIds.add(id);
+  });
+  return [...bulkState.selected].filter((id) => visibleIds.has(id));
+}
+
+function syncBulkUI() {
+  const pane = document.querySelector<HTMLElement>(LIST_PANE);
+  const controls = document.querySelector<HTMLElement>(BULK_CONTROLS);
+  const summaryRow = document.querySelector<HTMLElement>(BULK_SUMMARY_ROW);
+  const toggle = document.querySelector<HTMLButtonElement>(BULK_TOGGLE);
+  const selectAll = document.querySelector<HTMLInputElement>(BULK_SELECT_ALL);
+  const countEl = document.querySelector<HTMLElement>(BULK_COUNT);
+  const reviewWrap = document.querySelector<HTMLElement>(BULK_REVIEW_BUTTON_WRAP);
+  const submitLabel = document.querySelector<HTMLElement>(BULK_SUBMIT_LABEL);
+  const reviewForm = document.querySelector<HTMLFormElement>(BULK_REVIEW_FORM);
+
+  const on = bulkState.kind === "on";
+  pane?.classList.toggle("bulk-on", on);
+  if (controls) controls.hidden = !on;
+  if (summaryRow) summaryRow.hidden = on; // hide the date/count line when bulk is up
+  toggle?.setAttribute("aria-pressed", on ? "true" : "false");
+
+  if (bulkState.kind !== "on") {
+    if (reviewForm) reviewForm.hidden = true;
+    if (reviewWrap) reviewWrap.hidden = true;
+    document
+      .querySelectorAll<HTMLInputElement>(BULK_ROW_CHECKBOX)
+      .forEach((cb) => {
+        cb.checked = false;
+        cb.indeterminate = false;
+      });
+    if (selectAll) {
+      selectAll.checked = false;
+      selectAll.indeterminate = false;
+    }
+    return;
+  }
+  // Hoist the set into a local so subsequent narrowing survives
+  // across arrow-function callbacks (TS doesn't preserve discriminated-
+  // union narrowing through closure boundaries).
+  const selected = bulkState.selected;
+  const total = countVisibleRows();
+
+  if (countEl) countEl.textContent = formatBulkCount(selected.size, total);
+  if (reviewWrap) reviewWrap.hidden = selected.size === 0;
+  if (submitLabel) {
+    submitLabel.textContent =
+      selected.size === 1 ? "Save 1 review" : `Save ${selected.size} reviews`;
+  }
+
+  document
+    .querySelectorAll<HTMLInputElement>(BULK_ROW_CHECKBOX)
+    .forEach((cb) => {
+      cb.checked = selected.has(cb.value);
+    });
+
+  if (selectAll) {
+    if (selected.size === 0) {
+      selectAll.checked = false;
+      selectAll.indeterminate = false;
+    } else if (selected.size === total) {
+      selectAll.checked = true;
+      selectAll.indeterminate = false;
+    } else {
+      selectAll.checked = false;
+      selectAll.indeterminate = true;
+    }
+  }
+}
+
+// formatBulkCount labels the empty state "All" — informational, the
+// pool you're picking from — and switches to "X of Y" once anything
+// is selected, with "All selected" as the upper bound to differentiate
+// "nothing picked" (also reads "All") from "everything picked".
+function formatBulkCount(selected: number, total: number): string {
+  if (total === 0) return "no findings";
+  if (selected === 0) return "All";
+  if (selected === total) return "All selected";
+  return `${selected} of ${total}`;
+}
+
+function countVisibleRows(): number {
+  let n = 0;
+  document.querySelectorAll<HTMLElement>(ROW_SELECTOR).forEach((row) => {
+    if (!row.hidden) n++;
+  });
+  return n;
+}
+
+function resetBulkOnFilterChange() {
+  if (bulkState.kind !== "on") return;
+  // Filter scope shifted; the prior selection's meaning depends on
+  // what was visible at the time. Clearing keeps the model honest —
+  // the reviewer reselects under the new scope.
+  bulkState = { kind: "on", selected: new Set() };
+  syncBulkUI();
 }

@@ -95,13 +95,14 @@ func runHandler(projectDir string) http.HandlerFunc {
 				currentGit = run.ReadGit(manifest.TargetRepo)
 			}
 			view := templates.RunFindingsView{
-				Manifest:           manifest,
-				Findings:           findings,
-				Facets:             computeFacetsWithOverrides(findings, sevOverrides),
-				Anchors:            anchors,
-				StaleCount:         staleCount,
-				CurrentGit:         currentGit,
-				EffectiveSeverity:  sevOverrides,
+				Manifest:          manifest,
+				Findings:          findings,
+				Facets:            computeFacetsWithOverrides(findings, sevOverrides),
+				Anchors:           anchors,
+				StaleCount:        staleCount,
+				CurrentGit:        currentGit,
+				GitDrift:          buildGitDrift(manifest.TargetRepo, manifest.TargetRepoGit, currentGit),
+				EffectiveSeverity: sevOverrides,
 			}
 			// Pre-select the finding identified by ?focus= (the workspace
 			// pushes this on row click) so refresh / share lands on the
@@ -341,6 +342,66 @@ func computeFacetsWithOverrides(findings []schema.Finding, overrides map[string]
 		Severities: orderedSeverities(sevCounts),
 		Labels:     groupedLabelFacets(labelCounts),
 	}
+}
+
+// buildGitDrift composes the listing-pane git indicator data. Returns
+// a GitDrift with Show=false when there's nothing useful to surface
+// (refs match and the tree is clean, or git data is missing on
+// either side); the template skips the row in that case so the
+// header stays quiet during the common active-review case.
+//
+// Ahead/Behind use git rev-list --count via run.Diverged. -1 from
+// either call survives in the struct so the template can render
+// "(N ahead)" with the available number even if the other half is
+// uncomputable (force-push edge cases, weird detached HEAD, etc).
+func buildGitDrift(repoRoot string, scanned, current *schema.GitInfo) *templates.GitDrift {
+	if scanned == nil || current == nil {
+		return nil
+	}
+	headChanged := scanned.Head != current.Head
+	dirty := current.Dirty
+	if !headChanged && !dirty {
+		return nil
+	}
+	d := &templates.GitDrift{
+		Show:         true,
+		ScannedShort: shortGitSHA(scanned.Head),
+		CurrentShort: shortGitSHA(current.Head),
+		HeadChanged:  headChanged,
+		Dirty:        dirty,
+		Ahead:        -1,
+		Behind:       -1,
+		TooltipFull:  gitDriftTooltip(scanned, current),
+	}
+	if headChanged && repoRoot != "" {
+		d.Ahead, d.Behind = run.Diverged(repoRoot, scanned.Head, current.Head)
+	}
+	return d
+}
+
+// shortGitSHA is the conventional 7-char abbreviation; anything
+// shorter (already-truncated input) is left alone.
+func shortGitSHA(s string) string {
+	if len(s) > 7 {
+		return s[:7]
+	}
+	return s
+}
+
+// gitDriftTooltip is the copy-paste-friendly long form: full SHAs +
+// dirty state on both sides. Lives on the indicator's title attr so
+// the reader can hover for the unabbreviated commit they need to
+// `git log`.
+func gitDriftTooltip(scanned, current *schema.GitInfo) string {
+	scannedDirty := ""
+	if scanned.Dirty {
+		scannedDirty = " (dirty)"
+	}
+	currentDirty := ""
+	if current.Dirty {
+		currentDirty = " (dirty)"
+	}
+	return "Run on " + scanned.Head + scannedDirty + "; now at " + current.Head + currentDirty
 }
 
 // severityRankOf is the *string-aware variant of severityRank: a nil
