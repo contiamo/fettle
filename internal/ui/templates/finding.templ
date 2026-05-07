@@ -46,9 +46,9 @@ templ FindingArticle(v FindingView) {
 					<span class="tabular-nums">{ v.Finding.CreatedAt.Format("2006-01-02 15:04 MST") }</span>
 				}
 			</div>
-			if len(v.Finding.Labels) > 0 {
+			if len(v.EffectiveLabels) > 0 {
 				<div class="pt-1">
-					@LabelChips(v.Finding.Labels)
+					@LabelChips(v.EffectiveLabels)
 				</div>
 			}
 		</header>

@@ -90,6 +90,7 @@ type FindingView struct {
 	Manifest          schema.RunManifest
 	Finding           schema.Finding
 	EffectiveSeverity *string
+	EffectiveLabels   []string
 	Preview           CodePreview
 	Review            ReviewSectionView
 	Outcome           OutcomeSectionView
@@ -133,6 +134,12 @@ type RunFindingsView struct {
 	// Finding.Severity. EffectiveSeverityOf is the helper templates
 	// call to resolve a finding to its display severity.
 	EffectiveSeverity map[string]string
+	// EffectiveLabels maps a finding id to the union of every
+	// reviewer's latest non-nil Labels override on that finding.
+	// Absent → no reviewer touched labels → the template falls back
+	// to Finding.Labels. Present empty → reviewers explicitly
+	// suppressed all labels.
+	EffectiveLabels map[string][]string
 }
 
 // EffectiveSeverityOf returns the severity that should drive every
@@ -147,6 +154,19 @@ func (v RunFindingsView) EffectiveSeverityOf(f schema.Finding) *string {
 		}
 	}
 	return f.Severity
+}
+
+// EffectiveLabelsOf returns the labels the row + detail should show:
+// the union of reviewer overrides if any, otherwise Finding.Labels.
+// Mirrors EffectiveSeverityOf so every display surface speaks one
+// resolved value.
+func (v RunFindingsView) EffectiveLabelsOf(f schema.Finding) []string {
+	if v.EffectiveLabels != nil {
+		if ls, ok := v.EffectiveLabels[f.ID]; ok {
+			return ls
+		}
+	}
+	return f.Labels
 }
 
 // FindingFacets are the filter groups on the left rail. Severity is
@@ -269,13 +289,20 @@ type ReviewSectionView struct {
 // is non-nil when this entry expressed a severity judgment; the
 // effective severity for the finding is the latest such entry across
 // authors, falling back to Finding.Severity when none is set.
+//
+// Labels carries the reviewer's label override (or empty if not).
+// LabelsTouched preserves the nil-vs-empty distinction the schema
+// makes: false means this entry didn't touch labels (don't show a
+// "set labels to" line), true with empty Labels means this entry
+// explicitly cleared, true with non-empty means override.
 type ReviewEntryView struct {
-	Author   string
-	Labels   []string
-	Severity *string
-	Comment  string
-	At       time.Time
-	IsLatest bool
+	Author        string
+	Labels        []string
+	LabelsTouched bool
+	Severity      *string
+	Comment       string
+	At            time.Time
+	IsLatest      bool
 }
 
 // PostURL returns the HTMX target path for the review form on this

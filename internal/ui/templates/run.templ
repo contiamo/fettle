@@ -8,7 +8,6 @@ import (
 	"github.com/contiamo/fettle/internal/ui/components/button"
 	"github.com/contiamo/fettle/internal/ui/components/form"
 	"github.com/contiamo/fettle/internal/ui/components/icon"
-	"github.com/contiamo/fettle/internal/ui/components/input"
 	"github.com/contiamo/fettle/internal/ui/components/textarea"
 )
 
@@ -266,7 +265,7 @@ templ findingsListPane(v RunFindingsView) {
 		} else {
 			<ul role="listbox" data-finding-list>
 				for _, f := range v.Findings {
-					@findingListItem(v.Manifest.Name, f, v.Selected != nil && v.Selected.ID == f.ID, v.Anchors[f.ID], v.EffectiveSeverityOf(f))
+					@findingListItem(v.Manifest.Name, f, v.Selected != nil && v.Selected.ID == f.ID, v.Anchors[f.ID], v.EffectiveSeverityOf(f), v.EffectiveLabelsOf(f))
 				}
 			</ul>
 			<div data-finding-empty class="hidden px-4 py-10 text-center text-sm text-muted-foreground">No findings match these filters.</div>
@@ -281,7 +280,7 @@ templ findingsListPane(v RunFindingsView) {
 // pre-resolved drift state ("current", "shifted", "ambiguous",
 // "stale", or "unknown"), exposed as data-anchor so the rail's
 // "Hide stale" toggle can filter rows client-side without a refetch.
-templ findingListItem(runName string, f schema.Finding, selected bool, anchor string, effectiveSeverity *string) {
+templ findingListItem(runName string, f schema.Finding, selected bool, anchor string, effectiveSeverity *string, effectiveLabels []string) {
 	{{ href := "/runs/" + runName + "/finding/" + f.ID }}
 	{{ workspaceHref := "/runs/" + runName + "?focus=" + f.ID }}
 	<li
@@ -292,7 +291,7 @@ templ findingListItem(runName string, f schema.Finding, selected bool, anchor st
 		data-search={ findingSearchHaystack(f) }
 		data-file={ f.File }
 		data-severity={ severityValue(effectiveSeverity) }
-		data-labels={ joinLabels(f.Labels) }
+		data-labels={ joinLabels(effectiveLabels) }
 		data-anchor={ anchor }
 		class={ "relative cursor-pointer border-b border-border/60 px-4 py-2 hover:bg-accent/40 transition-colors", templ.KV("row-selected", selected), templ.KV("opacity-60", anchor == "stale") }
 		hx-get={ href }
@@ -396,37 +395,8 @@ templ bulkReviewForm(runName string) {
 		hidden
 		class="rounded-md border border-border bg-card p-3 space-y-3"
 	>
-		@form.Item() {
-			@form.Label(form.LabelProps{For: "bulk-review-labels"}) {
-				Labels
-			}
-			@input.Input(input.Props{
-				ID:          "bulk-review-labels",
-				Name:        "labels",
-				Type:        input.TypeText,
-				Placeholder: "comma- or space-separated, e.g. ack, fp",
-				Class:       "font-mono text-xs",
-				Attributes:  templ.Attributes{"autocomplete": "off"},
-			})
-			@form.Description() {
-				Each selected finding gets a new review entry with these labels.
-			}
-		}
-		@form.Item() {
-			@form.Label(form.LabelProps{For: "bulk-review-severity"}) {
-				Severity
-			}
-			<select
-				id="bulk-review-severity"
-				name="severity"
-				class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
-			>
-				<option value="" selected>— defer —</option>
-				<option value="high">high</option>
-				<option value="medium">medium</option>
-				<option value="low">low</option>
-			</select>
-		}
+		@editableLabels("bulk-review-labels", "")
+		@editableSeverity("bulk-review-severity", "")
 		@form.Item() {
 			@form.Label(form.LabelProps{For: "bulk-review-comment"}) {
 				Comment

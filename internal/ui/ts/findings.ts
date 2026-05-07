@@ -87,12 +87,53 @@ export function initFindingFilters() {
   });
 
   initBulkSelection();
+  initEditToggles();
 
   // Reflect the initial selection (server-rendered) and scroll the
   // active row into view once. Subsequent selections happen through
   // HTMX swaps; refreshSelection runs again then.
   refreshSelection();
   scrollSelectedIntoView();
+}
+
+// initEditToggles wires the pencil-edit / cancel-edit buttons that
+// gate review-form fields (labels, severity) behind a "no change"
+// preview. Behaviour is scope-local: each editable field is wrapped
+// in a [data-edit-field] container, and clicks on its show/revert
+// buttons only toggle elements inside that container — so the
+// per-finding review form and the bulk review form coexisting on
+// one page never step on each other.
+//
+// Toggling "show" enables the underlying input so it submits with
+// the form; "revert" disables it again so an unchanged field stays
+// out of the post body (server interprets the absence as nil — "no
+// change to this axis"). The disabled-by-default state is rendered
+// server-side, so initial page load always submits no fields.
+function initEditToggles() {
+  document.querySelectorAll<HTMLButtonElement>("[data-edit-show]").forEach((btn) => {
+    btn.addEventListener("click", () => setEditMode(btn, true));
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-edit-revert]").forEach((btn) => {
+    btn.addEventListener("click", () => setEditMode(btn, false));
+  });
+}
+
+function setEditMode(button: HTMLElement, editing: boolean) {
+  const field = button.closest<HTMLElement>("[data-edit-field]");
+  if (!field) return;
+  const preview = field.querySelector<HTMLElement>("[data-edit-preview]");
+  const editor = field.querySelector<HTMLElement>("[data-edit-editor]");
+  if (preview) preview.hidden = editing;
+  if (editor) {
+    editor.hidden = !editing;
+    const ctrl = editor.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+      "input, select, textarea",
+    );
+    if (ctrl) {
+      ctrl.disabled = !editing;
+      if (editing) ctrl.focus();
+    }
+  }
 }
 
 function applyFilters() {

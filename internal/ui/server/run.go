@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"time"
 
 	"github.com/contiamo/fettle/internal/anchor"
 	"github.com/contiamo/fettle/internal/run"
@@ -87,6 +88,7 @@ func runHandler(projectDir string) http.HandlerFunc {
 				return
 			}
 			sevOverrides := severityOverrides(reviews)
+			lblOverrides := labelOverrides(reviews)
 			sortFindingsBySeverity(findings, sevOverrides)
 
 			anchors, staleCount := computeAnchorStates(manifest.TargetRepo, findings)
@@ -97,12 +99,13 @@ func runHandler(projectDir string) http.HandlerFunc {
 			view := templates.RunFindingsView{
 				Manifest:          manifest,
 				Findings:          findings,
-				Facets:            computeFacetsWithOverrides(findings, sevOverrides),
+				Facets:            computeFacetsWithOverrides(findings, sevOverrides, lblOverrides),
 				Anchors:           anchors,
 				StaleCount:        staleCount,
 				CurrentGit:        currentGit,
 				GitDrift:          buildGitDrift(manifest.TargetRepo, manifest.TargetRepoGit, currentGit),
 				EffectiveSeverity: sevOverrides,
+				EffectiveLabels:   lblOverrides,
 			}
 			// Pre-select the finding identified by ?focus= (the workspace
 			// pushes this on row click) so refresh / share lands on the
@@ -277,6 +280,53 @@ func sortFindingsBySeverity(findings []schema.Finding, overrides map[string]stri
 	})
 }
 
+// labelOverrides scans all reviews and returns finding-id → effective
+// label set for findings any reviewer has overridden labels on. Per-
+// author "latest non-nil entry" wins; the result is the union across
+// all such reviewers (so multiple reviewers stack). Findings without
+// any non-nil-label review stay out of the map and inherit
+// Finding.Labels at display time. An override that explicitly
+// cleared (entry with &[]) contributes nothing to the union but
+// still puts the finding in the map — important when it's the only
+// override, since that's how a reviewer expresses "this finding
+// shouldn't carry any labels".
+func labelOverrides(reviews []run.FlatReview) map[string][]string {
+	type stamped struct {
+		labels []string
+		at     time.Time
+	}
+	perAuthor := map[string]map[string]stamped{}
+	for _, r := range reviews {
+		if r.Subject.Kind != schema.SubjectFinding || r.Subject.ID == "" || r.Labels == nil {
+			continue
+		}
+		fid := r.Subject.ID
+		if perAuthor[fid] == nil {
+			perAuthor[fid] = map[string]stamped{}
+		}
+		existing, ok := perAuthor[fid][r.Author]
+		if !ok || r.At.After(existing.at) {
+			perAuthor[fid][r.Author] = stamped{labels: *r.Labels, at: r.At}
+		}
+	}
+	out := make(map[string][]string, len(perAuthor))
+	for fid, byAuthor := range perAuthor {
+		seen := map[string]struct{}{}
+		for _, s := range byAuthor {
+			for _, l := range s.labels {
+				seen[l] = struct{}{}
+			}
+		}
+		u := make([]string, 0, len(seen))
+		for l := range seen {
+			u = append(u, l)
+		}
+		slices.Sort(u)
+		out[fid] = u
+	}
+	return out
+}
+
 // severityOverrides scans all reviews and returns finding-id →
 // severity-string for findings that have a reviewer-set severity.
 // "Latest non-nil severity across reviewers wins" — we take the most
@@ -317,16 +367,18 @@ func severityRankOfEffective(f schema.Finding, overrides map[string]string) int 
 	return severityRankOf(f.Severity)
 }
 
-// computeFacetsWithOverrides counts severity buckets using the
-// effective severity per finding, so a downgraded "high" → "medium"
-// shifts the rail counts the way the reviewer would expect. Labels
-// are unaffected — they're independent of severity.
-func computeFacetsWithOverrides(findings []schema.Finding, overrides map[string]string) templates.FindingFacets {
+// computeFacetsWithOverrides counts severity AND label buckets using
+// the effective state per finding — a downgraded "high" → "medium"
+// shifts the rail counts, and a reviewer-overridden label set
+// replaces the LLM's contribution to the label-rail counts. Both
+// match what the user sees on the rows so the rail filter stays in
+// sync with the displayed values.
+func computeFacetsWithOverrides(findings []schema.Finding, sevOverrides map[string]string, lblOverrides map[string][]string) templates.FindingFacets {
 	sevCounts := map[string]int{}
 	labelCounts := map[string]int{}
 	for _, f := range findings {
 		sev := ""
-		if s, ok := overrides[f.ID]; ok {
+		if s, ok := sevOverrides[f.ID]; ok {
 			sev = s
 		} else if f.Severity != nil {
 			sev = *f.Severity
@@ -334,7 +386,11 @@ func computeFacetsWithOverrides(findings []schema.Finding, overrides map[string]
 		if sev != "" {
 			sevCounts[sev]++
 		}
-		for _, l := range f.Labels {
+		labels := f.Labels
+		if override, ok := lblOverrides[f.ID]; ok {
+			labels = override
+		}
+		for _, l := range labels {
 			labelCounts[l]++
 		}
 	}

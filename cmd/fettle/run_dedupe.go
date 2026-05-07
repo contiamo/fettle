@@ -314,9 +314,12 @@ type annotatedFinding struct {
 }
 
 type reviewState struct {
-	Labels  []string `json:"labels"`
-	Comment string   `json:"comment,omitempty"`
-	At      string   `json:"at"`
+	// Labels mirrors schema.Review.Labels' nil-means-untouched
+	// semantic — agent prompts can distinguish "didn't override
+	// labels" from "explicitly cleared".
+	Labels  *[]string `json:"labels,omitempty"`
+	Comment string    `json:"comment,omitempty"`
+	At      string    `json:"at"`
 }
 
 func annotateInputs(inputs []inputRun, projectDir string) ([]annotatedFinding, error) {

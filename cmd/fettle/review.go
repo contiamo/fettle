@@ -13,12 +13,13 @@ import (
 )
 
 var addReviewFlags struct {
-	finding  string
-	group    string
-	labels   []string
-	severity string
-	comment  string
-	verbose  bool
+	finding     string
+	group       string
+	labels      []string
+	clearLabels bool
+	severity    string
+	comment     string
+	verbose     bool
 }
 
 var addReviewCmd = &cobra.Command{
@@ -83,7 +84,8 @@ Exit codes: 0 success, 1 validation / not-found, 2 internal error.`,
 func init() {
 	addReviewCmd.Flags().StringVar(&addReviewFlags.finding, "finding", "", "review subject is a finding with this id")
 	addReviewCmd.Flags().StringVar(&addReviewFlags.group, "group", "", "review subject is a group with this id")
-	addReviewCmd.Flags().StringSliceVar(&addReviewFlags.labels, "label", nil, "label of the form prefix:value (or any string), repeatable")
+	addReviewCmd.Flags().StringSliceVar(&addReviewFlags.labels, "label", nil, "label of the form prefix:value (or any string), repeatable; omit to leave labels untouched")
+	addReviewCmd.Flags().BoolVar(&addReviewFlags.clearLabels, "clear-labels", false, "explicitly clear all of this reviewer's labels (otherwise omitting --label leaves them as-is)")
 	addReviewCmd.Flags().StringVar(&addReviewFlags.severity, "severity", "", "reviewer's severity judgment (overrides the LLM's initial value); leave unset to defer")
 	addReviewCmd.Flags().StringVar(&addReviewFlags.comment, "comment", "", "free-form comment")
 	addReviewCmd.Flags().BoolVar(&addReviewFlags.verbose, "verbose", false, "print the appended subject id on success")
@@ -150,10 +152,24 @@ func runAddReview(cmd *cobra.Command, args []string) error {
 	if s := strings.TrimSpace(addReviewFlags.severity); s != "" {
 		severity = &s
 	}
+	// Pointer-to-slice carries the "didn't touch labels" signal: if
+	// no --label flag was passed, send nil so the reviewer's prior
+	// override (or the LLM's Finding.Labels) stays in effect; if any
+	// --label was passed, send the slice as an explicit override.
+	// To clear all labels intentionally, pass --clear-labels.
+	var labels *[]string
+	switch {
+	case addReviewFlags.clearLabels:
+		empty := []string{}
+		labels = &empty
+	case len(addReviewFlags.labels) > 0:
+		copied := append([]string{}, addReviewFlags.labels...)
+		labels = &copied
+	}
 	review := schema.Review{
 		Subject:  subject,
 		Author:   authorStamp,
-		Labels:   append([]string{}, addReviewFlags.labels...),
+		Labels:   labels,
 		Severity: severity,
 		Comment:  strings.TrimSpace(addReviewFlags.comment),
 		At:       time.Now().UTC(),
@@ -235,9 +251,12 @@ func runShowReview(cmd *cobra.Command, args []string) error {
 type reviewEntry struct {
 	Subject schema.Subject `json:"subject"`
 	Author  string         `json:"author"`
-	Labels  []string       `json:"labels"`
-	Comment string         `json:"comment,omitempty"`
-	At      time.Time      `json:"at"`
+	// Labels uses pointer-to-slice to preserve schema.Review's
+	// nil-means-untouched semantic when piping review entries
+	// through CLI output and on into dedupe/group prompts.
+	Labels  *[]string `json:"labels,omitempty"`
+	Comment string    `json:"comment,omitempty"`
+	At      time.Time `json:"at"`
 }
 
 // reviewCurrent is the "current state" view of a subject's reviews:
@@ -249,8 +268,12 @@ type reviewCurrent struct {
 }
 
 type reviewCurrentEntry struct {
-	Author  string    `json:"author"`
-	Labels  []string  `json:"labels"`
+	Author string `json:"author"`
+	// Labels mirrors schema.Review.Labels' nil-means-don't-touch
+	// semantics; omitempty drops the field for entries that
+	// didn't override (so JSON consumers see the absence rather
+	// than a misleading empty array).
+	Labels  *[]string `json:"labels,omitempty"`
 	Comment string    `json:"comment,omitempty"`
 	At      time.Time `json:"at"`
 }
@@ -307,8 +330,10 @@ func deriveReviewState(entries []reviewEntry) reviewCurrent {
 			Comment: e.Comment,
 			At:      e.At,
 		})
-		for _, l := range e.Labels {
-			labelSet[l] = true
+		if e.Labels != nil {
+			for _, l := range *e.Labels {
+				labelSet[l] = true
+			}
 		}
 	}
 	out.CurrentLabels = make([]string, 0, len(labelSet))

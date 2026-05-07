@@ -214,12 +214,15 @@ func TestReviewPost_AppendsAndRendersSwap(t *testing.T) {
 		t.Errorf("Subject = %+v", got.Subject)
 	}
 	wantLabels := []string{"ack", "severity:high"}
-	if len(got.Labels) != len(wantLabels) {
-		t.Fatalf("Labels = %v, want %v", got.Labels, wantLabels)
+	if got.Labels == nil {
+		t.Fatalf("Labels = nil, want %v (override)", wantLabels)
+	}
+	if len(*got.Labels) != len(wantLabels) {
+		t.Fatalf("Labels = %v, want %v", *got.Labels, wantLabels)
 	}
 	for i := range wantLabels {
-		if got.Labels[i] != wantLabels[i] {
-			t.Errorf("Labels[%d] = %q, want %q", i, got.Labels[i], wantLabels[i])
+		if (*got.Labels)[i] != wantLabels[i] {
+			t.Errorf("Labels[%d] = %q, want %q", i, (*got.Labels)[i], wantLabels[i])
 		}
 	}
 	if got.Comment != "looks fine" {
@@ -355,10 +358,10 @@ func TestReviewView_DerivedCurrentLabels(t *testing.T) {
 	subject := schema.Subject{Kind: schema.SubjectFinding, ID: findingID}
 
 	// alice: two entries, latest wins (replaces, not unions)
-	mustAppendReview(t, rp, "alice", schema.Review{Subject: subject, Labels: []string{"old", "ack"}, At: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)})
-	mustAppendReview(t, rp, "alice", schema.Review{Subject: subject, Labels: []string{"ack", "fp"}, At: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)})
+	mustAppendReview(t, rp, "alice", schema.Review{Subject: subject, Labels: ptrSlice("old", "ack"), At: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)})
+	mustAppendReview(t, rp, "alice", schema.Review{Subject: subject, Labels: ptrSlice("ack", "fp"), At: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)})
 	// bob: one entry
-	mustAppendReview(t, rp, "bob", schema.Review{Subject: subject, Labels: []string{"sev:high"}, At: time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)})
+	mustAppendReview(t, rp, "bob", schema.Review{Subject: subject, Labels: ptrSlice("sev:high"), At: time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)})
 
 	view, err := buildReviewView(rp, runName, subject)
 	if err != nil {
@@ -390,6 +393,14 @@ func TestReviewView_DerivedCurrentLabels(t *testing.T) {
 	if !view.Entries[2].IsLatest {
 		t.Errorf("bob's only entry should be latest")
 	}
+}
+
+// ptrSlice is shorthand for the labels-as-override common case in
+// tests, mirroring how the server-side parseReviewLabels wraps a
+// non-empty form input into &[]string.
+func ptrSlice(items ...string) *[]string {
+	s := append([]string(nil), items...)
+	return &s
 }
 
 func mustAppendReview(t *testing.T, rp *run.Path, author string, r schema.Review) {
@@ -504,7 +515,7 @@ func TestBulkReview_AppendsOneEntryPerFinding(t *testing.T) {
 		if e.Comment != "sweep" {
 			t.Errorf("Comment = %q, want sweep", e.Comment)
 		}
-		if len(e.Labels) != 2 {
+		if e.Labels == nil || len(*e.Labels) != 2 {
 			t.Errorf("Labels = %v, want 2 entries", e.Labels)
 		}
 	}
@@ -558,5 +569,85 @@ func TestBulkReview_RejectsEmptyPayload(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestParseReviewLabels_NilSemantics(t *testing.T) {
+	// Form with no "labels" key at all → nil ("don't touch").
+	if got := parseReviewLabels(url.Values{"comment": {"x"}}); got != nil {
+		t.Errorf("missing labels key: got %v, want nil", got)
+	}
+	// Form with empty "labels" key → &[] ("explicit clear").
+	got := parseReviewLabels(url.Values{"labels": {""}})
+	if got == nil || len(*got) != 0 {
+		t.Errorf("empty labels: got %v, want &[]", got)
+	}
+	// Form with "ack, fp" → &[ack, fp] (override).
+	got = parseReviewLabels(url.Values{"labels": {"ack, fp"}})
+	if got == nil || len(*got) != 2 || (*got)[0] != "ack" || (*got)[1] != "fp" {
+		t.Errorf("two labels: got %v, want &[ack fp]", got)
+	}
+}
+
+func TestReviewView_LabelOverrideNilDoesntTouch(t *testing.T) {
+	projectDir, runName, findingID := makeFindRun(t)
+	rp, err := run.Open(filepath.Join(projectDir, "runs", runName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject := schema.Subject{Kind: schema.SubjectFinding, ID: findingID}
+
+	// Alice sets ack/fp, then later submits an entry with Labels=nil
+	// (a comment-only edit). Her latest non-nil entry stays canonical
+	// for the override union.
+	mustAppendReview(t, rp, "alice", schema.Review{
+		Subject: subject,
+		Labels:  ptrSlice("ack", "fp"),
+		At:      time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
+	mustAppendReview(t, rp, "alice", schema.Review{
+		Subject: subject,
+		Labels:  nil, // didn't touch labels this time
+		Comment: "second thought",
+		At:      time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+	})
+
+	view, err := buildReviewView(rp, runName, subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"ack", "fp"}
+	if len(view.CurrentLabels) != len(want) {
+		t.Fatalf("CurrentLabels = %v, want %v", view.CurrentLabels, want)
+	}
+	for i := range want {
+		if view.CurrentLabels[i] != want[i] {
+			t.Errorf("CurrentLabels[%d] = %q, want %q", i, view.CurrentLabels[i], want[i])
+		}
+	}
+}
+
+func TestReviewView_LabelExplicitClear(t *testing.T) {
+	projectDir, runName, findingID := makeFindRun(t)
+	rp, _ := run.Open(filepath.Join(projectDir, "runs", runName))
+	subject := schema.Subject{Kind: schema.SubjectFinding, ID: findingID}
+
+	// Alice sets ack, then explicitly clears (Labels = &[]). Her
+	// latest is now the empty override; CurrentLabels collapses to
+	// empty rather than re-using the older non-empty entry.
+	mustAppendReview(t, rp, "alice", schema.Review{
+		Subject: subject,
+		Labels:  ptrSlice("ack"),
+		At:      time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
+	empty := []string{}
+	mustAppendReview(t, rp, "alice", schema.Review{
+		Subject: subject,
+		Labels:  &empty,
+		At:      time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+	})
+	view, _ := buildReviewView(rp, runName, subject)
+	if len(view.CurrentLabels) != 0 {
+		t.Errorf("CurrentLabels = %v, want empty (alice cleared)", view.CurrentLabels)
 	}
 }

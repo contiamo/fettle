@@ -43,9 +43,26 @@ func buildReviewView(rp *run.Path, runName string, subject schema.Subject) (temp
 			latestByAuthor[e.Author] = i
 		}
 	}
+	// "Current labels" tracks each reviewer's latest entry where
+	// Labels != nil — i.e., the last time they actually asserted
+	// something about labels. Comment-only edits (Labels = nil) don't
+	// supersede a prior override; an explicit clear (Labels = &[])
+	// does. The union across all such latest-touched entries is the
+	// label set the UI should treat as "currently in effect from the
+	// review process".
+	latestLabelsByAuthor := map[string]int{}
+	for i, e := range matching {
+		if e.Labels == nil {
+			continue
+		}
+		j, ok := latestLabelsByAuthor[e.Author]
+		if !ok || matching[i].At.After(matching[j].At) {
+			latestLabelsByAuthor[e.Author] = i
+		}
+	}
 	labelSet := map[string]struct{}{}
-	for _, idx := range latestByAuthor {
-		for _, l := range matching[idx].Labels {
+	for _, idx := range latestLabelsByAuthor {
+		for _, l := range *matching[idx].Labels {
 			labelSet[l] = struct{}{}
 		}
 	}
@@ -57,13 +74,18 @@ func buildReviewView(rp *run.Path, runName string, subject schema.Subject) (temp
 
 	entries := make([]templates.ReviewEntryView, len(matching))
 	for i, e := range matching {
+		var labels []string
+		if e.Labels != nil {
+			labels = *e.Labels
+		}
 		entries[i] = templates.ReviewEntryView{
-			Author:   e.Author,
-			Labels:   e.Labels,
-			Severity: e.Severity,
-			Comment:  e.Comment,
-			At:       e.At,
-			IsLatest: latestByAuthor[e.Author] == i,
+			Author:        e.Author,
+			Labels:        labels,
+			LabelsTouched: e.Labels != nil,
+			Severity:      e.Severity,
+			Comment:       e.Comment,
+			At:            e.At,
+			IsLatest:      latestByAuthor[e.Author] == i,
 		}
 	}
 

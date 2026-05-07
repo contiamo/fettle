@@ -210,12 +210,12 @@ func FindingArticle(v FindingView) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		if len(v.Finding.Labels) > 0 {
+		if len(v.EffectiveLabels) > 0 {
 			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 16, "<div class=\"pt-1\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = LabelChips(v.Finding.Labels).Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = LabelChips(v.EffectiveLabels).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

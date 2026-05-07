@@ -62,7 +62,7 @@ type FlatReview struct {
 	Subject    schema.Subject `json:"subject"`
 	Author     string         `json:"author"`
 	AuthorSlug string         `json:"-"`
-	Labels     []string       `json:"labels"`
+	Labels     *[]string      `json:"labels,omitempty"`
 	Severity   *string        `json:"severity,omitempty"`
 	Comment    string         `json:"comment,omitempty"`
 	At         time.Time      `json:"at"`

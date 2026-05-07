@@ -6,6 +6,7 @@ import (
 
 	"github.com/contiamo/fettle/internal/ui/components/button"
 	"github.com/contiamo/fettle/internal/ui/components/form"
+	"github.com/contiamo/fettle/internal/ui/components/icon"
 	"github.com/contiamo/fettle/internal/ui/components/input"
 	"github.com/contiamo/fettle/internal/ui/components/textarea"
 )
@@ -19,12 +20,6 @@ templ ReviewSection(v ReviewSectionView) {
 		<header class="flex items-baseline justify-between gap-3">
 			@SectionHeading("Review")
 		</header>
-		if len(v.CurrentLabels) > 0 {
-			<div class="space-y-1.5">
-				<span class="text-[11px] text-muted-foreground">current labels</span>
-				@LabelChips(v.CurrentLabels)
-			</div>
-		}
 		if ReviewerFromContext(ctx) == nil {
 			@identityRequired("leave a review")
 		} else {
@@ -34,42 +29,8 @@ templ ReviewSection(v ReviewSectionView) {
 				hx-swap="outerHTML"
 				class="space-y-3 rounded-md border border-border bg-card p-3.5"
 			>
-				@form.Item() {
-					@form.Label(form.LabelProps{For: "review-labels"}) {
-						Labels
-					}
-					@input.Input(input.Props{
-						ID:          "review-labels",
-						Name:        "labels",
-						Type:        input.TypeText,
-						Placeholder: "comma- or space-separated, e.g. ack, fp",
-						Value:       strings.Join(myLatestLabels(ctx, v.Entries), ", "),
-						Class:       "font-mono",
-						Attributes:  templ.Attributes{"autocomplete": "off"},
-					})
-					@form.Description() {
-						Your current label set on this { v.SubjectKind }; submitting saves whatever's in the box (clear it to remove all of yours).
-					}
-				}
-				{{ currentSev := myLatestSeverityValue(ctx, v.Entries) }}
-				@form.Item() {
-					@form.Label(form.LabelProps{For: "review-severity"}) {
-						Severity
-					}
-					<select
-						id="review-severity"
-						name="severity"
-						class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
-					>
-						<option value="" selected?={ currentSev == "" }>— defer to LLM —</option>
-						<option value="high" selected?={ currentSev == "high" }>high</option>
-						<option value="medium" selected?={ currentSev == "medium" }>medium</option>
-						<option value="low" selected?={ currentSev == "low" }>low</option>
-					</select>
-					@form.Description() {
-						Override the LLM's initial assessment. Defer means the find-time value stays in effect; the latest reviewer's choice across all reviewers wins.
-					}
-				}
+				@editableLabels("review-labels", strings.Join(myLatestLabels(ctx, v.Entries), ", "))
+				@editableSeverity("review-severity", myLatestSeverityValue(ctx, v.Entries))
 				@form.Item() {
 					@form.Label(form.LabelProps{For: "review-comment"}) {
 						Comment
@@ -156,6 +117,102 @@ func myLatestLabels(ctx context.Context, entries []ReviewEntryView) []string {
 	return nil
 }
 
+// editableLabels is a "no change" preview with a pencil-edit
+// affordance: the input stays disabled (and so absent from form
+// submission) until the reviewer clicks the edit icon. Empty input
+// while editing means "explicit clear" because we know editing was
+// engaged; nil-don't-touch is reserved for the case where the
+// reviewer never opened the editor at all.
+//
+// initial is the reviewer's latest label set, joined with ", ", so
+// engaging the editor pre-fills with what they last had — same
+// "edit, don't retype" friendliness the prior form had, just gated
+// behind an explicit gesture.
+templ editableLabels(id, initial string) {
+	@form.Item(form.ItemProps{Class: "space-y-1.5", Attributes: templ.Attributes{"data-edit-field": "labels"}}) {
+		@form.Label(form.LabelProps{For: id}) {
+			Labels
+		}
+		<div class="flex items-center gap-2" data-edit-preview="labels">
+			<span class="text-[12.5px] text-muted-foreground italic">no change</span>
+			@editToggleButton("labels", "Edit labels")
+		</div>
+		<div class="flex items-center gap-2" data-edit-editor="labels" hidden>
+			@input.Input(input.Props{
+				ID:          id,
+				Name:        "labels",
+				Type:        input.TypeText,
+				Placeholder: "comma- or space-separated, e.g. ack, fp",
+				Value:       initial,
+				Class:       "font-mono",
+				Disabled:    true,
+				Attributes:  templ.Attributes{"autocomplete": "off"},
+			})
+			@editRevertButton("labels", "Cancel labels edit")
+		</div>
+	}
+}
+
+// editableSeverity is the severity twin of editableLabels. Same
+// disabled-until-clicked pattern so a comment-only review submits
+// no severity field at all (interpreted as nil = defer).
+templ editableSeverity(id, current string) {
+	@form.Item(form.ItemProps{Class: "space-y-1.5", Attributes: templ.Attributes{"data-edit-field": "severity"}}) {
+		@form.Label(form.LabelProps{For: id}) {
+			Severity
+		}
+		<div class="flex items-center gap-2" data-edit-preview="severity">
+			<span class="text-[12.5px] text-muted-foreground italic">no change</span>
+			@editToggleButton("severity", "Edit severity")
+		</div>
+		<div class="flex items-center gap-2" data-edit-editor="severity" hidden>
+			<select
+				id={ id }
+				name="severity"
+				disabled
+				class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
+			>
+				<option value="" selected?={ current == "" }>— defer to LLM —</option>
+				<option value="high" selected?={ current == "high" }>high</option>
+				<option value="medium" selected?={ current == "medium" }>medium</option>
+				<option value="low" selected?={ current == "low" }>low</option>
+			</select>
+			@editRevertButton("severity", "Cancel severity edit")
+		</div>
+	}
+}
+
+// editToggleButton is the small pencil button that flips a field
+// from "no change" preview to its real input. data-edit-show
+// identifies which field the JS should reveal.
+templ editToggleButton(field, title string) {
+	<button
+		type="button"
+		data-edit-show={ field }
+		title={ title }
+		aria-label={ title }
+		class="inline-flex items-center justify-center w-6 h-6 rounded text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors cursor-pointer shrink-0"
+	>
+		@icon.Pencil(icon.Props{Class: "w-3.5 h-3.5"})
+	</button>
+}
+
+// editRevertButton lives next to the active editor and lets the
+// reviewer back out without touching the field. It re-disables the
+// underlying input so submitting now sends nothing for that field
+// (interpreted server-side as "didn't touch").
+templ editRevertButton(field, title string) {
+	<button
+		type="button"
+		data-edit-revert={ field }
+		title={ title }
+		aria-label={ title }
+		class="inline-flex items-center justify-center w-6 h-6 rounded text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors cursor-pointer shrink-0"
+	>
+		@icon.X(icon.Props{Class: "w-3.5 h-3.5"})
+	</button>
+}
+
 // identityRequired stands in for review/outcome forms when the current
 // session has no reviewer identity configured. Submitting either
 // without an identity bounces through /identity anyway and re-types
@@ -187,10 +244,12 @@ templ reviewEntry(e ReviewEntryView) {
 			</div>
 			<span class="text-muted-foreground tabular-nums">{ e.At.Format("2006-01-02 15:04 MST") }</span>
 		</div>
-		if len(e.Labels) > 0 {
-			@LabelChips(e.Labels)
-		} else {
-			@EmptyHint("no labels")
+		if e.LabelsTouched {
+			if len(e.Labels) > 0 {
+				@LabelChips(e.Labels)
+			} else {
+				@EmptyHint("cleared labels")
+			}
 		}
 		if strings.TrimSpace(e.Comment) != "" {
 			<p class="text-[13.5px] text-foreground whitespace-pre-wrap leading-relaxed">

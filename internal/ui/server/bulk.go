@@ -69,10 +69,10 @@ func bulkReviewHandler(projectDir string) http.HandlerFunc {
 			}
 		}
 
-		labels := parseLabels(r.FormValue("labels"))
+		labels := parseReviewLabels(r.PostForm)
 		severity := parseReviewSeverity(r.FormValue("severity"))
 		comment := strings.TrimSpace(r.FormValue("comment"))
-		if len(labels) == 0 && severity == nil && comment == "" {
+		if labels == nil && severity == nil && comment == "" {
 			http.Error(w, "set at least one of labels, severity, or comment", http.StatusBadRequest)
 			return
 		}

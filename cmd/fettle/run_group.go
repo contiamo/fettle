@@ -365,10 +365,10 @@ type reviewsJSONEntry struct {
 }
 
 type reviewsJSONAuthor struct {
-	Author  string   `json:"author"`
-	Labels  []string `json:"labels"`
-	Comment string   `json:"comment,omitempty"`
-	At      string   `json:"at"`
+	Author  string    `json:"author"`
+	Labels  *[]string `json:"labels,omitempty"`
+	Comment string    `json:"comment,omitempty"`
+	At      string    `json:"at"`
 }
 
 // buildReviewsJSON converts the (finding_id → author → reviewState)
@@ -397,8 +397,10 @@ func buildReviewsJSON(byFinding map[string]map[string]reviewState) ([]byte, erro
 				Comment: rs.Comment,
 				At:      rs.At,
 			})
-			for _, l := range rs.Labels {
-				labelSet[l] = true
+			if rs.Labels != nil {
+				for _, l := range *rs.Labels {
+					labelSet[l] = true
+				}
 			}
 		}
 		current := make([]string, 0, len(labelSet))

@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,16 +62,15 @@ func reviewPostHandler(projectDir, subjectKind string) http.HandlerFunc {
 			http.Error(w, "parse form", http.StatusBadRequest)
 			return
 		}
-		labels := parseLabels(r.FormValue("labels"))
+		labels := parseReviewLabels(r.PostForm)
 		comment := strings.TrimSpace(r.FormValue("comment"))
 		severity := parseReviewSeverity(r.FormValue("severity"))
 
-		// Empty submit (no labels, no comment, no severity change)
-		// rejected. The form is the user's whole review action — at
-		// least one of labels / comment / severity must be set for
-		// the entry to carry meaning. Renders inline so the user
-		// sees what's missing without losing their place.
-		if len(labels) == 0 && comment == "" && severity == nil {
+		// Empty submit (no labels touched, no comment, no severity
+		// change) rejected — the entry would carry no meaning. Note
+		// that an explicit "clear my labels" (Labels = &[]) counts
+		// as touched, distinguishable from "didn't touch" (nil).
+		if labels == nil && comment == "" && severity == nil {
 			renderReviewSwap(w, r, rp, runName, subject, "Add at least one label, a comment, or a severity.", http.StatusBadRequest)
 			return
 		}
@@ -205,6 +205,31 @@ func stageAccepts(stage, subjectKind string) error {
 		return fmt.Errorf("unsupported run stage %q", stage)
 	}
 	return nil
+}
+
+// parseReviewLabels reads the "labels" form value with nil-means-
+// don't-touch semantics:
+//   - The form omits the labels field entirely (or sets a hidden
+//     edit-toggle to off) → no "labels" key in the post body → nil.
+//     The reviewer's prior label override (if any) carries forward;
+//     otherwise the LLM's Finding.Labels stay in effect.
+//   - The form posts labels="" (edit-toggle on, input cleared) →
+//     &[]string{} — explicit clear.
+//   - The form posts labels="ack, fp" (edit-toggle on, content) →
+//     &[]string{"ack","fp"} — override.
+//
+// We key on map presence rather than empty-string-vs-omitted
+// because Go's url.Values returns "" for both. The form ensures the
+// labels input is `disabled` while in "no change" preview mode so
+// the field doesn't appear in PostForm at all when the user didn't
+// engage the editor.
+func parseReviewLabels(form url.Values) *[]string {
+	raw, ok := form["labels"]
+	if !ok {
+		return nil
+	}
+	parsed := parseLabels(strings.Join(raw, ","))
+	return &parsed
 }
 
 // parseReviewSeverity reads the "severity" form value. Empty (the
