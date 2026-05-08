@@ -65,9 +65,6 @@ templ FindingArticle(v FindingView) {
 		if len(v.Finding.References) > 0 {
 			@referencesSection(v.Finding.References)
 		}
-		if len(v.Finding.Members) > 0 {
-			@membersSection(v.Finding.Members)
-		}
 		@ReviewSection(v.Review)
 		@OutcomeSection(v.Outcome)
 	</article>
@@ -114,28 +111,6 @@ templ referencesSection(refs []schema.Reference) {
 					if r.Line > 0 {
 						<span class="text-muted-foreground">:{ strconv.Itoa(r.Line) }</span>
 					}
-				</li>
-			}
-		</ul>
-	</section>
-}
-
-templ membersSection(members []schema.Member) {
-	<section class="space-y-2.5">
-		@SectionHeading("Members")
-		<p class="text-xs text-muted-foreground">
-			if len(members) == 1 {
-				1 source observation back-pointer.
-			} else {
-				{ strconv.Itoa(len(members)) } source observations consolidated into this canonical entry.
-			}
-		</p>
-		<ul class="text-sm space-y-1">
-			for _, m := range members {
-				<li class="font-mono text-xs flex gap-2">
-					<code class="text-foreground">{ m.FindingID }</code>
-					<span class="text-muted-foreground">in</span>
-					<span class="text-muted-foreground">{ m.FromRun }</span>
 				</li>
 			}
 		</ul>

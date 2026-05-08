@@ -42,9 +42,6 @@ func TestSummarize_findRun(t *testing.T) {
 	if s.Counts.Findings == nil || *s.Counts.Findings != 3 {
 		t.Errorf("Findings = %v, want 3", s.Counts.Findings)
 	}
-	if s.Counts.Groups != nil {
-		t.Errorf("Groups = %v, want nil for find stage", s.Counts.Groups)
-	}
 	if s.Counts.Reviews != 3 {
 		t.Errorf("Reviews = %d, want 3", s.Counts.Reviews)
 	}
@@ -72,44 +69,7 @@ func TestSummarize_findRun(t *testing.T) {
 		}
 	}
 	if strings.Contains(got, `"groups"`) {
-		t.Errorf("JSON should omit groups for find stage; got %s", got)
-	}
-	if strings.Contains(got, `"input_run"`) || strings.Contains(got, `"input_runs"`) {
-		t.Errorf("JSON should omit input_run/input_runs for find stage; got %s", got)
-	}
-}
-
-// TestSummarize_groupRun verifies Groups is set and Findings is omitted
-// for group-stage runs, and that input_run flows through.
-func TestSummarize_groupRun(t *testing.T) {
-	dir := t.TempDir()
-
-	manifest := `{
-  "name": "group_20260101T000000Z_test",
-  "stage": "group",
-  "fettle_version": "0.1.0",
-  "created_at": "2026-01-01T00:00:00Z",
-  "input_run": "runs/find_20260101T000000Z_src"
-}
-`
-	mustWrite(t, filepath.Join(dir, "run.json"), manifest)
-	mustWrite(t, filepath.Join(dir, "groups.jsonl"), "{\"id\":\"g1\"}\n{\"id\":\"g2\"}\n")
-
-	s, err := Summarize(dir)
-	if err != nil {
-		t.Fatalf("Summarize: %v", err)
-	}
-	if s.Counts.Groups == nil || *s.Counts.Groups != 2 {
-		t.Errorf("Groups = %v, want 2", s.Counts.Groups)
-	}
-	if s.Counts.Findings != nil {
-		t.Errorf("Findings = %v, want nil for group stage", s.Counts.Findings)
-	}
-	if s.Counts.Reviews != 0 || s.Counts.Outcomes != 0 {
-		t.Errorf("Reviews/Outcomes = %d/%d, want 0/0", s.Counts.Reviews, s.Counts.Outcomes)
-	}
-	if s.InputRun != "runs/find_20260101T000000Z_src" {
-		t.Errorf("InputRun = %q", s.InputRun)
+		t.Errorf("JSON should omit groups; got %s", got)
 	}
 }
 
@@ -181,31 +141,6 @@ func TestLoadFindings_missingFile(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("got %d findings, want 0", len(got))
-	}
-}
-
-// TestLoadGroups exercises the same path through the generic loader
-// for the group-stage type.
-func TestLoadGroups(t *testing.T) {
-	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, "run.json"), `{"name":"x","stage":"group","fettle_version":"0.1.0","created_at":"2026-01-01T00:00:00Z","input_run":"runs/find_x"}`+"\n")
-	mustWrite(t, filepath.Join(dir, "groups.jsonl"),
-		`{"id":"g_1","title":"T1","summary":"S1","finding_ids":["a","b"]}`+"\n"+
-			`{"id":"g_2","title":"T2","summary":"S2","finding_ids":["c"]}`+"\n",
-	)
-	rp, err := Open(dir)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	got, err := rp.LoadGroups()
-	if err != nil {
-		t.Fatalf("LoadGroups: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("got %d groups, want 2", len(got))
-	}
-	if got[0].ID != "g_1" || got[1].FindingIDs[0] != "c" {
-		t.Errorf("unexpected payload: %+v", got)
 	}
 }
 

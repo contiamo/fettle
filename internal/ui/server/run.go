@@ -26,10 +26,8 @@ import (
 // without further sanitization.
 var runNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-// runHandler renders the per-run page. For find / merge / dedupe runs
-// it renders the three-pane workspace; for group runs it lists groups.
-// The stage is taken from run.json so the template choice is data-
-// driven, not URL-driven (the URL just identifies the run folder).
+// runHandler renders the per-run page: a three-pane workspace over
+// the run's findings.
 func runHandler(projectDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "name")
@@ -62,79 +60,65 @@ func runHandler(projectDir string) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		switch manifest.Stage {
-		case "group":
-			groups, err := rp.LoadGroups()
-			if err != nil {
-				http.Error(w, fmt.Sprintf("load groups: %v", err), http.StatusInternalServerError)
-				return
-			}
-			if err := templates.RunGroups(manifest, groups).Render(r.Context(), w); err != nil {
-				fmt.Fprintf(os.Stderr, "fettle ui: render groups: %v\n", err)
-			}
-		case "find", "merge", "dedupe":
-			findings, err := rp.LoadFindings()
-			if err != nil {
-				http.Error(w, fmt.Sprintf("load findings: %v", err), http.StatusInternalServerError)
-				return
-			}
-			// Reviews are loaded once at run-render time (rather than per
-			// finding) so we can resolve effective severity in one pass
-			// before sort + facet bucketing — both need to read the
-			// reviewer-overridden value, not f.Severity.
-			reviews, err := rp.LoadAllReviews()
-			if err != nil {
-				http.Error(w, fmt.Sprintf("load reviews: %v", err), http.StatusInternalServerError)
-				return
-			}
-			sevOverrides := severityOverrides(reviews)
-			lblOverrides := labelOverrides(reviews)
-			sortFindingsBySeverity(findings, sevOverrides)
+		findings, err := rp.LoadFindings()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("load findings: %v", err), http.StatusInternalServerError)
+			return
+		}
+		// Reviews are loaded once at run-render time (rather than per
+		// finding) so we can resolve effective severity in one pass
+		// before sort + facet bucketing — both need to read the
+		// reviewer-overridden value, not f.Severity.
+		reviews, err := rp.LoadAllReviews()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("load reviews: %v", err), http.StatusInternalServerError)
+			return
+		}
+		sevOverrides := severityOverrides(reviews)
+		lblOverrides := labelOverrides(reviews)
+		sortFindingsBySeverity(findings, sevOverrides)
 
-			outcomes, err := rp.LoadOutcomes()
+		outcomes, err := rp.LoadOutcomes()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("load outcomes: %v", err), http.StatusInternalServerError)
+			return
+		}
+		outcomeMap := outcomeStatuses(outcomes)
+
+		anchors, staleCount := computeAnchorStates(manifest.TargetRepo, findings)
+		var currentGit *schema.GitInfo
+		if manifest.TargetRepo != "" {
+			currentGit = run.ReadGit(manifest.TargetRepo)
+		}
+		view := templates.RunFindingsView{
+			Manifest:          manifest,
+			Findings:          findings,
+			Facets:            computeFacetsWithOverrides(findings, sevOverrides, lblOverrides, outcomeMap),
+			Anchors:           anchors,
+			StaleCount:        staleCount,
+			CurrentGit:        currentGit,
+			GitDrift:          buildGitDrift(manifest.TargetRepo, manifest.TargetRepoGit, currentGit),
+			EffectiveSeverity: sevOverrides,
+			EffectiveLabels:   lblOverrides,
+			EffectiveOutcome:  outcomeMap,
+		}
+		// Pre-select the finding identified by ?focus= (the workspace
+		// pushes this on row click) so refresh / share lands on the
+		// same detail. With no focus, default to the first finding.
+		focus := r.URL.Query().Get("focus")
+		selected := pickSelected(findings, focus)
+		if selected != nil {
+			detail, err := buildFindingDetail(rp, manifest, *selected)
 			if err != nil {
-				http.Error(w, fmt.Sprintf("load outcomes: %v", err), http.StatusInternalServerError)
+				http.Error(w, fmt.Sprintf("build detail: %v", err), http.StatusInternalServerError)
 				return
 			}
-			outcomeMap := outcomeStatuses(outcomes)
+			view.Selected = selected
+			view.Detail = detail
+		}
 
-			anchors, staleCount := computeAnchorStates(manifest.TargetRepo, findings)
-			var currentGit *schema.GitInfo
-			if manifest.TargetRepo != "" {
-				currentGit = run.ReadGit(manifest.TargetRepo)
-			}
-			view := templates.RunFindingsView{
-				Manifest:          manifest,
-				Findings:          findings,
-				Facets:            computeFacetsWithOverrides(findings, sevOverrides, lblOverrides, outcomeMap),
-				Anchors:           anchors,
-				StaleCount:        staleCount,
-				CurrentGit:        currentGit,
-				GitDrift:          buildGitDrift(manifest.TargetRepo, manifest.TargetRepoGit, currentGit),
-				EffectiveSeverity: sevOverrides,
-				EffectiveLabels:   lblOverrides,
-				EffectiveOutcome:  outcomeMap,
-			}
-			// Pre-select the finding identified by ?focus= (the workspace
-			// pushes this on row click) so refresh / share lands on the
-			// same detail. With no focus, default to the first finding.
-			focus := r.URL.Query().Get("focus")
-			selected := pickSelected(findings, focus)
-			if selected != nil {
-				detail, err := buildFindingDetail(rp, manifest, *selected)
-				if err != nil {
-					http.Error(w, fmt.Sprintf("build detail: %v", err), http.StatusInternalServerError)
-					return
-				}
-				view.Selected = selected
-				view.Detail = detail
-			}
-
-			if err := templates.RunFindings(view).Render(r.Context(), w); err != nil {
-				fmt.Fprintf(os.Stderr, "fettle ui: render findings: %v\n", err)
-			}
-		default:
-			http.Error(w, fmt.Sprintf("unsupported stage %q", manifest.Stage), http.StatusInternalServerError)
+		if err := templates.RunFindings(view).Render(r.Context(), w); err != nil {
+			fmt.Fprintf(os.Stderr, "fettle ui: render findings: %v\n", err)
 		}
 	}
 }

@@ -15,7 +15,6 @@ import (
 var addOutcomeFlags struct {
 	run     string
 	finding string
-	group   string
 	status  string
 	prURL   string
 	verbose bool
@@ -23,11 +22,11 @@ var addOutcomeFlags struct {
 
 var addOutcomeCmd = &cobra.Command{
 	Use:   "outcome",
-	Short: "Append an outcome event for a finding or group",
-	Long: `add outcome records that a finding or group has been disposed of
-(PR merged, won't fix, deduped, etc.). Append-only — re-marking is
-allowed; the latest entry wins for current-state display, but the
-full history is preserved.
+	Short: "Append an outcome event for a finding",
+	Long: `add outcome records that a finding has been disposed of (PR
+merged, won't fix, etc.). Append-only — re-marking is allowed; the
+latest entry wins for current-state display, but the full history
+is preserved.
 
 Author identity (the slug stamped into ` + "`marked_by`" + `) chains:
 $FETTLE_AGENT (if running under a stage) → $FETTLE_AUTHOR → the
@@ -56,21 +55,20 @@ Exit codes: 0 success, 2 internal error.`,
 var showOutcomeFlags struct {
 	run     string
 	finding string
-	group   string
 	all     bool
 }
 
 var showOutcomeCmd = &cobra.Command{
 	Use:   "outcome",
-	Short: "Print the latest (or full) outcome history for one subject",
-	Long: `show outcome prints outcome events for one finding or group as
-the {"data": ...} envelope.
+	Short: "Print the latest (or full) outcome history for one finding",
+	Long: `show outcome prints outcome events for one finding as the
+{"data": ...} envelope.
 
 Default: prints the latest event only (current state). With --all,
 prints every event in chronological order — including superseded
 ones — so you can see who marked what when.
 
-Exits non-zero if no outcome events exist for the subject.
+Exits non-zero if no outcome events exist for the finding.
 
 Exit codes: 0 success, 1 validation / not-found, 2 internal error.`,
 	RunE: runShowOutcome,
@@ -78,12 +76,12 @@ Exit codes: 0 success, 1 validation / not-found, 2 internal error.`,
 
 func init() {
 	addOutcomeCmd.Flags().StringVar(&addOutcomeFlags.run, "run", "", "path to the target run folder (required)")
-	addOutcomeCmd.Flags().StringVar(&addOutcomeFlags.finding, "finding", "", "subject is a finding with this id")
-	addOutcomeCmd.Flags().StringVar(&addOutcomeFlags.group, "group", "", "subject is a group with this id")
+	addOutcomeCmd.Flags().StringVar(&addOutcomeFlags.finding, "finding", "", "finding id (required)")
 	addOutcomeCmd.Flags().StringVar(&addOutcomeFlags.status, "status", "", "outcome status: merged|closed|wontfix|... (required; project-defined)")
 	addOutcomeCmd.Flags().StringVar(&addOutcomeFlags.prURL, "pr", "", "URL of the PR or commit (optional)")
-	addOutcomeCmd.Flags().BoolVar(&addOutcomeFlags.verbose, "verbose", false, "print the subject id on success")
+	addOutcomeCmd.Flags().BoolVar(&addOutcomeFlags.verbose, "verbose", false, "print the finding id on success")
 	_ = addOutcomeCmd.MarkFlagRequired("run")
+	_ = addOutcomeCmd.MarkFlagRequired("finding")
 	addCmd.AddCommand(addOutcomeCmd)
 
 	listOutcomesCmd.Flags().StringVar(&listOutcomesFlags.run, "run", "", "path to the run folder (required)")
@@ -91,10 +89,10 @@ func init() {
 	listCmd.AddCommand(listOutcomesCmd)
 
 	showOutcomeCmd.Flags().StringVar(&showOutcomeFlags.run, "run", "", "path to the target run folder (required)")
-	showOutcomeCmd.Flags().StringVar(&showOutcomeFlags.finding, "finding", "", "subject is a finding with this id")
-	showOutcomeCmd.Flags().StringVar(&showOutcomeFlags.group, "group", "", "subject is a group with this id")
-	showOutcomeCmd.Flags().BoolVar(&showOutcomeFlags.all, "all", false, "print every outcome event for the subject (default: latest only)")
+	showOutcomeCmd.Flags().StringVar(&showOutcomeFlags.finding, "finding", "", "finding id (required)")
+	showOutcomeCmd.Flags().BoolVar(&showOutcomeFlags.all, "all", false, "print every outcome event for the finding (default: latest only)")
 	_ = showOutcomeCmd.MarkFlagRequired("run")
+	_ = showOutcomeCmd.MarkFlagRequired("finding")
 	showCmd.AddCommand(showOutcomeCmd)
 }
 
@@ -105,13 +103,8 @@ func runAddOutcome(cmd *cobra.Command, args []string) error {
 	}
 
 	var problems []string
-	hasFinding := addOutcomeFlags.finding != ""
-	hasGroup := addOutcomeFlags.group != ""
-	switch {
-	case hasFinding && hasGroup:
-		problems = append(problems, "exactly one of --finding or --group, not both")
-	case !hasFinding && !hasGroup:
-		problems = append(problems, "exactly one of --finding or --group is required")
+	if addOutcomeFlags.finding == "" {
+		problems = append(problems, "--finding is required")
 	}
 	if strings.TrimSpace(addOutcomeFlags.status) == "" {
 		problems = append(problems, "--status is required (e.g. merged|closed|wontfix)")
@@ -120,7 +113,7 @@ func runAddOutcome(cmd *cobra.Command, args []string) error {
 		return validationError(problems)
 	}
 
-	subject, kindErr := resolveOutcomeSubject(rp, manifest.Stage, hasFinding, addOutcomeFlags.finding, hasGroup, addOutcomeFlags.group)
+	subject, kindErr := resolveOutcomeSubject(rp, manifest.Stage, addOutcomeFlags.finding)
 	if kindErr != nil {
 		return validationError([]string{kindErr.Error()})
 	}
@@ -171,17 +164,7 @@ func runShowOutcome(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-
-	hasFinding := showOutcomeFlags.finding != ""
-	hasGroup := showOutcomeFlags.group != ""
-	switch {
-	case hasFinding && hasGroup:
-		return validationError([]string{"exactly one of --finding or --group, not both"})
-	case !hasFinding && !hasGroup:
-		return validationError([]string{"exactly one of --finding or --group is required"})
-	}
-
-	subject, kindErr := resolveOutcomeSubject(rp, manifest.Stage, hasFinding, showOutcomeFlags.finding, hasGroup, showOutcomeFlags.group)
+	subject, kindErr := resolveOutcomeSubject(rp, manifest.Stage, showOutcomeFlags.finding)
 	if kindErr != nil {
 		return validationError([]string{kindErr.Error()})
 	}
@@ -243,35 +226,16 @@ func openRunWithManifest(rawRun string) (*run.Path, schema.RunManifest, error) {
 // resolveOutcomeSubject enforces the stage→subject-kind rules and
 // confirms the referenced id exists. Mirrors resolveReviewSubject
 // in review.go.
-func resolveOutcomeSubject(rp *run.Path, stage string, hasFinding bool, findingID string, hasGroup bool, groupID string) (schema.Subject, error) {
-	switch stage {
-	case "find", "merge", "dedupe":
-		if !hasFinding {
-			return schema.Subject{}, fmt.Errorf("%s runs accept --finding, not --group", stage)
-		}
-		exists, err := rp.FindingExists(findingID)
-		if err != nil {
-			return schema.Subject{}, fmt.Errorf("check finding %q: %w", findingID, err)
-		}
-		if !exists {
-			return schema.Subject{}, fmt.Errorf("finding %q not found in this run's findings.jsonl", findingID)
-		}
-		return schema.Subject{Kind: schema.SubjectFinding, ID: findingID}, nil
-
-	case "group":
-		if !hasGroup {
-			return schema.Subject{}, fmt.Errorf("group runs accept --group, not --finding")
-		}
-		exists, err := rp.GroupExists(groupID)
-		if err != nil {
-			return schema.Subject{}, fmt.Errorf("check group %q: %w", groupID, err)
-		}
-		if !exists {
-			return schema.Subject{}, fmt.Errorf("group %q not found in this run's groups.jsonl", groupID)
-		}
-		return schema.Subject{Kind: schema.SubjectGroup, ID: groupID}, nil
-
-	default:
+func resolveOutcomeSubject(rp *run.Path, stage string, findingID string) (schema.Subject, error) {
+	if stage != "find" {
 		return schema.Subject{}, fmt.Errorf("unsupported run stage %q for outcome", stage)
 	}
+	exists, err := rp.FindingExists(findingID)
+	if err != nil {
+		return schema.Subject{}, fmt.Errorf("check finding %q: %w", findingID, err)
+	}
+	if !exists {
+		return schema.Subject{}, fmt.Errorf("finding %q not found in this run's findings.jsonl", findingID)
+	}
+	return schema.Subject{Kind: schema.SubjectFinding, ID: findingID}, nil
 }

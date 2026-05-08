@@ -31,7 +31,6 @@ var addFindingFlags struct {
 	severity    string
 	labels      []string
 	references  []string
-	canonicalOf []string
 	verbose     bool
 }
 
@@ -41,9 +40,9 @@ var addFindingCmd = &cobra.Command{
 	Long: `add finding records one finding in the run identified by $FETTLE_RUN.
 
 Intended to be called by the agent fettle has spawned during a find
-or dedupe stage; the harness sets FETTLE_RUN before invoking the
-agent. Each invocation appends one row to findings.jsonl under a
-cross-process lock, so concurrent agent processes can write safely.
+stage; the harness sets FETTLE_RUN before invoking the agent. Each
+invocation appends one row to findings.jsonl under a cross-process
+lock, so concurrent agent processes can write safely.
 
 The id is generated server-side. Two findings with identical (file,
 line, title) get distinct ids — fettle does not dedupe.
@@ -92,7 +91,6 @@ func init() {
 	addFindingCmd.Flags().StringVar(&addFindingFlags.severity, "severity", "", "severity (free-form string; e.g. low|medium|high)")
 	addFindingCmd.Flags().StringSliceVar(&addFindingFlags.labels, "label", nil, "label of the form prefix:value, repeatable")
 	addFindingCmd.Flags().StringSliceVar(&addFindingFlags.references, "reference", nil, "additional code location PATH or PATH:LINE, repeatable")
-	addFindingCmd.Flags().StringArrayVar(&addFindingFlags.canonicalOf, "canonical-of", nil, "source RUN:FINDING_ID this canonical finding subsumes (required in dedupe runs, rejected in find runs); repeatable")
 	addFindingCmd.Flags().BoolVar(&addFindingFlags.verbose, "verbose", false, "print the new finding's id to stdout on success")
 	addCmd.AddCommand(addFindingCmd)
 
@@ -201,25 +199,8 @@ func runAddFinding(cmd *cobra.Command, args []string) error {
 		problems = append(problems, e)
 	}
 
-	// Stage-aware --canonical-of rules.
-	switch manifest.Stage {
-	case "find":
-		if len(addFindingFlags.canonicalOf) > 0 {
-			problems = append(problems, "--canonical-of is rejected in find runs (it's required in dedupe runs only)")
-		}
-	case "dedupe":
-		if len(addFindingFlags.canonicalOf) == 0 {
-			problems = append(problems, "--canonical-of is required in dedupe runs (one or more RUN:FINDING_ID entries)")
-		}
-	case "group":
-		problems = append(problems, "add finding is rejected in group runs; use add group instead")
-	default:
+	if manifest.Stage != "find" {
 		problems = append(problems, fmt.Sprintf("add finding is not supported in %q runs", manifest.Stage))
-	}
-
-	members, memberErrs := parseCanonicalOf(rp, manifest, addFindingFlags.canonicalOf)
-	for _, e := range memberErrs {
-		problems = append(problems, e)
 	}
 
 	if len(problems) > 0 {
@@ -268,7 +249,6 @@ func runAddFinding(cmd *cobra.Command, args []string) error {
 		Severity:    severity,
 		Labels:      labels,
 		References:  references,
-		Members:     members,
 		AnchorLine:  anchorLine,
 		CreatedBy:   createdBy,
 		CreatedAt:   time.Now().UTC(),
@@ -310,68 +290,6 @@ func composeCreatedBy(name, model string) string {
 		return "agent:" + name
 	}
 	return "agent:" + name + "/" + model
-}
-
-// parseCanonicalOf turns each "RUN:FINDING_ID" string into a Member,
-// validating that RUN appears in the dedupe run's input_runs[] and
-// FINDING_ID exists in that run's findings.jsonl. Returns nil for
-// non-dedupe runs (no parsing needed).
-func parseCanonicalOf(rp *run.Path, manifest schema.RunManifest, raws []string) ([]schema.Member, []string) {
-	if len(raws) == 0 {
-		return nil, nil
-	}
-	if manifest.Stage != "dedupe" {
-		return nil, nil // upstream check already added a problem
-	}
-
-	inputSet := map[string]bool{}
-	for _, ir := range manifest.InputRuns {
-		inputSet[ir] = true
-	}
-
-	var out []schema.Member
-	var errs []string
-
-	// Resolve the project dir from the run dir (parent's parent).
-	runDir := rp.Dir()
-	projectDir := filepath.Dir(filepath.Dir(runDir))
-
-	for _, raw := range raws {
-		raw = strings.TrimSpace(raw)
-		idx := strings.LastIndex(raw, ":")
-		if idx < 0 {
-			errs = append(errs, fmt.Sprintf("--canonical-of %q: expected RUN:FINDING_ID", raw))
-			continue
-		}
-		runRel := raw[:idx]
-		findingID := raw[idx+1:]
-		if findingID == "" {
-			errs = append(errs, fmt.Sprintf("--canonical-of %q: empty finding id", raw))
-			continue
-		}
-		if !inputSet[runRel] {
-			errs = append(errs, fmt.Sprintf("--canonical-of %q: %q is not in this run's input_runs[] (%v)", raw, runRel, manifest.InputRuns))
-			continue
-		}
-		// Verify the finding exists in the source run.
-		srcPath := filepath.Join(projectDir, runRel)
-		srcRP, err := run.Open(srcPath)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("--canonical-of %q: open source run: %v", raw, err))
-			continue
-		}
-		exists, err := srcRP.FindingExists(findingID)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("--canonical-of %q: lookup error: %v", raw, err))
-			continue
-		}
-		if !exists {
-			errs = append(errs, fmt.Sprintf("--canonical-of %q: finding %q not found in %s", raw, findingID, runRel))
-			continue
-		}
-		out = append(out, schema.Member{FindingID: findingID, FromRun: runRel})
-	}
-	return out, errs
 }
 
 // parseReferences turns each "PATH" or "PATH:LINE" string into a Reference.

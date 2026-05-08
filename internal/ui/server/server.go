@@ -41,15 +41,12 @@ func New(projectDir string, cfg project.Config) Handler {
 	r.Get("/", runsHandler(projectDir))
 	r.Get("/runs/{name}", runHandler(projectDir))
 	r.Get("/runs/{name}/finding/{id}", findingHandler(projectDir))
-	r.Get("/runs/{name}/group/{id}", groupHandler(projectDir))
 
 	r.Get("/identity", identityHandler(projectDir))
 	r.Post("/identity", identitySaveHandler(projectDir))
 
 	r.Post("/runs/{name}/finding/{id}/review", findingReviewHandler(projectDir))
-	r.Post("/runs/{name}/group/{id}/review", groupReviewHandler(projectDir))
 	r.Post("/runs/{name}/finding/{id}/outcome", findingOutcomeHandler(projectDir))
-	r.Post("/runs/{name}/group/{id}/outcome", groupOutcomeHandler(projectDir))
 	r.Post("/runs/{name}/bulk/review", bulkReviewHandler(projectDir))
 
 	// Quietly 404 favicon requests. We don't ship one yet; without a

@@ -7,8 +7,8 @@ import "github.com/spf13/cobra"
 // and showCmd, not here.
 var runCmd = &cobra.Command{
 	Use:     "run",
-	Short:   "Run a stage (find, review, merge, dedupe, group)",
-	Long:    `Stage runners. find / dedupe / group create new run folders. merge concatenates runs (no agent). review operates on an existing run via --run.`,
+	Short:   "Run a stage (find, review)",
+	Long:    `Stage runners. find creates a new run folder; review operates on an existing run via --run.`,
 	GroupID: groupStages,
 }
 

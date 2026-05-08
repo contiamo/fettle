@@ -61,22 +61,6 @@ templ resizeHandle() {
 	</div>
 }
 
-// RunGroups is the per-run page for group-stage runs.
-templ RunGroups(manifest schema.RunManifest, groups []schema.Group) {
-	@Page(manifest.Name, runBreadcrumbs(manifest.Name)) {
-		@runHeader(manifest)
-		if len(groups) == 0 {
-			@runEmpty("No groups yet.", "If the stage is still in progress, refresh once it completes.")
-		} else {
-			<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-				for _, g := range groups {
-					@groupCard(manifest.Name, g)
-				}
-			</div>
-		}
-	}
-}
-
 // findingsFilterRail is the left pane: search + faceted filters.
 // Filtering is client-side; rows in the middle pane carry data-* attrs
 // that match the values here.
@@ -513,57 +497,6 @@ templ gitDivergenceCounts(ahead, behind int) {
 	} else if behind > 0 {
 		<span>({ strconv.Itoa(behind) } behind)</span>
 	}
-}
-
-templ runHeader(m schema.RunManifest) {
-	<header class="mb-6 space-y-1.5">
-		<div class="flex items-baseline gap-3 flex-wrap">
-			<h1 class="font-mono text-2xl font-medium tracking-tight">{ m.Name }</h1>
-			@badge.Badge(badge.Props{Variant: stageVariant(m.Stage)}) {
-				{ m.Stage }
-			}
-			if m.CompletedAt == nil {
-				@badge.Badge(badge.Props{Variant: badge.VariantOutline}) {
-					{ "in progress" }
-				}
-			}
-		</div>
-		<div class="text-[13px] text-muted-foreground space-x-4">
-			<span>created { m.CreatedAt.Format("2006-01-02 15:04 MST") }</span>
-			if m.TargetRepo != "" {
-				<span class="font-mono text-xs">{ m.TargetRepo }</span>
-			}
-		</div>
-	</header>
-}
-
-templ runEmpty(title, hint string) {
-	<div class="rounded-lg border border-border bg-card p-10 text-center text-muted-foreground space-y-1">
-		<div class="text-foreground">{ title }</div>
-		<div class="text-xs">{ hint }</div>
-	</div>
-}
-
-templ groupCard(runName string, g schema.Group) {
-	{{ href := "/runs/" + runName + "/group/" + g.ID }}
-	<article class="rounded-lg border border-border bg-card p-4 space-y-2 cursor-pointer hover:border-primary/40 hover:shadow-sm transition-all group" data-row-link={ href }>
-		<header class="flex items-baseline justify-between gap-3">
-			<h2 class="font-medium text-[14px] leading-snug tracking-tight">
-				<a href={ templ.SafeURL(href) } class="text-foreground group-hover:text-primary">{ g.Title }</a>
-			</h2>
-			<span class="text-[11px] text-muted-foreground tabular-nums whitespace-nowrap">
-				{ strconv.Itoa(len(g.FindingIDs)) }
-			</span>
-		</header>
-		if g.Summary != "" {
-			<p class="text-[12.5px] text-muted-foreground line-clamp-3 leading-relaxed">{ g.Summary }</p>
-		}
-		if len(g.Labels) > 0 {
-			<div class="pt-1">
-				@MiniLabelChips(g.Labels)
-			</div>
-		}
-	</article>
 }
 
 func runBreadcrumbs(name string) []BreadcrumbItem {

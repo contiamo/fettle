@@ -41,7 +41,6 @@ templ Runs(projectDir string, summaries []run.Summary) {
 								<th class="px-4 py-3 font-medium">Created</th>
 								<th class="px-4 py-3 font-medium">Status</th>
 								<th class="px-4 py-3 font-medium text-right">Findings</th>
-								<th class="px-4 py-3 font-medium text-right">Groups</th>
 								<th class="px-4 py-3 font-medium text-right">Reviews</th>
 								<th class="px-4 py-3 font-medium text-right">Outcomes</th>
 							</tr>
@@ -80,15 +79,14 @@ templ runRow(s run.Summary) {
 			}
 		</td>
 		<td class="px-4 py-3 text-right tabular-nums text-xs">{ countCell(s.Counts.Findings) }</td>
-		<td class="px-4 py-3 text-right tabular-nums text-xs">{ countCell(s.Counts.Groups) }</td>
 		<td class="px-4 py-3 text-right tabular-nums text-xs">{ strconv.Itoa(s.Counts.Reviews) }</td>
 		<td class="px-4 py-3 text-right tabular-nums text-xs">{ strconv.Itoa(s.Counts.Outcomes) }</td>
 	</tr>
 }
 
 // countCell renders a *int as either its value or an em-dash for nil.
-// Stage-specific counts (Findings on group runs, Groups on find runs)
-// are nil pointers, which we want to render as "—" not "0".
+// Stage-specific counts may be nil for runs whose stage doesn't
+// produce that record kind, which we want to render as "—" not "0".
 func countCell(n *int) string {
 	if n == nil {
 		return "—"
@@ -96,18 +94,9 @@ func countCell(n *int) string {
 	return fmt.Sprintf("%d", *n)
 }
 
-// stageVariant maps a run's stage to a badge variant. Picked so the
-// badges read at a glance: find/dedupe/group are the common stages
-// and stay neutral; merge is rare and gets the outline treatment.
+// stageVariant maps a run's stage to a badge variant. Today only the
+// "find" stage exists; future stages would land in this switch.
 func stageVariant(stage string) badge.Variant {
-	switch stage {
-	case "merge":
-		return badge.VariantOutline
-	case "dedupe":
-		return badge.VariantSecondary
-	case "group":
-		return badge.VariantSecondary
-	default:
-		return badge.VariantDefault
-	}
+	_ = stage
+	return badge.VariantDefault
 }

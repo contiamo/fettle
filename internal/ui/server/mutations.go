@@ -30,22 +30,13 @@ func findingReviewHandler(projectDir string) http.HandlerFunc {
 	return reviewPostHandler(projectDir, schema.SubjectFinding)
 }
 
-func groupReviewHandler(projectDir string) http.HandlerFunc {
-	return reviewPostHandler(projectDir, schema.SubjectGroup)
-}
-
 func findingOutcomeHandler(projectDir string) http.HandlerFunc {
 	return outcomePostHandler(projectDir, schema.SubjectFinding)
 }
 
-func groupOutcomeHandler(projectDir string) http.HandlerFunc {
-	return outcomePostHandler(projectDir, schema.SubjectGroup)
-}
-
-// reviewPostHandler is the shared body for both subject kinds. The
-// caller-supplied subjectKind decides which existence check to run
-// and which label the form/template uses; the rest of the flow is
-// identical.
+// reviewPostHandler is the shared body for review POSTs. Today only
+// finding subjects exist; the indirection keeps the door open for
+// future subject kinds without restructuring the handler.
 func reviewPostHandler(projectDir, subjectKind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rp, runName, subject, ok := openSubjectForMutation(w, r, projectDir, subjectKind)
@@ -180,29 +171,19 @@ func subjectExists(rp *run.Path, kind, id string) (bool, error) {
 	switch kind {
 	case schema.SubjectFinding:
 		return rp.FindingExists(id)
-	case schema.SubjectGroup:
-		return rp.GroupExists(id)
 	default:
 		return false, fmt.Errorf("unknown subject kind %q", kind)
 	}
 }
 
-// stageAccepts mirrors the CLI's stage→subject-kind rules: find /
-// merge / dedupe runs hold findings; group runs hold groups. Routing
-// a finding mutation at a group run (or vice versa) hits this with a
-// crisp 400 instead of falling through to an existence-check failure.
+// stageAccepts is the stage→subject-kind gate: today only "find" runs
+// exist and they hold findings. Any other combination is a hard 400.
 func stageAccepts(stage, subjectKind string) error {
-	switch stage {
-	case "find", "merge", "dedupe":
-		if subjectKind != schema.SubjectFinding {
-			return fmt.Errorf("%s runs hold findings, not %ss", stage, subjectKind)
-		}
-	case "group":
-		if subjectKind != schema.SubjectGroup {
-			return fmt.Errorf("group runs hold groups, not %ss", subjectKind)
-		}
-	default:
+	if stage != "find" {
 		return fmt.Errorf("unsupported run stage %q", stage)
+	}
+	if subjectKind != schema.SubjectFinding {
+		return fmt.Errorf("find runs hold findings, not %ss", subjectKind)
 	}
 	return nil
 }

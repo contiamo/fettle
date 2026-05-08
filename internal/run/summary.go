@@ -21,27 +21,22 @@ type Summary struct {
 	CreatedAt   time.Time  `json:"created_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 	TargetRepo  string     `json:"target_repo,omitempty"`
-	InputRun    string     `json:"input_run,omitempty"`
-	InputRuns   []string   `json:"input_runs,omitempty"`
 	Counts      Counts     `json:"counts"`
 }
 
-// Counts breaks counts out by record kind. Findings and Groups are
-// stage-specific (find/merge/dedupe carry findings; group carries
-// groups), so they use pointers and omit when not applicable. Reviews
-// and Outcomes attach to either kind, so they're always emitted (zero
-// is meaningful).
+// Counts breaks record counts out by kind. Findings is stage-specific
+// (only find runs carry findings today), so it's a pointer that omits
+// when not applicable. Reviews and Outcomes are always emitted — zero
+// is meaningful.
 type Counts struct {
 	Findings *int `json:"findings,omitempty"`
-	Groups   *int `json:"groups,omitempty"`
 	Reviews  int  `json:"reviews"`
 	Outcomes int  `json:"outcomes"`
 }
 
 // Summarize reads the manifest and counts the records in a run folder.
-// Stage-specific fields (Findings vs Groups) are populated based on the
-// run's stage. Missing record files contribute zero counts so partial
-// runs report cleanly.
+// Missing record files contribute zero counts so partial runs report
+// cleanly.
 func Summarize(runDir string) (Summary, error) {
 	rp, err := Open(runDir)
 	if err != nil {
@@ -63,20 +58,11 @@ func Summarize(runDir string) (Summary, error) {
 	}
 
 	counts := Counts{Reviews: reviews, Outcomes: outcomes}
-	switch m.Stage {
-	case "find", "merge", "dedupe":
-		n, err := CountLines(filepath.Join(runDir, "findings.jsonl"))
-		if err != nil {
-			return Summary{}, fmt.Errorf("count findings: %w", err)
-		}
-		counts.Findings = &n
-	case "group":
-		n, err := CountLines(filepath.Join(runDir, "groups.jsonl"))
-		if err != nil {
-			return Summary{}, fmt.Errorf("count groups: %w", err)
-		}
-		counts.Groups = &n
+	n, err := CountLines(filepath.Join(runDir, "findings.jsonl"))
+	if err != nil {
+		return Summary{}, fmt.Errorf("count findings: %w", err)
 	}
+	counts.Findings = &n
 
 	return Summary{
 		Name:        m.Name,
@@ -84,8 +70,6 @@ func Summarize(runDir string) (Summary, error) {
 		CreatedAt:   m.CreatedAt,
 		CompletedAt: m.CompletedAt,
 		TargetRepo:  m.TargetRepo,
-		InputRun:    m.InputRun,
-		InputRuns:   m.InputRuns,
 		Counts:      counts,
 	}, nil
 }

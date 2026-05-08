@@ -275,26 +275,11 @@ type CodePreviewLine struct {
 	Highlight bool
 }
 
-// GroupView is the data passed to the GroupDetail template. Members
-// are the resolved findings from the input run (in the order recorded
-// on the group); MissingIDs are member ids the input run no longer
-// has — rendered as "missing" rather than dropped silently.
-type GroupView struct {
-	Manifest     schema.RunManifest
-	Group        schema.Group
-	InputRunName string // leaf folder name of manifest.InputRun, used for member links
-	Members      []schema.Finding
-	MissingIDs   []string
-	Review       ReviewSectionView
-	Outcome      OutcomeSectionView
-}
-
 // ReviewSectionView is the data backing the review form + history
-// feed on a finding or group detail page. The same template renders
-// for the initial GET and for the HTMX swap after a POST, so the view
-// has to carry everything the section needs (subject id + kind for
-// the form action; current state; full history; per-author latest
-// hints).
+// feed on a finding's detail page. The same template renders for the
+// initial GET and for the HTMX swap after a POST, so the view has to
+// carry everything the section needs (subject id + kind for the form
+// action; current state; full history; per-author latest hints).
 //
 // InitialLabels seeds the labels editor when the reviewer engages
 // the pencil-edit affordance — set by the caller to the *effective*
@@ -304,7 +289,7 @@ type GroupView struct {
 // memory; their submission is whatever's in the box at save time.
 type ReviewSectionView struct {
 	RunName       string
-	SubjectKind   string // "finding" or "group"
+	SubjectKind   string // always "finding" today
 	SubjectID     string
 	CurrentLabels []string          // union across authors' latest entries
 	InitialLabels []string          // pre-fill for the labels editor

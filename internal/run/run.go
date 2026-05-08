@@ -24,7 +24,7 @@ import (
 
 // jsonlScanInitBuf and jsonlScanMaxLine size the bufio.Scanner buffers
 // every JSONL reader in this package shares. 64 KiB initial / 1 MiB max
-// fits the longest finding/group records observed in practice (a wordy
+// fits the longest finding records observed in practice (a wordy
 // description with embedded code blocks) without paying the allocation
 // cost up-front. Hoisted to constants so all readers stay in lockstep —
 // raising the cap in one reader and not the others would let a record
@@ -109,154 +109,6 @@ func CreateForFind(opts CreateFindOpts) (*Path, error) {
 	return &Path{dir: dir}, nil
 }
 
-// CreateDedupeOpts configures CreateForDedupe.
-type CreateDedupeOpts struct {
-	ProjectDir       string
-	Slug             string
-	InputRuns        []string // project-relative paths to input run folders
-	DedupePrompt     string   // full text to snapshot
-	DedupeSourcePath string   // project-relative path of the source prompt
-	DedupeSpec       agent.Spec
-}
-
-// CreateForDedupe initializes a new dedupe run folder with the dedupe
-// prompt snapshotted and run.json populated. Single-shot stage —
-// the caller invokes the agent, then calls MarkCompleted on success.
-func CreateForDedupe(opts CreateDedupeOpts) (*Path, error) {
-	name, err := generateName("dedupe", opts.Slug)
-	if err != nil {
-		return nil, err
-	}
-	runsDir := filepath.Join(opts.ProjectDir, "runs")
-	if err := os.MkdirAll(runsDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create runs/: %w", err)
-	}
-	dir := filepath.Join(runsDir, name)
-	if err := os.Mkdir(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("create run dir: %w", err)
-	}
-	for _, sub := range []string{"instructions", "raw"} {
-		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
-			return nil, fmt.Errorf("mkdir %s: %w", sub, err)
-		}
-	}
-	snap := filepath.Join("instructions", "dedupe.md")
-	if err := os.WriteFile(filepath.Join(dir, snap), []byte(opts.DedupePrompt), 0o644); err != nil {
-		return nil, fmt.Errorf("snapshot dedupe prompt: %w", err)
-	}
-	if err := touch(filepath.Join(dir, "findings.jsonl")); err != nil {
-		return nil, err
-	}
-	manifest := schema.RunManifest{
-		Name:          name,
-		Stage:         "dedupe",
-		FettleVersion: project.Version,
-		CreatedAt:     time.Now().UTC(),
-		InputRuns:     opts.InputRuns,
-		Agent:         agentInfoFromSpec(opts.DedupeSpec),
-		SourcePath:    opts.DedupeSourcePath,
-		SnapshotPath:  snap,
-	}
-	if err := writeManifest(dir, manifest); err != nil {
-		return nil, err
-	}
-	return &Path{dir: dir}, nil
-}
-
-// CreateGroupOpts configures CreateForGroup.
-type CreateGroupOpts struct {
-	ProjectDir      string
-	Slug            string
-	InputRun        string // project-relative path to the single input run folder
-	GroupPrompt     string // full text to snapshot
-	GroupSourcePath string // project-relative path of the source prompt
-	GroupSpec       agent.Spec
-}
-
-// CreateForGroup initializes a new group run folder with the group
-// prompt snapshotted and run.json populated. Single-shot stage —
-// the caller invokes the agent, then calls MarkCompleted on success.
-func CreateForGroup(opts CreateGroupOpts) (*Path, error) {
-	name, err := generateName("group", opts.Slug)
-	if err != nil {
-		return nil, err
-	}
-	runsDir := filepath.Join(opts.ProjectDir, "runs")
-	if err := os.MkdirAll(runsDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create runs/: %w", err)
-	}
-	dir := filepath.Join(runsDir, name)
-	if err := os.Mkdir(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("create run dir: %w", err)
-	}
-	for _, sub := range []string{"instructions", "raw"} {
-		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
-			return nil, fmt.Errorf("mkdir %s: %w", sub, err)
-		}
-	}
-	snap := filepath.Join("instructions", "group.md")
-	if err := os.WriteFile(filepath.Join(dir, snap), []byte(opts.GroupPrompt), 0o644); err != nil {
-		return nil, fmt.Errorf("snapshot group prompt: %w", err)
-	}
-	if err := touch(filepath.Join(dir, "groups.jsonl")); err != nil {
-		return nil, err
-	}
-	manifest := schema.RunManifest{
-		Name:          name,
-		Stage:         "group",
-		FettleVersion: project.Version,
-		CreatedAt:     time.Now().UTC(),
-		InputRun:      opts.InputRun,
-		Agent:         agentInfoFromSpec(opts.GroupSpec),
-		SourcePath:    opts.GroupSourcePath,
-		SnapshotPath:  snap,
-	}
-	if err := writeManifest(dir, manifest); err != nil {
-		return nil, err
-	}
-	return &Path{dir: dir}, nil
-}
-
-// CreateMergeOpts configures CreateForMerge.
-type CreateMergeOpts struct {
-	ProjectDir string
-	Slug       string
-	InputRuns  []string // project-relative paths to input run folders
-}
-
-// CreateForMerge initializes a new merge run folder. No agent
-// invocation; the caller (cmd/fettle/run_merge.go) populates the
-// findings/reviews then calls MarkCompleted on the returned Path.
-func CreateForMerge(opts CreateMergeOpts) (*Path, error) {
-	name, err := generateName("merge", opts.Slug)
-	if err != nil {
-		return nil, err
-	}
-	runsDir := filepath.Join(opts.ProjectDir, "runs")
-	if err := os.MkdirAll(runsDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create runs/: %w", err)
-	}
-	dir := filepath.Join(runsDir, name)
-	if err := os.Mkdir(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("create run dir: %w", err)
-	}
-	if err := touch(filepath.Join(dir, "findings.jsonl")); err != nil {
-		return nil, err
-	}
-	manifest := schema.RunManifest{
-		Name:          name,
-		Stage:         "merge",
-		FettleVersion: project.Version,
-		CreatedAt:     time.Now().UTC(),
-		InputRuns:     opts.InputRuns,
-		// Agent / SourcePath / SnapshotPath stay empty — merge runs no agent.
-	}
-	if err := writeManifest(dir, manifest); err != nil {
-		return nil, err
-	}
-	return &Path{dir: dir}, nil
-}
-
 // MarkCompleted stamps run.json's completed_at field. Single-shot
 // stages call this once their work is fully written, signalling to
 // downstream consumers that the run is trustworthy.
@@ -303,18 +155,6 @@ func (p *Path) AppendFinding(f schema.Finding) error {
 	return appendWithLock(filepath.Join(p.dir, "findings.jsonl"), line)
 }
 
-// AppendGroup appends one group to groups.jsonl. Cross-process safe
-// via flock — concurrent `fettle group add` calls from a single
-// agent invocation serialize through the kernel.
-func (p *Path) AppendGroup(g schema.Group) error {
-	line, err := json.Marshal(g)
-	if err != nil {
-		return err
-	}
-	line = append(line, '\n')
-	return appendWithLock(filepath.Join(p.dir, "groups.jsonl"), line)
-}
-
 // AppendFileStatus appends one row to files.jsonl. Concurrent-safe.
 func (p *Path) AppendFileStatus(s schema.FileStatus) error {
 	p.filesMu.Lock()
@@ -347,17 +187,10 @@ func (p *Path) LoadFindings() ([]schema.Finding, error) {
 	return loadJSONL[schema.Finding](filepath.Join(p.dir, "findings.jsonl"))
 }
 
-// LoadGroups reads groups.jsonl in append order. Same tolerant
-// semantics as LoadOutcomes.
-func (p *Path) LoadGroups() ([]schema.Group, error) {
-	return loadJSONL[schema.Group](filepath.Join(p.dir, "groups.jsonl"))
-}
-
 // loadJSONL reads a JSONL file at path into a slice of T. Missing
 // file returns an empty slice and no error. Malformed lines are
 // skipped silently — the policy every record-reading helper in this
-// package shares (LoadOutcomes / LoadFindings / LoadGroups all
-// delegate here).
+// package shares (LoadOutcomes / LoadFindings delegate here).
 func loadJSONL[T any](path string) ([]T, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -400,12 +233,6 @@ func (p *Path) AppendReview(author string, review schema.Review) error {
 // the given id. Used to validate review/outcome subjects.
 func (p *Path) FindingExists(id string) (bool, error) {
 	return idExistsIn(filepath.Join(p.dir, "findings.jsonl"), id)
-}
-
-// GroupExists reports whether groups.jsonl contains a row with the
-// given id.
-func (p *Path) GroupExists(id string) (bool, error) {
-	return idExistsIn(filepath.Join(p.dir, "groups.jsonl"), id)
 }
 
 // idExistsIn scans a JSONL file for a record whose top-level "id"

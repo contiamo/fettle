@@ -161,16 +161,6 @@ func subjectLabels(rp *run.Path, subject schema.Subject) ([]string, error) {
 				return f.Labels, nil
 			}
 		}
-	case schema.SubjectGroup:
-		groups, err := rp.LoadGroups()
-		if err != nil {
-			return nil, err
-		}
-		for _, g := range groups {
-			if g.ID == subject.ID {
-				return g.Labels, nil
-			}
-		}
 	}
 	return nil, nil
 }

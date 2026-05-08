@@ -19,7 +19,6 @@ type Finding struct {
 	Severity    *string     `json:"severity"`
 	Labels      []string    `json:"labels"`
 	References  []Reference `json:"references"`
-	Members     []Member    `json:"members,omitempty"`
 	// AnchorLine is the exact text of File[Line] at finding-creation time,
 	// truncated to anchor.MaxLen. It lets readers detect drift later: if
 	// the file changed, the same content may have shifted to a different
@@ -45,14 +44,6 @@ type Reference struct {
 	Line int    `json:"line,omitempty"`
 }
 
-// Member is one source-finding back-pointer on a merge or dedupe
-// canonical finding. members.length is always 1 for merge runs and
-// 1 or more for dedupe runs.
-type Member struct {
-	FindingID string `json:"finding_id"`
-	FromRun   string `json:"from_run"`
-}
-
 // FileStatus is one row of files.jsonl, the per-file scan ledger.
 type FileStatus struct {
 	File         string    `json:"file"`
@@ -72,14 +63,13 @@ const (
 
 // Subject identifies what a review or outcome is about.
 type Subject struct {
-	Kind string `json:"kind"` // "finding" or "group"
+	Kind string `json:"kind"` // always "finding" today; kept as a discriminator for future kinds
 	ID   string `json:"id"`
 }
 
 // Subject kinds.
 const (
 	SubjectFinding = "finding"
-	SubjectGroup   = "group"
 )
 
 // Review is one row of reviews_<author>.jsonl. Append-only history;
@@ -124,7 +114,7 @@ type Review struct {
 // RunManifest is the contents of run.json.
 type RunManifest struct {
 	Name          string         `json:"name"`
-	Stage         string         `json:"stage"` // "find" | "merge" | "dedupe" | "group"
+	Stage         string         `json:"stage"` // "find" today; kept as a discriminator for future stages
 	FettleVersion string         `json:"fettle_version"`
 	CreatedAt     time.Time      `json:"created_at"`
 	CompletedAt   *time.Time     `json:"completed_at,omitempty"`
@@ -132,9 +122,7 @@ type RunManifest struct {
 	TargetRepoGit *GitInfo       `json:"target_repo_git,omitempty"`
 	Include       []string       `json:"include,omitempty"`
 	Exclude       []string       `json:"exclude,omitempty"`
-	InputRun      string         `json:"input_run,omitempty"`  // group runs
-	InputRuns     []string       `json:"input_runs,omitempty"` // dedupe / merge runs
-	Agent         *AgentInfo     `json:"agent,omitempty"`         // nil for merge (no agent ran)
+	Agent         *AgentInfo     `json:"agent,omitempty"`
 	SourcePath    string         `json:"source_path,omitempty"`   // path of the editable prompt at stage start (project-relative)
 	SnapshotPath  string         `json:"snapshot_path,omitempty"` // path of the frozen prompt copy inside the run (run-relative)
 	Args          map[string]any `json:"args,omitempty"`
@@ -146,8 +134,7 @@ type GitInfo struct {
 	Dirty bool   `json:"dirty"`
 }
 
-// AgentInfo describes the agent that ran a stage. Omitted from
-// merge run manifests, which run no agent.
+// AgentInfo describes the agent that ran a stage.
 type AgentInfo struct {
 	Name   string `json:"name"`
 	Model  string `json:"model,omitempty"`
@@ -169,40 +156,15 @@ func NewFindingID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// Outcome is one event recording what happened to a finding or
-// group (PR merged, won't fix, deduped, etc.). Lives in
-// runs/<name>/outcomes.jsonl. Append-only; latest entry per subject
-// wins for "current state" display, but the full history is
-// preserved (and viewable via `fettle show outcome --all`).
+// Outcome is one event recording what happened to a finding (PR
+// merged, won't fix, etc.). Lives in runs/<name>/outcomes.jsonl.
+// Append-only; latest entry per subject wins for "current state"
+// display, but the full history is preserved (and viewable via
+// `fettle show outcome --all`).
 type Outcome struct {
 	Subject Subject   `json:"subject"`
 	Author  string    `json:"author"`
 	Status  string    `json:"status"`
 	PRURL   string    `json:"pr_url,omitempty"`
 	At      time.Time `json:"at"`
-}
-
-// Group is one cluster of findings produced by `fettle run group`.
-// Lives in runs/<group-run>/groups.jsonl. `finding_ids[]` references
-// findings in the group run's `input_run`'s findings.jsonl.
-type Group struct {
-	ID         string    `json:"id"`
-	Title      string    `json:"title"`
-	Summary    string    `json:"summary"`
-	FindingIDs []string  `json:"finding_ids"`
-	Labels     []string  `json:"labels"`
-	CreatedBy  string    `json:"created_by"`
-	CreatedAt  time.Time `json:"created_at"`
-}
-
-// NewGroupID returns a fresh random group id of the form `g_xxxxxxxx`
-// (8 hex chars). The `g_` prefix keeps groups distinguishable from
-// findings at a glance — useful when both kinds appear side by side in
-// review/outcome logs.
-func NewGroupID() string {
-	var b [4]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic("crypto/rand: " + err.Error())
-	}
-	return "g_" + hex.EncodeToString(b[:])
 }

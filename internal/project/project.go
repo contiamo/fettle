@@ -50,11 +50,8 @@ type AgentRef struct {
 // Instructions points at the editable prompt templates, relative to the
 // project root. Run folders snapshot these on first stage execution.
 type Instructions struct {
-	Find        string `json:"find"`
-	Review      string `json:"review"`
-	ReviewGroup string `json:"review_group"`
-	Dedupe      string `json:"dedupe"`
-	Group       string `json:"group"`
+	Find   string `json:"find"`
+	Review string `json:"review"`
 }
 
 // NewConfig returns a Config populated with sensible defaults for `init`.
@@ -67,11 +64,8 @@ func NewConfig(targetRepo, agent, model string) Config {
 		Include:       []string{"**/*.go"},
 		Exclude:       []string{"vendor/**", "node_modules/**", "**/*_generated.go"},
 		Instructions: Instructions{
-			Find:        "instructions/find.md",
-			Review:      "instructions/review.md",
-			ReviewGroup: "instructions/review_group.md",
-			Dedupe:      "instructions/dedupe.md",
-			Group:       "instructions/group.md",
+			Find:   "instructions/find.md",
+			Review: "instructions/review.md",
 		},
 	}
 }
