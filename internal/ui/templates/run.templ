@@ -114,6 +114,9 @@ templ findingsFilterRail(v RunFindingsView) {
 			if len(v.Facets.Severities) > 0 {
 				@severityFacetGroup(v.Facets.Severities)
 			}
+			if len(v.Facets.Outcomes) > 0 {
+				@outcomeFacetGroup(v.Facets.Outcomes)
+			}
 			for _, g := range v.Facets.Labels {
 				@labelFacetGroup(g)
 			}
@@ -181,6 +184,42 @@ templ severityFacetGroup(items []FacetItem) {
 								value={ it.Value }
 							/>
 							@SeverityPill(severityValue(it.Value))
+						</span>
+						<span class="text-[10px] text-muted-foreground tabular-nums">{ strconv.Itoa(it.Count) }</span>
+					</label>
+				</li>
+			}
+		</ul>
+	</section>
+}
+
+// outcomeFacetGroup renders the outcome rail block. Each row is the
+// same OutcomePill the detail view + list rows show, so the rail
+// reads as "this is the same chip you see elsewhere, click to
+// filter". The "no outcome" bucket arrives with Value="" which both
+// the data attribute on rows and the JS filter-set treat as
+// "outcome unset" — no special casing needed.
+templ outcomeFacetGroup(items []FacetItem) {
+	<section class="space-y-1">
+		<div class="px-1.5">
+			@SectionHeading("Outcome")
+		</div>
+		<ul class="space-y-px">
+			for _, it := range items {
+				<li>
+					<label class="flex items-center justify-between gap-2 px-1.5 py-1 rounded hover:bg-accent/60 cursor-pointer">
+						<span class="flex items-center gap-2 min-w-0">
+							<input
+								type="checkbox"
+								class="appearance-none w-3 h-3 rounded-[3px] border border-border bg-background cursor-pointer transition-colors shrink-0"
+								data-finding-facet="outcome"
+								value={ it.Value }
+							/>
+							if it.Value == "" {
+								<span class="text-[12.5px] text-muted-foreground italic">{ it.Display }</span>
+							} else {
+								@OutcomePill(it.Value)
+							}
 						</span>
 						<span class="text-[10px] text-muted-foreground tabular-nums">{ strconv.Itoa(it.Count) }</span>
 					</label>
@@ -265,7 +304,7 @@ templ findingsListPane(v RunFindingsView) {
 		} else {
 			<ul role="listbox" data-finding-list>
 				for _, f := range v.Findings {
-					@findingListItem(v.Manifest.Name, f, v.Selected != nil && v.Selected.ID == f.ID, v.Anchors[f.ID], v.EffectiveSeverityOf(f), v.EffectiveLabelsOf(f))
+					@findingListItem(v.Manifest.Name, f, v.Selected != nil && v.Selected.ID == f.ID, v.Anchors[f.ID], v.EffectiveSeverityOf(f), v.EffectiveLabelsOf(f), v.EffectiveOutcomeOf(f))
 				}
 			</ul>
 			<div data-finding-empty class="hidden px-4 py-10 text-center text-sm text-muted-foreground">No findings match these filters.</div>
@@ -273,14 +312,15 @@ templ findingsListPane(v RunFindingsView) {
 	</section>
 }
 
-// findingListItem is one row in the middle pane. Pared down to
-// severity chip + title — the right pane already carries everything
-// else (file, description, labels), so the list reads as a quiet
-// table of contents rather than a wall of metadata. anchor is the
-// pre-resolved drift state ("current", "shifted", "ambiguous",
-// "stale", or "unknown"), exposed as data-anchor so the rail's
-// "Hide stale" toggle can filter rows client-side without a refetch.
-templ findingListItem(runName string, f schema.Finding, selected bool, anchor string, effectiveSeverity *string, effectiveLabels []string) {
+// findingListItem is one row in the middle pane. Severity chip on
+// the left, title + file in the middle, the latest outcome chip on
+// the right edge (only when an outcome is recorded — keeps untouched
+// rows clean). anchor is the pre-resolved drift state, exposed as
+// data-anchor so the rail's "Hide stale" toggle can filter rows
+// client-side without a refetch. data-outcome carries the latest
+// outcome status string, or "" when none — the rail's "no outcome"
+// facet matches against the empty string.
+templ findingListItem(runName string, f schema.Finding, selected bool, anchor string, effectiveSeverity *string, effectiveLabels []string, effectiveOutcome string) {
 	{{ href := "/runs/" + runName + "/finding/" + f.ID }}
 	{{ workspaceHref := "/runs/" + runName + "?focus=" + f.ID }}
 	<li
@@ -293,6 +333,7 @@ templ findingListItem(runName string, f schema.Finding, selected bool, anchor st
 		data-severity={ severityValue(effectiveSeverity) }
 		data-labels={ joinLabels(effectiveLabels) }
 		data-anchor={ anchor }
+		data-outcome={ effectiveOutcome }
 		class={ "relative cursor-pointer border-b border-border/60 px-4 py-2 hover:bg-accent/40 transition-colors", templ.KV("row-selected", selected), templ.KV("opacity-60", anchor == "stale") }
 		hx-get={ href }
 		hx-target="#detail-pane"
@@ -330,6 +371,11 @@ templ findingListItem(runName string, f schema.Finding, selected bool, anchor st
 				</span>
 				<span class="text-[11px] leading-snug text-muted-foreground/70 font-mono truncate">{ f.File }</span>
 			</span>
+			if effectiveOutcome != "" {
+				<span class="shrink-0">
+					@OutcomePill(effectiveOutcome)
+				</span>
+			}
 		</a>
 	</li>
 }

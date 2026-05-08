@@ -6,6 +6,7 @@ import (
 	"github.com/contiamo/fettle/internal/ui/components/input"
 	"github.com/contiamo/fettle/internal/ui/components/label"
 	"github.com/contiamo/fettle/internal/ui/components/popover"
+	"github.com/contiamo/fettle/internal/ui/components/selectbox"
 	"github.com/contiamo/fettle/internal/ui/components/textarea"
 )
 
@@ -38,6 +39,7 @@ templ Layout(title string, breadcrumbs []BreadcrumbItem, mode LayoutMode) {
 			@dropdown.Script()
 			@input.Script()
 			@label.Script()
+			@selectbox.Script()
 			@textarea.Script()
 			@themeInitTag()
 		</head>

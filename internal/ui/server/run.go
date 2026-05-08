@@ -91,6 +91,13 @@ func runHandler(projectDir string) http.HandlerFunc {
 			lblOverrides := labelOverrides(reviews)
 			sortFindingsBySeverity(findings, sevOverrides)
 
+			outcomes, err := rp.LoadOutcomes()
+			if err != nil {
+				http.Error(w, fmt.Sprintf("load outcomes: %v", err), http.StatusInternalServerError)
+				return
+			}
+			outcomeMap := outcomeStatuses(outcomes)
+
 			anchors, staleCount := computeAnchorStates(manifest.TargetRepo, findings)
 			var currentGit *schema.GitInfo
 			if manifest.TargetRepo != "" {
@@ -99,13 +106,14 @@ func runHandler(projectDir string) http.HandlerFunc {
 			view := templates.RunFindingsView{
 				Manifest:          manifest,
 				Findings:          findings,
-				Facets:            computeFacetsWithOverrides(findings, sevOverrides, lblOverrides),
+				Facets:            computeFacetsWithOverrides(findings, sevOverrides, lblOverrides, outcomeMap),
 				Anchors:           anchors,
 				StaleCount:        staleCount,
 				CurrentGit:        currentGit,
 				GitDrift:          buildGitDrift(manifest.TargetRepo, manifest.TargetRepoGit, currentGit),
 				EffectiveSeverity: sevOverrides,
 				EffectiveLabels:   lblOverrides,
+				EffectiveOutcome:  outcomeMap,
 			}
 			// Pre-select the finding identified by ?focus= (the workspace
 			// pushes this on row click) so refresh / share lands on the
@@ -367,15 +375,18 @@ func severityRankOfEffective(f schema.Finding, overrides map[string]string) int 
 	return severityRankOf(f.Severity)
 }
 
-// computeFacetsWithOverrides counts severity AND label buckets using
-// the effective state per finding — a downgraded "high" → "medium"
-// shifts the rail counts, and a reviewer-overridden label set
-// replaces the LLM's contribution to the label-rail counts. Both
-// match what the user sees on the rows so the rail filter stays in
-// sync with the displayed values.
-func computeFacetsWithOverrides(findings []schema.Finding, sevOverrides map[string]string, lblOverrides map[string][]string) templates.FindingFacets {
+// computeFacetsWithOverrides counts severity, outcome, AND label
+// buckets using the effective state per finding — a downgraded
+// "high" → "medium" shifts the severity counts, a reviewer-overridden
+// label set replaces the LLM's contribution to the label counts, and
+// the latest outcome status drives the outcome counts. The "no
+// outcome" bucket gets every finding without a recorded outcome so
+// reviewers can filter to "still needs an outcome".
+func computeFacetsWithOverrides(findings []schema.Finding, sevOverrides map[string]string, lblOverrides map[string][]string, outcomeMap map[string]string) templates.FindingFacets {
 	sevCounts := map[string]int{}
 	labelCounts := map[string]int{}
+	outcomeCounts := map[string]int{}
+	noOutcome := 0
 	for _, f := range findings {
 		sev := ""
 		if s, ok := sevOverrides[f.ID]; ok {
@@ -393,10 +404,86 @@ func computeFacetsWithOverrides(findings []schema.Finding, sevOverrides map[stri
 		for _, l := range labels {
 			labelCounts[l]++
 		}
+		if status, ok := outcomeMap[f.ID]; ok && status != "" {
+			outcomeCounts[status]++
+		} else {
+			noOutcome++
+		}
 	}
 	return templates.FindingFacets{
 		Severities: orderedSeverities(sevCounts),
+		Outcomes:   orderedOutcomes(outcomeCounts, noOutcome),
 		Labels:     groupedLabelFacets(labelCounts),
+	}
+}
+
+// outcomeStatuses scans outcomes.jsonl and returns finding-id → the
+// latest outcome status string for that finding. Findings without any
+// recorded outcome stay out of the map. Group-subject outcomes are
+// ignored — this is the finding-list view, groups have their own
+// page.
+func outcomeStatuses(outcomes []schema.Outcome) map[string]string {
+	type stamped struct {
+		status string
+		at     time.Time
+	}
+	latest := map[string]stamped{}
+	for _, o := range outcomes {
+		if o.Subject.Kind != schema.SubjectFinding || o.Subject.ID == "" {
+			continue
+		}
+		existing, ok := latest[o.Subject.ID]
+		if !ok || o.At.After(existing.at) {
+			latest[o.Subject.ID] = stamped{status: o.Status, at: o.At}
+		}
+	}
+	out := make(map[string]string, len(latest))
+	for id, s := range latest {
+		if s.status != "" {
+			out[id] = s.status
+		}
+	}
+	return out
+}
+
+// orderedOutcomes ranks outcome buckets by canonical workflow order
+// (merged → closed → wontfix → other → free-form) with the "no
+// outcome" bucket pinned last. Mirrors orderedSeverities so the rail
+// reads consistently. Sentinel value "" identifies the "no outcome"
+// bucket on the wire — rows whose data-outcome is empty match an
+// "" filter selection.
+func orderedOutcomes(counts map[string]int, noOutcome int) []templates.FacetItem {
+	out := make([]templates.FacetItem, 0, len(counts)+1)
+	for v, c := range counts {
+		out = append(out, templates.FacetItem{Value: v, Display: v, Count: c})
+	}
+	slices.SortStableFunc(out, func(a, b templates.FacetItem) int {
+		return cmp.Or(
+			cmp.Compare(outcomeRank(a.Value), outcomeRank(b.Value)),
+			cmp.Compare(a.Value, b.Value),
+		)
+	})
+	if noOutcome > 0 {
+		out = append(out, templates.FacetItem{Value: "", Display: "no outcome", Count: noOutcome})
+	}
+	return out
+}
+
+// outcomeRank pins the four canonical statuses to a fixed order;
+// anything else lands after them but before the "no outcome" bucket
+// (which orderedOutcomes appends explicitly so it stays last).
+func outcomeRank(s string) int {
+	switch s {
+	case "merged":
+		return 0
+	case "closed":
+		return 1
+	case "wontfix":
+		return 2
+	case "other":
+		return 3
+	default:
+		return 4
 	}
 }
 

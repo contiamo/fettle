@@ -4,7 +4,7 @@
 // rows via the `hidden` attribute (rather than rebuilding the list)
 // so HTMX-targeted clicks keep working on the live nodes.
 
-type FacetName = "severity" | "label";
+type FacetName = "severity" | "label" | "outcome";
 
 const ROW_SELECTOR = "[data-finding-row]";
 const FILTER_PANE = "[data-finding-filters]";
@@ -88,6 +88,8 @@ export function initFindingFilters() {
 
   initBulkSelection();
   initEditToggles();
+  initRichSelect();
+  refreshRichSelectDisplays();
 
   // Reflect the initial selection (server-rendered) and scroll the
   // active row into view once. Subsequent selections happen through
@@ -109,12 +111,69 @@ export function initFindingFilters() {
 // out of the post body (server interprets the absence as nil — "no
 // change to this axis"). The disabled-by-default state is rendered
 // server-side, so initial page load always submits no fields.
+//
+// Event delegation lives on document so the wiring survives the
+// HTMX swap that replaces #detail-pane content (and with it the
+// per-finding review form) on every row click. Re-binding listeners
+// after every swap would also work but is more bookkeeping.
 function initEditToggles() {
-  document.querySelectorAll<HTMLButtonElement>("[data-edit-show]").forEach((btn) => {
-    btn.addEventListener("click", () => setEditMode(btn, true));
+  document.addEventListener("click", (ev) => {
+    const t = ev.target as HTMLElement | null;
+    if (!t) return;
+    const show = t.closest<HTMLElement>("[data-edit-show]");
+    if (show) {
+      setEditMode(show, true);
+      return;
+    }
+    const revert = t.closest<HTMLElement>("[data-edit-revert]");
+    if (revert) setEditMode(revert, false);
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-edit-revert]").forEach((btn) => {
-    btn.addEventListener("click", () => setEditMode(btn, false));
+}
+
+// initRichSelect wires templui selectbox triggers that opted out of
+// the stock textContent-only Value display in favour of our own
+// rich [data-rich-select-display] span. On every selectbox-item
+// click anywhere in the document, we clone the selected item's
+// .select-item-text innerHTML into the corresponding trigger
+// display, so SeverityPill / OutcomePill chips render in the
+// trigger exactly as they do in the dropdown menu.
+//
+// Templui's own click handler runs first (selecting the item,
+// updating the hidden input, closing the popover); ours runs
+// afterwards via document-level event delegation.
+function initRichSelect() {
+  document.addEventListener("click", (ev) => {
+    const item = (ev.target as HTMLElement | null)?.closest<HTMLElement>(
+      ".select-item[data-tui-selectbox-value]",
+    );
+    if (!item) return;
+    const container = item.closest<HTMLElement>(".select-container");
+    if (!container) return;
+    const display = container.querySelector<HTMLElement>(
+      ".select-trigger [data-rich-select-display]",
+    );
+    if (!display) return;
+    const text = item.querySelector<HTMLElement>(".select-item-text");
+    if (text) display.innerHTML = text.innerHTML;
+  });
+}
+
+// refreshRichSelectDisplays seeds each rich display with the HTML
+// of its currently-selected item, if any. Called on initial page
+// load and after every htmx:afterSwap so freshly-rendered review /
+// outcome forms reflect their pre-selected values.
+//
+// When nothing is selected, the placeholder span the templ emits
+// stays in place — rendering as muted "Pick severity" / "Pick
+// status" text until the user actually picks something.
+export function refreshRichSelectDisplays(root: ParentNode = document) {
+  root.querySelectorAll<HTMLElement>("[data-rich-select-display]").forEach((display) => {
+    const container = display.closest<HTMLElement>(".select-container");
+    if (!container) return;
+    const text = container.querySelector<HTMLElement>(
+      ".select-item[data-tui-selectbox-selected='true'] .select-item-text",
+    );
+    if (text) display.innerHTML = text.innerHTML;
   });
 }
 
@@ -124,15 +183,27 @@ function setEditMode(button: HTMLElement, editing: boolean) {
   const preview = field.querySelector<HTMLElement>("[data-edit-preview]");
   const editor = field.querySelector<HTMLElement>("[data-edit-editor]");
   if (preview) preview.hidden = editing;
-  if (editor) {
-    editor.hidden = !editing;
-    const ctrl = editor.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
-      "input, select, textarea",
+  if (!editor) return;
+  editor.hidden = !editing;
+
+  // Toggle every form-submitting control's disabled state — that's
+  // how "didn't engage editor" stays out of the post body. The
+  // selectbox component renders both a visible trigger button and
+  // a hidden <input type="hidden"> that actually carries the value;
+  // both need flipping. Plain input/textarea fields have just the
+  // single visible control.
+  const controls = editor.querySelectorAll<
+    HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | HTMLButtonElement
+  >("input, select, textarea, button.select-trigger");
+  controls.forEach((c) => {
+    c.disabled = !editing;
+  });
+
+  if (editing) {
+    const focusable = editor.querySelector<HTMLElement>(
+      "input:not([type=hidden]):not([disabled]), select:not([disabled]), textarea:not([disabled]), button.select-trigger:not([disabled])",
     );
-    if (ctrl) {
-      ctrl.disabled = !editing;
-      if (editing) ctrl.focus();
-    }
+    focusable?.focus();
   }
 }
 
@@ -171,6 +242,7 @@ function collectActiveFacets(): Record<FacetName, Set<string>> {
   const out: Record<FacetName, Set<string>> = {
     severity: new Set(),
     label: new Set(),
+    outcome: new Set(),
   };
   document
     .querySelectorAll<HTMLInputElement>(`${FACET_BOX}:checked`)
@@ -220,6 +292,12 @@ function matches(
   if (active.severity.size > 0) {
     const sev = row.getAttribute("data-severity") || "";
     if (!active.severity.has(sev)) return false;
+  }
+  if (active.outcome.size > 0) {
+    // Empty data-outcome (no recorded outcome) matches the rail's
+    // "no outcome" facet checkbox, which uses value="".
+    const outcome = row.getAttribute("data-outcome") || "";
+    if (!active.outcome.has(outcome)) return false;
   }
   if (active.label.size > 0) {
     const labels = (row.getAttribute("data-labels") || "")

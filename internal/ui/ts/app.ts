@@ -1,5 +1,9 @@
 import { targetEl } from "./dom";
-import { initFindingFilters, refreshSelection } from "./findings";
+import {
+  initFindingFilters,
+  refreshRichSelectDisplays,
+  refreshSelection,
+} from "./findings";
 import { initResizable } from "./resizable";
 
 // --- Theme toggle ---
@@ -54,6 +58,11 @@ document.addEventListener("htmx:afterSwap", (e) => {
   if (target && target.id === "detail-pane") {
     refreshSelection();
   }
+  // Any swap may bring in fresh review / outcome forms with rich
+  // selectbox triggers (severity, status). Re-seed the displays so
+  // pre-selected items render their chip rather than the empty
+  // placeholder.
+  if (target) refreshRichSelectDisplays(target);
 });
 
 // Browser back/forward in the workspace updates the URL but doesn't

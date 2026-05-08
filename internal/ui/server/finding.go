@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 
 	"github.com/contiamo/fettle/internal/anchor"
 	"github.com/contiamo/fettle/internal/run"
@@ -140,7 +139,10 @@ func buildFindingDetail(rp *run.Path, manifest schema.RunManifest, f schema.Find
 
 	// Effective labels: union of every per-author latest entry that
 	// touched labels; falls back to Finding.Labels when no reviewer
-	// has overridden. Computed off the already-loaded review entries.
+	// has overridden. buildReviewView already populates
+	// reviewView.InitialLabels with this same value via subjectLabels;
+	// we recompute here so the FindingView's own header chips render
+	// the same set without depending on the review-section view.
 	effectiveLabels := f.Labels
 	if union, ok := unionReviewerLabels(reviewView.Entries); ok {
 		effectiveLabels = union
@@ -165,38 +167,6 @@ func buildFindingDetail(rp *run.Path, manifest schema.RunManifest, f schema.Find
 	}, nil
 }
 
-// unionReviewerLabels returns the union of every per-author latest
-// entry's labels, plus a flag indicating whether any reviewer
-// touched labels at all. When ok=false the caller falls back to
-// Finding.Labels; when ok=true the slice (possibly empty) is the
-// reviewer-asserted set. Walks entries in chronological order
-// (sections.go's invariant) so per-author latest is the last seen.
-func unionReviewerLabels(entries []templates.ReviewEntryView) ([]string, bool) {
-	latestByAuthor := map[string][]string{}
-	any := false
-	for _, e := range entries {
-		if !e.LabelsTouched {
-			continue
-		}
-		any = true
-		latestByAuthor[e.Author] = e.Labels
-	}
-	if !any {
-		return nil, false
-	}
-	seen := map[string]struct{}{}
-	for _, ls := range latestByAuthor {
-		for _, l := range ls {
-			seen[l] = struct{}{}
-		}
-	}
-	out := make([]string, 0, len(seen))
-	for l := range seen {
-		out = append(out, l)
-	}
-	slices.Sort(out)
-	return out, true
-}
 
 // latestReviewerSeverity scans review entries (in chronological order
 // — sections.go preserves that) and returns the most recent non-nil

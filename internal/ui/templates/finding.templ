@@ -26,6 +26,9 @@ templ FindingArticle(v FindingView) {
 		<header class="space-y-3">
 			<div class="flex items-baseline gap-3 flex-wrap">
 				@SeverityPill(v.EffectiveSeverity)
+				if v.Outcome.Latest != nil {
+					@OutcomePill(v.Outcome.Latest.Status)
+				}
 				@anchorTopBadge(v.Preview.Anchor)
 				if v.Preview.Anchor == "stale" {
 					<h1 class="font-serif text-[28px] leading-tight tracking-tight text-muted-foreground">{ v.Finding.Title }</h1>

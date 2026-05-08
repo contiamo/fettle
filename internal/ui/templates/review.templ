@@ -8,6 +8,7 @@ import (
 	"github.com/contiamo/fettle/internal/ui/components/form"
 	"github.com/contiamo/fettle/internal/ui/components/icon"
 	"github.com/contiamo/fettle/internal/ui/components/input"
+	"github.com/contiamo/fettle/internal/ui/components/selectbox"
 	"github.com/contiamo/fettle/internal/ui/components/textarea"
 )
 
@@ -29,7 +30,7 @@ templ ReviewSection(v ReviewSectionView) {
 				hx-swap="outerHTML"
 				class="space-y-3 rounded-md border border-border bg-card p-3.5"
 			>
-				@editableLabels("review-labels", strings.Join(myLatestLabels(ctx, v.Entries), ", "))
+				@editableLabels("review-labels", strings.Join(v.InitialLabels, ", "))
 				@editableSeverity("review-severity", myLatestSeverityValue(ctx, v.Entries))
 				@form.Item() {
 					@form.Label(form.LabelProps{For: "review-comment"}) {
@@ -66,26 +67,11 @@ templ ReviewSection(v ReviewSectionView) {
 	</section>
 }
 
-// myLatestLabels returns the current reviewer's most recent label set
-// on this subject so the form pre-fills with what you saved last
-// instead of starting blank. Returns nil when there's no identity
-// configured (the form opens empty — same as a fresh reviewer with
-// nothing saved yet) or when the current reviewer hasn't reviewed
-// this subject before.
-//
-// Pre-filling matters because the data model writes a full label-set
-// snapshot on every save: a blank submission would otherwise wipe
-// whatever you saved last, which makes the common "I just want to
-// add a comment" workflow a footgun. With the field pre-populated,
-// "save as-is" preserves your labels, "edit" modifies them, and
-// "clear the box, save" deliberately clears them — same model as a
-// regular settings form.
 // myLatestSeverityValue returns the current reviewer's most recent
-// severity choice on this subject so the form's select can pre-select
-// the right option. Returns "" (no choice) when there's no identity,
-// no prior review by this user, or the prior review left severity
-// unset. Mirrors myLatestLabels' shape but unwraps the *string for
-// the select-comparison templ syntax (`selected?={ value == "high" }`).
+// severity choice on this subject so the form's select pre-selects
+// the right option when the editor is opened. Returns "" (no choice)
+// when there's no identity, no prior review by this user, or the
+// prior review left severity unset.
 func myLatestSeverityValue(ctx context.Context, entries []ReviewEntryView) string {
 	r := ReviewerFromContext(ctx)
 	if r == nil {
@@ -97,24 +83,6 @@ func myLatestSeverityValue(ctx context.Context, entries []ReviewEntryView) strin
 		}
 	}
 	return ""
-}
-
-func myLatestLabels(ctx context.Context, entries []ReviewEntryView) []string {
-	r := ReviewerFromContext(ctx)
-	if r == nil {
-		return nil
-	}
-	// e.Author is the prefixed stamp from the record (`human:slug` /
-	// `agent:slug[/model]`); Resolved.String() formats the current
-	// reviewer in the same shape via Stringer, so the comparison
-	// works whether the saved stamp was a human or an agent.
-	me := r.String()
-	for _, e := range entries {
-		if e.IsLatest && e.Author == me {
-			return e.Labels
-		}
-	}
-	return nil
 }
 
 // editableLabels is a "no change" preview with a pencil-edit
@@ -154,8 +122,17 @@ templ editableLabels(id, initial string) {
 }
 
 // editableSeverity is the severity twin of editableLabels. Same
-// disabled-until-clicked pattern so a comment-only review submits
-// no severity field at all (interpreted as nil = defer).
+// disabled-until-clicked pattern: not engaging the editor submits
+// no severity field at all (server reads that as nil = "didn't
+// touch"). The editor uses the templui selectbox component (its
+// search affordance is hidden via NoSearch since the option set is
+// fixed three values), so the dropdown reads consistently with the
+// rest of the templui surface instead of falling back to the
+// browser's default <select> chrome.
+//
+// "Defer to LLM" no longer appears as an option — engaging the
+// editor implies the reviewer is choosing a severity, and the not-
+// engaged path already covers "leave it alone".
 templ editableSeverity(id, current string) {
 	@form.Item(form.ItemProps{Class: "space-y-1.5", Attributes: templ.Attributes{"data-edit-field": "severity"}}) {
 		@form.Label(form.LabelProps{For: id}) {
@@ -166,17 +143,28 @@ templ editableSeverity(id, current string) {
 			@editToggleButton("severity", "Edit severity")
 		</div>
 		<div class="flex items-center gap-2" data-edit-editor="severity" hidden>
-			<select
-				id={ id }
-				name="severity"
-				disabled
-				class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
-			>
-				<option value="" selected?={ current == "" }>— defer to LLM —</option>
-				<option value="high" selected?={ current == "high" }>high</option>
-				<option value="medium" selected?={ current == "medium" }>medium</option>
-				<option value="low" selected?={ current == "low" }>low</option>
-			</select>
+			<div class="flex-1">
+				@selectbox.SelectBox() {
+					@selectbox.Trigger(selectbox.TriggerProps{
+						ID:       id,
+						Name:     "severity",
+						Disabled: true,
+					}) {
+						@richSelectDisplay("Pick severity")
+					}
+					@selectbox.Content(selectbox.ContentProps{NoSearch: true}) {
+						@selectbox.Item(selectbox.ItemProps{Value: "high", Selected: current == "high"}) {
+							@SeverityPill(severityRef("high"))
+						}
+						@selectbox.Item(selectbox.ItemProps{Value: "medium", Selected: current == "medium"}) {
+							@SeverityPill(severityRef("medium"))
+						}
+						@selectbox.Item(selectbox.ItemProps{Value: "low", Selected: current == "low"}) {
+							@SeverityPill(severityRef("low"))
+						}
+					}
+				}
+			</div>
 			@editRevertButton("severity", "Cancel severity edit")
 		</div>
 	}

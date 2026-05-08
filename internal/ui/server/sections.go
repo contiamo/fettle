@@ -89,13 +89,90 @@ func buildReviewView(rp *run.Path, runName string, subject schema.Subject) (temp
 		}
 	}
 
+	// InitialLabels seeds the labels editor with the subject's own
+	// LLM-set labels (Finding.Labels / Group.Labels). The reviewer
+	// curates from "what the LLM said" — adds, removes, replaces —
+	// rather than from the post-override effective set. A returning
+	// reviewer who'd already curated sees the LLM's labels again
+	// and re-applies their changes; their prior override is still
+	// visible in the entries feed below the form, so nothing's lost.
+	initial := []string{}
+	if labels, err := subjectLabels(rp, subject); err == nil {
+		initial = labels
+	}
+
 	return templates.ReviewSectionView{
 		RunName:       runName,
 		SubjectKind:   subject.Kind,
+		InitialLabels: initial,
 		SubjectID:     subject.ID,
 		CurrentLabels: currentLabels,
 		Entries:       entries,
 	}, nil
+}
+
+// unionReviewerLabels returns the union of every per-author latest
+// entry that touched labels, plus a flag indicating whether any
+// reviewer touched labels at all. False = no override; the caller
+// falls back to the subject's own labels.
+func unionReviewerLabels(entries []templates.ReviewEntryView) ([]string, bool) {
+	latestByAuthor := map[string][]string{}
+	any := false
+	for _, e := range entries {
+		if !e.LabelsTouched {
+			continue
+		}
+		any = true
+		latestByAuthor[e.Author] = e.Labels
+	}
+	if !any {
+		return nil, false
+	}
+	seen := map[string]struct{}{}
+	for _, ls := range latestByAuthor {
+		for _, l := range ls {
+			seen[l] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for l := range seen {
+		out = append(out, l)
+	}
+	sort.Strings(out)
+	return out, true
+}
+
+// subjectLabels resolves the LLM-set labels for the given subject
+// (Finding.Labels or Group.Labels). Used as the fallback initial
+// pre-fill for the review form's labels editor when no reviewer has
+// overridden yet — the reviewer sees the original LLM labels and
+// curates from there. Returns (nil, nil) for an unknown id rather
+// than failing — a missing subject is the caller's problem to
+// surface, not ours.
+func subjectLabels(rp *run.Path, subject schema.Subject) ([]string, error) {
+	switch subject.Kind {
+	case schema.SubjectFinding:
+		findings, err := rp.LoadFindings()
+		if err != nil {
+			return nil, err
+		}
+		for _, f := range findings {
+			if f.ID == subject.ID {
+				return f.Labels, nil
+			}
+		}
+	case schema.SubjectGroup:
+		groups, err := rp.LoadGroups()
+		if err != nil {
+			return nil, err
+		}
+		for _, g := range groups {
+			if g.ID == subject.ID {
+				return g.Labels, nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 // buildOutcomeView reads outcomes.jsonl, filters to the subject, and

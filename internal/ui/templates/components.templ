@@ -45,9 +45,9 @@ templ EmptyPane(title, hint string) {
 }
 
 // DataCodeVariant picks the visual treatment for short structured
-// strings rendered with monospace. The four variants cover the four
-// roles these strings play in the UI and let the typography be tuned
-// per role without each call-site re-encoding it.
+// strings rendered with monospace. The variants cover the roles
+// these strings play in the UI and let the typography be tuned per
+// role without each call-site re-encoding it.
 type DataCodeVariant string
 
 const (
@@ -62,15 +62,14 @@ const (
 	// DataCodeID — opaque identifiers like a finding id or commit
 	// SHA. Smaller, muted; data-but-rarely-read.
 	DataCodeID DataCodeVariant = "id"
-	// DataCodeStatus — outcome statuses (`merged`, `wontfix`, free-
-	// form `other`). Same prominence as a stamp but read as state
-	// rather than identity.
-	DataCodeStatus DataCodeVariant = "status"
 )
 
 // DataCode renders a short structured string in a monospace span
-// styled per Variant. Centralises the half-dozen ad-hoc <code>
-// stylings the templates had grown.
+// styled per Variant. Centralises the ad-hoc <code> stylings the
+// templates had grown. Outcome statuses used to live here too as
+// DataCodeStatus, but the dedicated OutcomePill now owns that
+// rendering everywhere — the kicker-and-value chip distinguishes
+// outcomes from severity at a glance.
 templ DataCode(variant DataCodeVariant, text string) {
 	switch variant {
 		case DataCodeInline:
@@ -79,8 +78,6 @@ templ DataCode(variant DataCodeVariant, text string) {
 			<code class="font-mono text-foreground">{ text }</code>
 		case DataCodeID:
 			<code class="font-mono text-[11px] text-muted-foreground">{ text }</code>
-		case DataCodeStatus:
-			<code class="font-mono text-foreground">{ text }</code>
 		default:
 			<code class="font-mono">{ text }</code>
 	}
@@ -132,6 +129,18 @@ templ StatusPill(tone StatusTone, text string) {
 	}
 }
 
+// severityRef wraps a literal severity string into the *string the
+// SeverityPill component expects. Saves "boxing" the literal at
+// every call site (the alternative — `&[]string{"high"}[0]` — is
+// noisier than the helper). Empty input returns nil so callers can
+// pass through "no value yet" cases without a separate check.
+func severityRef(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
 // SeverityPill is the unified severity affordance — a fixed-width
 // tinted pill (HIGH / MED / LOW / · for missing). One look across
 // the rail rows, list rows, detail header, group cards. Replaces
@@ -145,6 +154,43 @@ templ SeverityPill(severity *string) {
 		>{ severityShort(*severity) }</span>
 	} else {
 		<span class="inline-flex items-center justify-center w-[52px] shrink-0 px-1.5 py-0.5 rounded text-[10px] uppercase tracking-[0.04em] font-medium bg-muted text-muted-foreground/70" title="no severity">·</span>
+	}
+}
+
+// richSelectDisplay is the trigger value-display for a templui
+// selectbox where each Item's children is HTML we want to *show* in
+// the trigger after selection (a SeverityPill, an OutcomePill, …).
+// Templui's stock selectbox.Value rewrites the trigger to plain
+// `textContent` on every selection, which strips chip styling; we
+// render our own visible chip via findings.ts' initRichSelect, and
+// keep a hidden `.select-value` sentinel beside it so templui's
+// updateDisplayValue still finds something to write to — that's
+// also the function that writes the hidden input's value, so
+// without the sentinel the form posts an empty status. Default
+// (nothing selected): renders the placeholder in muted text so the
+// trigger looks like a real "pick one" hint.
+templ richSelectDisplay(placeholder string) {
+	<span data-rich-select-display data-placeholder={ placeholder } class="block flex-1 text-left truncate">
+		<span class="text-muted-foreground">{ placeholder }</span>
+	</span>
+	<span class="select-value hidden" data-tui-selectbox-placeholder={ placeholder }></span>
+}
+
+// OutcomePill renders a status as a two-part chip: a small "OUTCOME"
+// kicker on the left, the status value on the right, joined inside
+// one bordered pill. Visual identity is intentionally different
+// from SeverityPill (which is a solid-tinted fixed-width chip) so
+// the two read as different concepts at a glance — severity is a
+// per-finding judgment, an outcome is a state transition.
+//
+// Empty status renders nothing; rest of the UI is responsible for
+// deciding whether an outcome row is worth showing at all.
+templ OutcomePill(status string) {
+	if status != "" {
+		<span class="inline-flex items-stretch rounded-md border border-border bg-card text-[11px] font-medium tracking-tight overflow-hidden whitespace-nowrap">
+			<span class="px-1.5 py-0.5 bg-muted text-muted-foreground/80 uppercase tracking-[0.06em] text-[9px] flex items-center">Outcome</span>
+			<span class="px-2 py-0.5 text-foreground flex items-center">{ status }</span>
+		</span>
 	}
 }
 

@@ -140,6 +140,12 @@ type RunFindingsView struct {
 	// to Finding.Labels. Present empty → reviewers explicitly
 	// suppressed all labels.
 	EffectiveLabels map[string][]string
+	// EffectiveOutcome maps a finding id to its latest outcome status
+	// ("merged" / "closed" / "wontfix" / free-form). Findings without
+	// any recorded outcome stay out of the map; the row's
+	// data-outcome attribute resolves to "" for those, which the
+	// rail's "no outcome" facet matches against.
+	EffectiveOutcome map[string]string
 }
 
 // EffectiveSeverityOf returns the severity that should drive every
@@ -169,12 +175,27 @@ func (v RunFindingsView) EffectiveLabelsOf(f schema.Finding) []string {
 	return f.Labels
 }
 
-// FindingFacets are the filter groups on the left rail. Severity is
-// always its own group with a fixed canonical order; labels are
-// further split by their `prefix:` so a noisy free-form labels list
-// reads as several short, scannable sections (one per prefix).
+// EffectiveOutcomeOf returns the latest outcome status for f, or ""
+// when no outcome has been recorded. Empty string is the wire value
+// the rail's "no outcome" facet matches on, so callers can pass the
+// result straight into the row's data-outcome attribute without
+// special-casing.
+func (v RunFindingsView) EffectiveOutcomeOf(f schema.Finding) string {
+	if v.EffectiveOutcome == nil {
+		return ""
+	}
+	return v.EffectiveOutcome[f.ID]
+}
+
+// FindingFacets are the filter groups on the left rail. Severity has
+// a fixed canonical order; outcomes follow the workflow order
+// (merged → closed → wontfix → …) with a "no outcome" bucket pinned
+// last so reviewers can filter to findings still needing one. Labels
+// are further split by their `prefix:` so a noisy free-form list
+// reads as several short, scannable sections.
 type FindingFacets struct {
 	Severities []FacetItem
+	Outcomes   []FacetItem
 	Labels     []LabelFacetGroup
 }
 
@@ -274,11 +295,19 @@ type GroupView struct {
 // has to carry everything the section needs (subject id + kind for
 // the form action; current state; full history; per-author latest
 // hints).
+//
+// InitialLabels seeds the labels editor when the reviewer engages
+// the pencil-edit affordance — set by the caller to the *effective*
+// label set on the subject (LLM's labels until any reviewer overrides;
+// the running union after). Starting from "current truth" lets a
+// reviewer curate the displayed set rather than re-derive it from
+// memory; their submission is whatever's in the box at save time.
 type ReviewSectionView struct {
 	RunName       string
 	SubjectKind   string // "finding" or "group"
 	SubjectID     string
 	CurrentLabels []string          // union across authors' latest entries
+	InitialLabels []string          // pre-fill for the labels editor
 	Entries       []ReviewEntryView // oldest first
 	Error         string            // surfaced inline on validation failure
 }

@@ -81,6 +81,8 @@ func groupHandler(projectDir string) http.HandlerFunc {
 			http.Error(w, fmt.Sprintf("load reviews: %v", err), http.StatusInternalServerError)
 			return
 		}
+		// buildReviewView already seeds InitialLabels with the
+		// group's effective labels; nothing more to do here.
 		outcomeView, err := buildOutcomeView(rp, name, subject)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("load outcomes: %v", err), http.StatusInternalServerError)

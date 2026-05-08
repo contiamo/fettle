@@ -5,6 +5,7 @@ import (
 	"github.com/contiamo/fettle/internal/ui/components/button"
 	"github.com/contiamo/fettle/internal/ui/components/form"
 	"github.com/contiamo/fettle/internal/ui/components/input"
+	"github.com/contiamo/fettle/internal/ui/components/selectbox"
 )
 
 // OutcomeSection renders the outcome form (status + optional pr_url)
@@ -16,9 +17,8 @@ templ OutcomeSection(v OutcomeSectionView) {
 		<header class="flex items-baseline justify-between gap-3">
 			@SectionHeading("Outcome")
 			if v.Latest != nil {
-				<span class="text-[11px] flex items-baseline gap-2">
-					<span class="text-muted-foreground">currently</span>
-					@DataCode(DataCodeStatus, v.Latest.Status)
+				<span class="text-[11px] flex items-center gap-2">
+					@OutcomePill(v.Latest.Status)
 					<span class="text-muted-foreground">· marked by</span>
 					@AuthorStamp(v.Latest.Author)
 				</span>
@@ -38,18 +38,28 @@ templ OutcomeSection(v OutcomeSectionView) {
 						@form.Label(form.LabelProps{For: "outcome-status"}) {
 							Status
 						}
-						<select
-							id="outcome-status"
-							name="status"
-							required
-							class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring"
-						>
-							<option value="">— pick —</option>
-							<option value="merged">merged</option>
-							<option value="closed">closed</option>
-							<option value="wontfix">wontfix</option>
-							<option value="other">other</option>
-						</select>
+						@selectbox.SelectBox() {
+							@selectbox.Trigger(selectbox.TriggerProps{
+								ID:   "outcome-status",
+								Name: "status",
+							}) {
+								@richSelectDisplay("Pick status")
+							}
+							@selectbox.Content(selectbox.ContentProps{NoSearch: true}) {
+								@selectbox.Item(selectbox.ItemProps{Value: "merged"}) {
+									@OutcomePill("merged")
+								}
+								@selectbox.Item(selectbox.ItemProps{Value: "closed"}) {
+									@OutcomePill("closed")
+								}
+								@selectbox.Item(selectbox.ItemProps{Value: "wontfix"}) {
+									@OutcomePill("wontfix")
+								}
+								@selectbox.Item(selectbox.ItemProps{Value: "other"}) {
+									@OutcomePill("other")
+								}
+							}
+						}
 					}
 					@form.Item(form.ItemProps{Class: "sm:col-span-2"}) {
 						@form.Label(form.LabelProps{For: "outcome-status-other"}) {
@@ -104,9 +114,9 @@ templ OutcomeSection(v OutcomeSectionView) {
 
 templ outcomeEntry(o schema.Outcome, isLatest bool) {
 	<li class="rounded-md border border-border bg-surface-sunken p-3 space-y-1.5">
-		<div class="flex items-baseline justify-between gap-3 text-xs">
-			<div class="flex items-baseline gap-2">
-				@DataCode(DataCodeStatus, o.Status)
+		<div class="flex items-center justify-between gap-3 text-xs">
+			<div class="flex items-center gap-2">
+				@OutcomePill(o.Status)
 				if isLatest {
 					@StatusPill(StatusToneInfo, "latest")
 				}
