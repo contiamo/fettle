@@ -254,9 +254,13 @@ type reviewEntry struct {
 	// Labels uses pointer-to-slice to preserve schema.Review's
 	// nil-means-untouched semantic when piping review entries
 	// through CLI output and on into dedupe/group prompts.
-	Labels  *[]string `json:"labels,omitempty"`
-	Comment string    `json:"comment,omitempty"`
-	At      time.Time `json:"at"`
+	Labels *[]string `json:"labels,omitempty"`
+	// Severity carries the reviewer's severity override (or nil
+	// when this entry didn't touch severity). Same nil-vs-set
+	// semantic as Labels.
+	Severity *string   `json:"severity,omitempty"`
+	Comment  string    `json:"comment,omitempty"`
+	At       time.Time `json:"at"`
 }
 
 // reviewCurrent is the "current state" view of a subject's reviews:
@@ -273,9 +277,13 @@ type reviewCurrentEntry struct {
 	// semantics; omitempty drops the field for entries that
 	// didn't override (so JSON consumers see the absence rather
 	// than a misleading empty array).
-	Labels  *[]string `json:"labels,omitempty"`
-	Comment string    `json:"comment,omitempty"`
-	At      time.Time `json:"at"`
+	Labels *[]string `json:"labels,omitempty"`
+	// Severity mirrors schema.Review.Severity. nil/omitted means
+	// this entry didn't touch severity; non-nil is the reviewer's
+	// override.
+	Severity *string   `json:"severity,omitempty"`
+	Comment  string    `json:"comment,omitempty"`
+	At       time.Time `json:"at"`
 }
 
 // loadAllReviewEntries reads every reviews_<author>.jsonl in runDir
@@ -293,45 +301,71 @@ func loadAllReviewEntries(runDir string) ([]reviewEntry, error) {
 	out := make([]reviewEntry, len(flat))
 	for i, fr := range flat {
 		out[i] = reviewEntry{
-			Subject: fr.Subject,
-			Author:  fr.Author,
-			Labels:  fr.Labels,
-			Comment: fr.Comment,
-			At:      fr.At,
+			Subject:  fr.Subject,
+			Author:   fr.Author,
+			Labels:   fr.Labels,
+			Severity: fr.Severity,
+			Comment:  fr.Comment,
+			At:       fr.At,
 		}
 	}
 	return out, nil
 }
 
 // deriveReviewState collapses chronological entries for one subject
-// into the "current state" view: latest entry per author, plus a
-// label union. Authors are emitted in alphabetical order so output
-// is stable.
+// into the "current state" view: per-author effective labels +
+// severity (each axis tracked independently as "latest entry that
+// touched this axis", so a comment-only entry doesn't wipe a prior
+// override on the other axis), plus a label union across authors.
+// Authors are emitted in alphabetical order so output is stable.
 func deriveReviewState(entries []reviewEntry) reviewCurrent {
-	latest := map[string]reviewEntry{}
+	type accum struct {
+		labels        *[]string
+		labelsAt      time.Time
+		severity      *string
+		severityAt    time.Time
+		latestComment string
+		latestAt      time.Time
+	}
+	byAuthor := map[string]*accum{}
 	for _, e := range entries {
-		if existing, ok := latest[e.Author]; !ok || e.At.After(existing.At) {
-			latest[e.Author] = e
+		a := byAuthor[e.Author]
+		if a == nil {
+			a = &accum{}
+			byAuthor[e.Author] = a
+		}
+		if e.Labels != nil && (a.labels == nil || e.At.After(a.labelsAt)) {
+			a.labels = e.Labels
+			a.labelsAt = e.At
+		}
+		if e.Severity != nil && (a.severity == nil || e.At.After(a.severityAt)) {
+			a.severity = e.Severity
+			a.severityAt = e.At
+		}
+		if e.At.After(a.latestAt) {
+			a.latestComment = e.Comment
+			a.latestAt = e.At
 		}
 	}
-	authors := make([]string, 0, len(latest))
-	for a := range latest {
+	authors := make([]string, 0, len(byAuthor))
+	for a := range byAuthor {
 		authors = append(authors, a)
 	}
 	sort.Strings(authors)
 
 	out := reviewCurrent{Entries: make([]reviewCurrentEntry, 0, len(authors))}
 	labelSet := map[string]bool{}
-	for _, a := range authors {
-		e := latest[a]
+	for _, name := range authors {
+		a := byAuthor[name]
 		out.Entries = append(out.Entries, reviewCurrentEntry{
-			Author:  a,
-			Labels:  e.Labels,
-			Comment: e.Comment,
-			At:      e.At,
+			Author:   name,
+			Labels:   a.labels,
+			Severity: a.severity,
+			Comment:  a.latestComment,
+			At:       a.latestAt,
 		})
-		if e.Labels != nil {
-			for _, l := range *e.Labels {
+		if a.labels != nil {
+			for _, l := range *a.labels {
 				labelSet[l] = true
 			}
 		}

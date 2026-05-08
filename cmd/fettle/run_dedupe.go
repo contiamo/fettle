@@ -317,9 +317,14 @@ type reviewState struct {
 	// Labels mirrors schema.Review.Labels' nil-means-untouched
 	// semantic — agent prompts can distinguish "didn't override
 	// labels" from "explicitly cleared".
-	Labels  *[]string `json:"labels,omitempty"`
-	Comment string    `json:"comment,omitempty"`
-	At      string    `json:"at"`
+	Labels *[]string `json:"labels,omitempty"`
+	// Severity mirrors schema.Review.Severity; nil/omitted when
+	// this entry didn't override severity. Surfaces the reviewer's
+	// downgrades / upgrades so the dedupe and group agents rank by
+	// the same effective severity the reviewer sees in the UI.
+	Severity *string `json:"severity,omitempty"`
+	Comment  string  `json:"comment,omitempty"`
+	At       string  `json:"at"`
 }
 
 func annotateInputs(inputs []inputRun, projectDir string) ([]annotatedFinding, error) {
@@ -349,14 +354,30 @@ func annotateInputs(inputs []inputRun, projectDir string) ([]annotatedFinding, e
 }
 
 // loadReviewsByFinding scans every reviews_<author>.jsonl in runDir
-// and returns finding_id → author → latest review state. Latest entry
-// per (author, finding) wins.
+// and returns finding_id → author → effective review state. Each
+// axis (labels, severity) tracks its own "latest entry that touched
+// this axis": a comment-only entry doesn't wipe a prior label or
+// severity override the same author had set, matching the UI's
+// nil-don't-touch semantic. Comment + At come from the entry that
+// most recently said anything at all (so consumers get the freshest
+// associated free-text and timestamp).
 func loadReviewsByFinding(runDir string) (map[string]map[string]reviewState, error) {
 	files, err := run.ReviewFiles(runDir)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]map[string]reviewState{}
+	type accum struct {
+		// "Touched" axes — separate per-axis latest tracker so a
+		// later comment-only entry doesn't silently revert prior
+		// overrides on the other axis.
+		labels        *[]string
+		labelsAt      time.Time
+		severity      *string
+		severityAt    time.Time
+		latestComment string
+		latestAt      time.Time
+	}
+	acc := map[string]map[string]*accum{}
 	for _, rf := range files {
 		f, err := os.Open(rf.Path)
 		if err != nil {
@@ -372,18 +393,42 @@ func loadReviewsByFinding(runDir string) (map[string]map[string]reviewState, err
 			if r.Subject.Kind != schema.SubjectFinding || r.Subject.ID == "" {
 				continue
 			}
-			if out[r.Subject.ID] == nil {
-				out[r.Subject.ID] = map[string]reviewState{}
+			if acc[r.Subject.ID] == nil {
+				acc[r.Subject.ID] = map[string]*accum{}
 			}
-			out[r.Subject.ID][rf.Author] = reviewState{
-				Labels:  r.Labels,
-				Comment: r.Comment,
-				At:      r.At.Format(time.RFC3339Nano),
+			a := acc[r.Subject.ID][rf.Author]
+			if a == nil {
+				a = &accum{}
+				acc[r.Subject.ID][rf.Author] = a
+			}
+			if r.Labels != nil && (a.labels == nil || r.At.After(a.labelsAt)) {
+				a.labels = r.Labels
+				a.labelsAt = r.At
+			}
+			if r.Severity != nil && (a.severity == nil || r.At.After(a.severityAt)) {
+				a.severity = r.Severity
+				a.severityAt = r.At
+			}
+			if r.At.After(a.latestAt) {
+				a.latestComment = r.Comment
+				a.latestAt = r.At
 			}
 		}
 		f.Close()
 		if err := sc.Err(); err != nil {
 			return nil, err
+		}
+	}
+	out := make(map[string]map[string]reviewState, len(acc))
+	for fid, byAuthor := range acc {
+		out[fid] = make(map[string]reviewState, len(byAuthor))
+		for author, a := range byAuthor {
+			out[fid][author] = reviewState{
+				Labels:   a.labels,
+				Severity: a.severity,
+				Comment:  a.latestComment,
+				At:       a.latestAt.Format(time.RFC3339Nano),
+			}
 		}
 	}
 	return out, nil

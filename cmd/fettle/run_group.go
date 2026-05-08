@@ -365,10 +365,15 @@ type reviewsJSONEntry struct {
 }
 
 type reviewsJSONAuthor struct {
-	Author  string    `json:"author"`
-	Labels  *[]string `json:"labels,omitempty"`
-	Comment string    `json:"comment,omitempty"`
-	At      string    `json:"at"`
+	Author string    `json:"author"`
+	Labels *[]string `json:"labels,omitempty"`
+	// Severity carries the reviewer's severity override (or nil
+	// when no entry from this author touched severity). Surfaces
+	// the same effective value the UI shows so the group agent
+	// ranks by what reviewers see.
+	Severity *string `json:"severity,omitempty"`
+	Comment  string  `json:"comment,omitempty"`
+	At       string  `json:"at"`
 }
 
 // buildReviewsJSON converts the (finding_id → author → reviewState)
@@ -392,10 +397,11 @@ func buildReviewsJSON(byFinding map[string]map[string]reviewState) ([]byte, erro
 		for _, a := range authors {
 			rs := byAuthor[a]
 			entries = append(entries, reviewsJSONAuthor{
-				Author:  a,
-				Labels:  rs.Labels,
-				Comment: rs.Comment,
-				At:      rs.At,
+				Author:   a,
+				Labels:   rs.Labels,
+				Severity: rs.Severity,
+				Comment:  rs.Comment,
+				At:       rs.At,
 			})
 			if rs.Labels != nil {
 				for _, l := range *rs.Labels {
