@@ -148,7 +148,7 @@ tasks:
     desc: Scan fettle's own Go source via examples/self-scan (extra args via -- ARGS)
     deps: [go:build]
     cmds:
-      - bin/fettle --dir examples/self-scan find {{.CLI_ARGS}}
+      - bin/fettle --dir examples/self-scan run find {{.CLI_ARGS}}
 
   # ---------------------------------------------------------------------------
   # Utilities
