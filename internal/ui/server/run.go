@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/contiamo/fettle/internal/anchor"
+	"github.com/contiamo/fettle/internal/project"
 	"github.com/contiamo/fettle/internal/run"
 	"github.com/contiamo/fettle/internal/schema"
 	"github.com/contiamo/fettle/internal/ui/templates"
@@ -35,7 +36,7 @@ func runHandler(projectDir string) http.HandlerFunc {
 			http.NotFound(w, r)
 			return
 		}
-		runDir := filepath.Join(projectDir, "runs", name)
+		runDir := filepath.Join(project.RunsDir(projectDir), name)
 		// Stat run.json directly: this distinguishes "no such run" from
 		// "subdirectory exists but isn't a fettle run", and both deserve
 		// a 404 rather than a 500.

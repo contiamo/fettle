@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/contiamo/fettle/internal/project"
 	"github.com/contiamo/fettle/internal/run"
 	"github.com/spf13/cobra"
 )
@@ -15,10 +16,9 @@ import (
 var listRunsCmd = &cobra.Command{
 	Use:   "runs",
 	Short: "List all runs in the project with summary counts",
-	Long: `list runs walks runs/ and emits one entry per run folder, sorted
-by created_at descending (newest first). Each entry has the run's
-identity, provenance (input_run / input_runs / target_repo), and a
-counts block.
+	Long: `list runs walks .fettle/runs/ and emits one entry per run
+folder, sorted by created_at descending (newest first). Each entry
+has the run's identity, provenance, and a counts block.
 
 Output is the standard {"data": [...]} envelope.`,
 	RunE: runListRuns,
@@ -32,8 +32,7 @@ envelope — same shape as one entry from ` + "`fettle list runs`" + `.
 PATH may be relative to the project directory or absolute.
 
 Scope is records that live in the run folder itself (findings,
-groups, reviews, outcomes); downstream runs are separate runs with
-their own status.
+their reviews, their outcomes).
 
 Exit codes: 0 success, 1 not a run folder, 2 internal error.`,
 	Args: cobra.ExactArgs(1),
@@ -50,13 +49,13 @@ func runListRuns(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return internalError(err)
 	}
-	runsDir := filepath.Join(dir, "runs")
+	runsDir := project.RunsDir(dir)
 	entries, err := os.ReadDir(runsDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return printJSON([]run.Summary{})
 		}
-		return internalError(fmt.Errorf("read runs/: %w", err))
+		return internalError(fmt.Errorf("read %s: %w", runsDir, err))
 	}
 
 	summaries := make([]run.Summary, 0, len(entries))

@@ -14,7 +14,7 @@
     "**/*_test.go"
   ],
   "instructions": {
-    "find": "instructions/find.md",
-    "review": "instructions/review.md"
+    "find": ".fettle/instructions/find.md",
+    "review": ".fettle/instructions/review.md"
   }
 }

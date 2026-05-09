@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/contiamo/fettle/internal/project"
 	"github.com/contiamo/fettle/internal/run"
 	"github.com/contiamo/fettle/internal/ui/templates"
 )
@@ -35,7 +36,7 @@ func runsHandler(projectDir string) http.HandlerFunc {
 }
 
 func loadRunSummaries(projectDir string) ([]run.Summary, error) {
-	runsDir := filepath.Join(projectDir, "runs")
+	runsDir := project.RunsDir(projectDir)
 	entries, err := os.ReadDir(runsDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {

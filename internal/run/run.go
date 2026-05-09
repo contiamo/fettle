@@ -71,7 +71,7 @@ func CreateForFind(opts CreateFindOpts) (*Path, error) {
 	if err != nil {
 		return nil, err
 	}
-	runsDir := filepath.Join(opts.ProjectDir, "runs")
+	runsDir := project.RunsDir(opts.ProjectDir)
 	if err := os.MkdirAll(runsDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create runs/: %w", err)
 	}

@@ -21,10 +21,10 @@ var uiCmd = &cobra.Command{
 	Use:     "ui",
 	Short:   "Serve a local web UI for browsing runs",
 	GroupID: groupProject,
-	Long: `ui starts a local HTTP server that lets you browse the runs in
-the current fettle project. The default landing page is a run picker;
-clicking a run opens its findings, groups, reviews, and outcomes
-(per-run views are still in development).
+	Long: `ui starts a local HTTP server that lets you browse the runs
+in the current fettle project. The default landing page is a run
+picker; clicking a run opens a three-pane workspace over its
+findings, with review and outcome forms attached to each.
 
 The server binds to localhost only and writes to disk on the same
 path the CLI does — there is no auth, and runs added or completed

@@ -65,23 +65,20 @@ var runReviewFlags struct {
 
 var runReviewCmd = &cobra.Command{
 	Use:   "review",
-	Short: "Run the review agent on every finding or group of an existing run",
-	Long: `review iterates the subjects of --run, invoking the configured
-agent on each subject not yet reviewed by this agent. The agent
+	Short: "Run the review agent on every finding of an existing run",
+	Long: `review iterates the findings of --run, invoking the configured
+agent on each finding not yet reviewed by this agent. The agent
 appends review entries via ` + "`fettle add review`" + `; one entry per
-subject (or zero — review is optional per subject).
+finding (or zero — review is optional per finding).
 
-Stage → subject mapping:
-- find / merge / dedupe runs → iterate findings; prompt is
-  ` + "`instructions/review.md`" + `.
-- group runs → iterate groups; prompt is
-  ` + "`instructions/review_group.md`" + ` and the agent additionally
-  receives the cluster's member findings + their existing reviews
-  (snapshotted at group-creation time).
+Resume keys on the agent's slug, so switching the model
+(claude/sonnet → claude/opus) doesn't force re-review.
 
-On first invocation in --run, the active prompt is snapshotted into
-runs/<run>/instructions/<file> (review.md or review_group.md
-depending on stage). Subsequent invocations re-use the snapshot.
+On first invocation in --run, the active prompt is snapshotted
+into ` + "`<run>/instructions/review.md`" + `. Subsequent invocations re-
+use the snapshot — editing the project's
+` + "`.fettle/instructions/review.md`" + ` after the run started has no
+effect.
 
 For custom agent scripts via --agent-script, see the contract
 documented on internal/agent.runCustom.`,
@@ -91,13 +88,13 @@ documented on internal/agent.runCustom.`,
 func init() {
 	runReviewCmd.Flags().StringVar(&runReviewFlags.run, "run", "", "path to the target run folder (required)")
 	runReviewCmd.Flags().IntVarP(&runReviewFlags.concurrency, "concurrency", "c", 4, "max concurrent agent invocations")
-	runReviewCmd.Flags().IntVar(&runReviewFlags.limit, "limit", 0, "review at most N pending subjects this invocation (0 = all)")
+	runReviewCmd.Flags().IntVar(&runReviewFlags.limit, "limit", 0, "review at most N pending findings this invocation (0 = all)")
 	runReviewCmd.Flags().StringVar(&runReviewFlags.agent, "agent", "", "select a built-in agent (claude or codex); mutually exclusive with --agent-script")
 	runReviewCmd.Flags().StringVar(&runReviewFlags.model, "model", "", "agent model override")
 	runReviewCmd.Flags().StringVar(&runReviewFlags.script, "agent-script", "", "run a custom agent script (path to executable)")
 	runReviewCmd.Flags().StringVar(&runReviewFlags.effort, "effort", "", "agent reasoning effort: low|medium|high|xhigh|max")
-	runReviewCmd.Flags().StringVar(&runReviewFlags.prompt, "prompt", "", "path to the review prompt to use (overrides instructions.review or instructions.review_group; relative to cwd; first invocation against a run only — subsequent reviews use the snapshot)")
-	runReviewCmd.Flags().DurationVar(&runReviewFlags.timeout, "timeout", defaultReviewTimeout, "per-subject agent timeout")
+	runReviewCmd.Flags().StringVar(&runReviewFlags.prompt, "prompt", "", "path to the review prompt to use (overrides instructions.review; relative to cwd; first invocation against a run only — subsequent reviews use the snapshot)")
+	runReviewCmd.Flags().DurationVar(&runReviewFlags.timeout, "timeout", defaultReviewTimeout, "per-finding agent timeout")
 	_ = runReviewCmd.MarkFlagRequired("run")
 	runCmd.AddCommand(runReviewCmd)
 }
@@ -153,9 +150,6 @@ func runRunReview(cmd *cobra.Command, args []string) error {
 
 	srcAbs, _, err := resolvePromptSource(dir, runReviewFlags.prompt, configRel)
 	if err != nil {
-		if in.manifest.Stage == "group" && runReviewFlags.prompt == "" && configRel == "" {
-			return fmt.Errorf("instructions.review_group is not set in .fettle.json — add `\"review_group\": \"instructions/review_group.md\"` to the instructions block and create the file (a starter is in internal/project/stubs/review_group.md), or pass --prompt <path>")
-		}
 		return fmt.Errorf("resolve review prompt: %w", err)
 	}
 	if err := snapshotReviewPrompt(srcAbs, snapPath); err != nil {

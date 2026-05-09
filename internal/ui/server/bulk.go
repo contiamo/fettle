@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/contiamo/fettle/internal/project"
 	"github.com/contiamo/fettle/internal/run"
 	"github.com/contiamo/fettle/internal/schema"
 	"github.com/go-chi/chi/v5"
@@ -112,7 +113,7 @@ func openRunForBulkMutation(w http.ResponseWriter, r *http.Request, projectDir s
 		http.NotFound(w, r)
 		return "", nil, false
 	}
-	rp, err := run.Open(filepath.Join(projectDir, "runs", name))
+	rp, err := run.Open(filepath.Join(project.RunsDir(projectDir), name))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("open run: %v", err), http.StatusInternalServerError)
 		return "", nil, false

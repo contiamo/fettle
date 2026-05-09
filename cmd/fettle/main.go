@@ -23,7 +23,8 @@ var rootCmd = &cobra.Command{
 	Short: "File-oriented LLM audit harness",
 	Long: `fettle runs LLM agents over a codebase to find, review, and
 close issues. Each scan lives in a self-contained run folder under
-runs/, with the prompt that produced it snapshotted alongside the data.
+.fettle/runs/, with the prompt that produced it snapshotted alongside
+the data.
 
 See FETTLE.md at the repo root for the full design.`,
 	SilenceUsage:  true,
@@ -152,7 +153,7 @@ func projectDir() (string, error) {
 // inside the project tree, else as the absolute path.
 //
 // Falling back, configRel is the project-relative path from
-// .fettle.json's `instructions.<stage>` field; it's joined with
+// .fettle/config.json's `instructions.<stage>` field; it's joined with
 // projectDir on read. Returns an error if both are empty or if the
 // resolved file doesn't exist.
 func resolvePromptSource(projectDir, override, configRel string) (absPath, recordPath string, err error) {
@@ -171,14 +172,14 @@ func resolvePromptSource(projectDir, override, configRel string) (absPath, recor
 		return abs, rec, nil
 	}
 	if configRel == "" {
-		return "", "", fmt.Errorf("no prompt source: pass --prompt <path> or set the relevant `instructions.*` field in .fettle.json")
+		return "", "", fmt.Errorf("no prompt source: pass --prompt <path> or set the relevant `instructions.*` field in .fettle/config.json")
 	}
 	abs := configRel
 	if !filepath.IsAbs(abs) {
 		abs = filepath.Join(projectDir, configRel)
 	}
 	if _, err := os.Stat(abs); err != nil {
-		return "", "", fmt.Errorf("prompt %q (from .fettle.json): %w", configRel, err)
+		return "", "", fmt.Errorf("prompt %q (from .fettle/config.json): %w", configRel, err)
 	}
 	return abs, configRel, nil
 }

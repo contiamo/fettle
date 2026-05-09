@@ -75,7 +75,7 @@ func makeFindRunMulti(t *testing.T, ids ...string) (string, string, []string) {
 func makeRunDir(t *testing.T, runName string) (string, string) {
 	t.Helper()
 	projectDir := t.TempDir()
-	runDir := filepath.Join(projectDir, "runs", runName)
+	runDir := filepath.Join(project.RunsDir(projectDir), runName)
 	if err := os.MkdirAll(filepath.Join(runDir, "findings"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func writeFindingDoc(t *testing.T, projectDir, runName, id, severity string) {
 		sevField = `"` + severity + `"`
 	}
 	body := `{"id":"` + id + `","file":"x.go","line":1,"title":"T","description":"D","suggestion":"S","severity":` + sevField + `,"labels":[],"references":[],"created_by":"agent:claude","created_at":"2026-01-01T00:00:00Z"}` + "\n"
-	path := filepath.Join(projectDir, "runs", runName, "findings", id+".json")
+	path := filepath.Join(project.RunsDir(projectDir), runName, "findings", id+".json")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestReviewPost_AppendsAndRendersSwap(t *testing.T) {
 	}
 
 	// Verify the entry actually landed on disk via the run.Path API.
-	rp, err := run.Open(filepath.Join(projectDir, "runs", runName))
+	rp, err := run.Open(filepath.Join(project.RunsDir(projectDir), runName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func TestOutcomePost_AppendsWithAuthor(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 
-	rp, err := run.Open(filepath.Join(projectDir, "runs", runName))
+	rp, err := run.Open(filepath.Join(project.RunsDir(projectDir), runName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +319,7 @@ func TestOutcomePost_OtherStatusUsesFreeText(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
-	rp, _ := run.Open(filepath.Join(projectDir, "runs", runName))
+	rp, _ := run.Open(filepath.Join(project.RunsDir(projectDir), runName))
 	all := loadFindingOutcomes(t, rp, findingID)
 	if len(all) != 1 || all[0].Status != "deferred-to-q3" {
 		t.Errorf("got %+v, want status=deferred-to-q3", all)
@@ -344,7 +344,7 @@ func TestOutcomePost_RejectsEmptyStatus(t *testing.T) {
 
 func TestReviewView_DerivedCurrentLabels(t *testing.T) {
 	projectDir, runName, findingID := makeFindRun(t)
-	rp, err := run.Open(filepath.Join(projectDir, "runs", runName))
+	rp, err := run.Open(filepath.Join(project.RunsDir(projectDir), runName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -495,7 +495,7 @@ func TestBulkReview_AppendsOneEntryPerFinding(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, want 303", rec.Code)
 	}
-	rp, err := run.Open(filepath.Join(projectDir, "runs", runName))
+	rp, err := run.Open(filepath.Join(project.RunsDir(projectDir), runName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -549,7 +549,7 @@ func TestBulkReview_RejectsUnknownID(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rec.Code)
 	}
-	rp, _ := run.Open(filepath.Join(projectDir, "runs", runName))
+	rp, _ := run.Open(filepath.Join(project.RunsDir(projectDir), runName))
 	all, _ := rp.LoadAllReviews()
 	if len(all) != 0 {
 		t.Errorf("got %d entries, want 0 (rejected, no partial writes)", len(all))
@@ -594,7 +594,7 @@ func TestParseReviewLabels_NilSemantics(t *testing.T) {
 
 func TestReviewView_LabelOverrideNilDoesntTouch(t *testing.T) {
 	projectDir, runName, findingID := makeFindRun(t)
-	rp, err := run.Open(filepath.Join(projectDir, "runs", runName))
+	rp, err := run.Open(filepath.Join(project.RunsDir(projectDir), runName))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -630,7 +630,7 @@ func TestReviewView_LabelOverrideNilDoesntTouch(t *testing.T) {
 
 func TestReviewView_LabelExplicitClear(t *testing.T) {
 	projectDir, runName, findingID := makeFindRun(t)
-	rp, _ := run.Open(filepath.Join(projectDir, "runs", runName))
+	rp, _ := run.Open(filepath.Join(project.RunsDir(projectDir), runName))
 
 	// Alice sets ack, then explicitly clears (Labels = &[]). Her
 	// latest is now the empty override; CurrentLabels collapses to

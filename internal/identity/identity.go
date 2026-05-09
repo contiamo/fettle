@@ -144,7 +144,7 @@ func (r Resolved) String() string {
 // Save writes slug to ~/.config/fettle/identity (creating the
 // directory if needed). Validates the slug before persisting. The
 // path is per-user, per-machine — never under the project — so the
-// slug stays out of the repo even when .fettle.json is checked in.
+// slug stays out of the repo even when .fettle/config.json is checked in.
 func Save(slug string) error {
 	if err := ValidateSlug(slug); err != nil {
 		return err

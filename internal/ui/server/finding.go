@@ -9,6 +9,7 @@ import (
 	"regexp"
 
 	"github.com/contiamo/fettle/internal/anchor"
+	"github.com/contiamo/fettle/internal/project"
 	"github.com/contiamo/fettle/internal/run"
 	"github.com/contiamo/fettle/internal/schema"
 	"github.com/contiamo/fettle/internal/ui/templates"
@@ -43,7 +44,7 @@ func findingHandler(projectDir string) http.HandlerFunc {
 			http.NotFound(w, r)
 			return
 		}
-		runDir := filepath.Join(projectDir, "runs", name)
+		runDir := filepath.Join(project.RunsDir(projectDir), name)
 		if _, err := os.Stat(filepath.Join(runDir, "run.json")); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				http.NotFound(w, r)

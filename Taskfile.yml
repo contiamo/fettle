@@ -157,6 +157,6 @@ tasks:
     desc: Remove build artifacts and self-scan runs
     cmds:
       - rm -rf bin/
-      - rm -rf examples/self-scan/runs/
+      - rm -rf examples/self-scan/.fettle/runs/
       - rm -f internal/ui/static/dist/styles.css
       - rm -f internal/ui/static/dist/app.js
