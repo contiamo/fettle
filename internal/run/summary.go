@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -34,9 +33,16 @@ type Counts struct {
 	Outcomes int  `json:"outcomes"`
 }
 
-// Summarize reads the manifest and counts the records in a run folder.
-// Missing record files contribute zero counts so partial runs report
-// cleanly.
+// Summarize reads the manifest, counts the records in the run folder,
+// and returns the row shown by `fettle list runs` / `fettle show run`.
+// Missing artifacts (no findings/ dir on a fresh run) contribute zero
+// counts so partial runs render cleanly.
+//
+// Findings count = number of `findings/<id>.json` files (including
+// any that fail to parse — the file existing means an agent emitted
+// a finding, even if a torn write left it unreadable). Reviews and
+// outcomes counts walk the parsed docs and skip malformed ones; a
+// rebuild after a crash will surface the warning during render.
 func Summarize(runDir string) (Summary, error) {
 	rp, err := Open(runDir)
 	if err != nil {
@@ -47,36 +53,36 @@ func Summarize(runDir string) (Summary, error) {
 		return Summary{}, err
 	}
 
-	outcomes, err := CountLines(filepath.Join(runDir, "outcomes.jsonl"))
+	ids, err := rp.ListFindingIDs()
 	if err != nil {
-		return Summary{}, fmt.Errorf("count outcomes: %w", err)
+		return Summary{}, fmt.Errorf("list findings: %w", err)
 	}
+	findingCount := len(ids)
 
-	reviews, err := countReviews(runDir)
+	docs, err := rp.LoadAllFindings()
 	if err != nil {
-		return Summary{}, fmt.Errorf("count reviews: %w", err)
+		return Summary{}, fmt.Errorf("load findings: %w", err)
 	}
-
-	counts := Counts{Reviews: reviews, Outcomes: outcomes}
-	n, err := CountLines(filepath.Join(runDir, "findings.jsonl"))
-	if err != nil {
-		return Summary{}, fmt.Errorf("count findings: %w", err)
+	reviews, outcomes := 0, 0
+	for _, d := range docs {
+		reviews += len(d.Reviews)
+		outcomes += len(d.Outcomes)
 	}
-	counts.Findings = &n
-
 	return Summary{
 		Name:        m.Name,
 		Stage:       m.Stage,
 		CreatedAt:   m.CreatedAt,
 		CompletedAt: m.CompletedAt,
 		TargetRepo:  m.TargetRepo,
-		Counts:      counts,
+		Counts:      Counts{Findings: &findingCount, Reviews: reviews, Outcomes: outcomes},
 	}, nil
 }
 
 // CountLines returns the number of non-empty lines in path. A missing
 // file contributes zero, so this is safe to call against a run folder
-// where some record files haven't been touched yet.
+// where some record files haven't been touched yet. files.jsonl is
+// the only remaining JSONL stream that uses this; per-finding doc
+// counts go through LoadAllFindings.
 func CountLines(path string) (int, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -97,20 +103,3 @@ func CountLines(path string) (int, error) {
 	return count, sc.Err()
 }
 
-// countReviews sums lines across every reviews_<author>.jsonl in
-// runDir. Missing files contribute zero.
-func countReviews(runDir string) (int, error) {
-	files, err := ReviewFiles(runDir)
-	if err != nil {
-		return 0, err
-	}
-	total := 0
-	for _, rf := range files {
-		n, err := CountLines(rf.Path)
-		if err != nil {
-			return 0, err
-		}
-		total += n
-	}
-	return total, nil
-}

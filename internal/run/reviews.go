@@ -1,63 +1,25 @@
 package run
 
 import (
-	"bufio"
-	"encoding/json"
-	"errors"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/contiamo/fettle/internal/schema"
 )
 
-// ReviewFile is one reviews_<author>.jsonl file in a run directory:
-// the absolute path to the file plus the author slug parsed off the
-// filename. Returned by ReviewFiles so every caller does the slug
-// extraction the same way.
-type ReviewFile struct {
-	Path   string
-	Author string
-}
-
-// ReviewFiles enumerates every reviews_<author>.jsonl file in runDir.
-// Returns entries in directory-iteration order — callers that need
-// determinism should sort the result.
+// FlatReview is one review entry surfaced with the finding it belongs
+// to. The on-disk Review (inside its FindingDoc) doesn't carry a
+// Subject; FlatReview synthesizes one at the boundary so flat output
+// surfaces (CLI `list reviews`, UI "scan all reviews to compute
+// effective severity") keep the same shape they had under the
+// per-author JSONL layout.
 //
-// Single point of truth for "what counts as a review file": the prior
-// CLI (run_dedupe, review, run_merge) and the summary loader each
-// open-coded the same prefix/suffix slice off the filename, with the
-// same off-by-one risk if the convention ever changed. Centralising
-// here keeps that decision in one place.
-func ReviewFiles(runDir string) ([]ReviewFile, error) {
-	entries, err := os.ReadDir(runDir)
-	if err != nil {
-		return nil, err
-	}
-	var out []ReviewFile
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if !strings.HasPrefix(name, "reviews_") || !strings.HasSuffix(name, ".jsonl") {
-			continue
-		}
-		author := strings.TrimSuffix(strings.TrimPrefix(name, "reviews_"), ".jsonl")
-		out = append(out, ReviewFile{Path: filepath.Join(runDir, name), Author: author})
-	}
-	return out, nil
-}
-
-// FlatReview is one schema.Review flattened with the author slug
-// extracted from the filename. AuthorSlug is the bare reviews_<slug>
-// filename component used for routing and append-locking; Author is
-// the full prefixed stamp from the record (`human:slug` or
-// `agent:slug[/model]`), the canonical "who reviewed this" carried
-// on the JSONL line itself.
+// AuthorSlug is the slug portion of the canonical author stamp
+// (`agent:claude/sonnet` → `claude`, `human:michael` → `michael`),
+// extracted via schema.AuthorSlug. It used to come from the
+// reviews_<slug>.jsonl filename; now it's derived from the stamp.
+// Resume logic keys on slug only so switching the agent's model
+// doesn't force re-review.
 type FlatReview struct {
 	Subject    schema.Subject `json:"subject"`
 	Author     string         `json:"author"`
@@ -68,54 +30,68 @@ type FlatReview struct {
 	At         time.Time      `json:"at"`
 }
 
-// LoadAllReviews reads every reviews_<author>.jsonl in the run folder
-// and returns a chronological flat list (oldest first) annotated with
-// the author slug. Malformed lines are skipped (matching the rest of
-// the JSONL readers in this package). Missing files contribute zero —
-// a run with no reviewers yet returns an empty slice.
+// LoadAllReviews walks every finding doc in the run and returns its
+// reviews flattened into a chronological list (oldest first), each
+// entry annotated with the synthesized Subject and AuthorSlug.
+// Malformed docs are skipped (LoadAllFindings handles the warning).
 func (p *Path) LoadAllReviews() ([]FlatReview, error) {
-	files, err := ReviewFiles(p.dir)
+	docs, err := p.LoadAllFindings()
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
 		return nil, err
 	}
 	var out []FlatReview
-	for _, rf := range files {
-		entries, err := readReviewFile(rf.Path, rf.Author)
-		if err != nil {
-			return nil, err
+	for _, doc := range docs {
+		subj := schema.Subject{Kind: schema.SubjectFinding, ID: doc.ID}
+		for _, r := range doc.Reviews {
+			out = append(out, FlatReview{
+				Subject:    subj,
+				Author:     r.Author,
+				AuthorSlug: schema.AuthorSlug(r.Author),
+				Labels:     r.Labels,
+				Severity:   r.Severity,
+				Comment:    r.Comment,
+				At:         r.At,
+			})
 		}
-		out = append(out, entries...)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
 	return out, nil
 }
 
-func readReviewFile(path, slug string) ([]FlatReview, error) {
-	f, err := os.Open(path)
+// LoadAllOutcomes walks every finding doc and returns each outcome
+// event flattened into a chronological list (oldest first), with
+// Subject synthesized from the doc id. Mirrors LoadAllReviews; used
+// by CLI `list outcomes` and any consumer that wants every event in
+// the run regardless of which finding it touches.
+func (p *Path) LoadAllOutcomes() ([]FlatOutcome, error) {
+	docs, err := p.LoadAllFindings()
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, jsonlScanInitBuf), jsonlScanMaxLine)
-	var out []FlatReview
-	for sc.Scan() {
-		var r schema.Review
-		if err := json.Unmarshal(sc.Bytes(), &r); err != nil {
-			continue
+	var out []FlatOutcome
+	for _, doc := range docs {
+		subj := schema.Subject{Kind: schema.SubjectFinding, ID: doc.ID}
+		for _, o := range doc.Outcomes {
+			out = append(out, FlatOutcome{
+				Subject: subj,
+				Author:  o.Author,
+				Status:  o.Status,
+				PRURL:   o.PRURL,
+				At:      o.At,
+			})
 		}
-		out = append(out, FlatReview{
-			Subject:    r.Subject,
-			Author:     r.Author,
-			AuthorSlug: slug,
-			Labels:     r.Labels,
-			Severity:   r.Severity,
-			Comment:    r.Comment,
-			At:         r.At,
-		})
 	}
-	return out, sc.Err()
+	sort.SliceStable(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
+	return out, nil
+}
+
+// FlatOutcome is the FlatReview equivalent for outcome events:
+// schema.Outcome plus the synthesized Subject identifying the
+// finding the event is for.
+type FlatOutcome struct {
+	Subject schema.Subject `json:"subject"`
+	Author  string         `json:"author"`
+	Status  string         `json:"status"`
+	PRURL   string         `json:"pr_url,omitempty"`
+	At      time.Time      `json:"at"`
 }

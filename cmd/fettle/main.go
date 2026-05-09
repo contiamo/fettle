@@ -21,8 +21,8 @@ var rootFlags struct {
 var rootCmd = &cobra.Command{
 	Use:   "fettle",
 	Short: "File-oriented LLM audit harness",
-	Long: `fettle runs LLM agents over a codebase to find, review, group,
-and close issues. Each scan lives in a self-contained run folder under
+	Long: `fettle runs LLM agents over a codebase to find, review, and
+close issues. Each scan lives in a self-contained run folder under
 runs/, with the prompt that produced it snapshotted alongside the data.
 
 See FETTLE.md at the repo root for the full design.`,
@@ -39,12 +39,11 @@ const (
 )
 
 // addCmd, listCmd, showCmd are the verb-first parents under which
-// every record-shaped subcommand registers itself. find/group/
-// review/outcome/run all hang off these (and partly off run, for
-// the agent-driven stages).
+// every record-shaped subcommand registers itself. finding / review
+// / outcome all hang off these.
 var addCmd = &cobra.Command{
 	Use:     "add",
-	Short:   "Append a record (finding, group, review, outcome)",
+	Short:   "Append a record (finding, review, outcome)",
 	Long:    `add records run output. Each subcommand corresponds to one record kind.`,
 	GroupID: groupRecords,
 }
@@ -58,7 +57,7 @@ var listCmd = &cobra.Command{
 
 var showCmd = &cobra.Command{
 	Use:     "show",
-	Short:   "Print one record (finding, group, review, outcome) or one run",
+	Short:   "Print one record (finding, review, outcome) or one run",
 	Long:    `show prints a single record from a run, or a single run's status. Output is the {"data": ...} envelope.`,
 	GroupID: groupRecords,
 }

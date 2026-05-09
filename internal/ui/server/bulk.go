@@ -8,10 +8,8 @@
 // (findings.ts) are resolved into a flat ids list before the request
 // hits this layer — the wire format is always {finding_ids: [...]}
 // plus the same Labels/Severity/Comment fields the per-finding form
-// accepts. Append-only writes mean two reviewers running bulk-actions
-// concurrently never collide; each one's per-author file gets its own
-// flock, and the per-finding "latest entry per author" semantics keep
-// label/severity state coherent.
+// accepts. Each id flows through a separate UpdateFinding call; the
+// docs are independent files so there's no shared lock to contend on.
 
 package server
 
@@ -31,9 +29,9 @@ import (
 // authenticated reviewer's reviews_<slug>.jsonl. All entries share a
 // single timestamp + payload so the bulk action reads as one
 // reviewer-event in the audit trail. The set of ids is taken at face
-// value; we validate each one exists in the run's findings.jsonl and
-// reject the whole call if any id is unknown (partial writes would
-// leave the audit trail confusing).
+// value; we validate each one has a finding doc on disk and reject
+// the whole call if any id is unknown (partial writes would leave
+// the audit trail confusing).
 func bulkReviewHandler(projectDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		runName, rp, ok := openRunForBulkMutation(w, r, projectDir)
@@ -81,15 +79,17 @@ func bulkReviewHandler(projectDir string) http.HandlerFunc {
 		stamp := ident.String()
 		for _, id := range ids {
 			entry := schema.Review{
-				Subject:  schema.Subject{Kind: schema.SubjectFinding, ID: id},
 				Author:   stamp,
 				Labels:   labels,
 				Severity: severity,
 				Comment:  comment,
 				At:       now,
 			}
-			if err := rp.AppendReview(ident.Slug, entry); err != nil {
-				http.Error(w, fmt.Sprintf("append review for %s: %v", id, err), http.StatusInternalServerError)
+			if err := rp.UpdateFinding(id, func(d *schema.FindingDoc) error {
+				d.Reviews = append(d.Reviews, entry)
+				return nil
+			}); err != nil {
+				http.Error(w, fmt.Sprintf("save review for %s: %v", id, err), http.StatusInternalServerError)
 				return
 			}
 		}
@@ -121,16 +121,17 @@ func openRunForBulkMutation(w http.ResponseWriter, r *http.Request, projectDir s
 }
 
 // loadFindingIDSet returns the set of finding ids in the run for
-// existence-checks. Reused so the bulk handler doesn't load the whole
-// findings slice twice when validating dozens of ids.
+// existence-checks. ListFindingIDs walks the findings/ directory
+// directly — much cheaper than parsing every doc just to know which
+// ids are valid.
 func loadFindingIDSet(rp *run.Path) (map[string]struct{}, error) {
-	findings, err := rp.LoadFindings()
+	ids, err := rp.ListFindingIDs()
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]struct{}, len(findings))
-	for _, f := range findings {
-		out[f.ID] = struct{}{}
+	out := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		out[id] = struct{}{}
 	}
 	return out, nil
 }

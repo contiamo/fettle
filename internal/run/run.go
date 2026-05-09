@@ -1,6 +1,6 @@
 // Package run owns the run folder under runs/<name>/: creation,
-// manifest, append-only writers for findings.jsonl and files.jsonl, and
-// resume-state loading.
+// manifest, and resume-state loading. Per-finding-doc storage lives in
+// findings.go; review aggregation across docs lives in reviews.go.
 package run
 
 import (
@@ -22,22 +22,25 @@ import (
 	"github.com/contiamo/fettle/internal/schema"
 )
 
-// jsonlScanInitBuf and jsonlScanMaxLine size the bufio.Scanner buffers
-// every JSONL reader in this package shares. 64 KiB initial / 1 MiB max
-// fits the longest finding records observed in practice (a wordy
-// description with embedded code blocks) without paying the allocation
-// cost up-front. Hoisted to constants so all readers stay in lockstep —
-// raising the cap in one reader and not the others would let a record
-// load in some code paths but not others.
+// findingsSubdir is the per-run directory holding one JSON file per
+// finding. Centralised so callers don't open-code the literal.
+const findingsSubdir = "findings"
+
+// jsonlScanInitBuf and jsonlScanMaxLine size the bufio.Scanner buffer
+// `LoadDoneFiles` shares with the rest of the package — files.jsonl is
+// the last remaining JSONL stream after the per-finding-doc migration.
+// 64 KiB initial / 1 MiB max comfortably fits the longest FileStatus
+// row observed in practice.
 const (
 	jsonlScanInitBuf = 1 << 16
 	jsonlScanMaxLine = 1 << 20
 )
 
 // Path is a handle to a run folder. Methods are safe for concurrent use
-// across goroutines and (for findings.jsonl) across processes — the
-// findings append uses flock(2). files.jsonl is harness-only, so it
-// uses an in-process mutex.
+// across goroutines; cross-process safety on per-finding writes is
+// covered by atomic rename, not flock — see UpdateFinding's godoc for
+// the accepted race window. files.jsonl is harness-only and uses an
+// in-process mutex.
 type Path struct {
 	dir        string
 	filesMu    sync.Mutex
@@ -61,7 +64,8 @@ type CreateFindOpts struct {
 }
 
 // CreateForFind initializes a new run folder under projectDir/runs/ with
-// the find prompt snapshotted and run.json populated.
+// the find prompt snapshotted, run.json populated, and the empty
+// findings/ directory ready for per-finding writes.
 func CreateForFind(opts CreateFindOpts) (*Path, error) {
 	name, err := generateName("find", opts.Slug)
 	if err != nil {
@@ -75,7 +79,7 @@ func CreateForFind(opts CreateFindOpts) (*Path, error) {
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create run dir: %w", err)
 	}
-	for _, sub := range []string{"instructions", "raw"} {
+	for _, sub := range []string{"instructions", "raw", findingsSubdir} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
 			return nil, fmt.Errorf("mkdir %s: %w", sub, err)
 		}
@@ -84,10 +88,8 @@ func CreateForFind(opts CreateFindOpts) (*Path, error) {
 	if err := os.WriteFile(filepath.Join(dir, snap), []byte(opts.FindPrompt), 0o644); err != nil {
 		return nil, fmt.Errorf("snapshot find prompt: %w", err)
 	}
-	for _, f := range []string{"findings.jsonl", "files.jsonl"} {
-		if err := touch(filepath.Join(dir, f)); err != nil {
-			return nil, err
-		}
+	if err := touch(filepath.Join(dir, "files.jsonl")); err != nil {
+		return nil, err
 	}
 	manifest := schema.RunManifest{
 		Name:          name,
@@ -109,9 +111,9 @@ func CreateForFind(opts CreateFindOpts) (*Path, error) {
 	return &Path{dir: dir}, nil
 }
 
-// MarkCompleted stamps run.json's completed_at field. Single-shot
-// stages call this once their work is fully written, signalling to
-// downstream consumers that the run is trustworthy.
+// MarkCompleted stamps run.json's completed_at field. Stages call this
+// once the work is fully written, signalling to downstream consumers
+// that the run is trustworthy.
 func (p *Path) MarkCompleted() error {
 	p.manifestMu.Lock()
 	defer p.manifestMu.Unlock()
@@ -142,173 +144,13 @@ func (p *Path) Manifest() (schema.RunManifest, error) {
 	return readManifest(p.dir)
 }
 
-// AppendFinding appends one finding to findings.jsonl. Safe across
-// goroutines and across processes — the underlying append uses flock(2)
-// on the data file, so the agent-spawned `fettle find add` and the
-// harness's own writers serialize through the kernel.
-func (p *Path) AppendFinding(f schema.Finding) error {
-	line, err := json.Marshal(f)
-	if err != nil {
-		return err
-	}
-	line = append(line, '\n')
-	return appendWithLock(filepath.Join(p.dir, "findings.jsonl"), line)
-}
-
-// AppendFileStatus appends one row to files.jsonl. Concurrent-safe.
+// AppendFileStatus appends one row to files.jsonl. Concurrent-safe
+// within a process via filesMu; cross-process this is harness-only so
+// no flock.
 func (p *Path) AppendFileStatus(s schema.FileStatus) error {
 	p.filesMu.Lock()
 	defer p.filesMu.Unlock()
 	return appendJSONL(filepath.Join(p.dir, "files.jsonl"), s)
-}
-
-// AppendOutcome appends one outcome event to outcomes.jsonl. Cross-
-// process safe via flock.
-func (p *Path) AppendOutcome(o schema.Outcome) error {
-	line, err := json.Marshal(o)
-	if err != nil {
-		return err
-	}
-	line = append(line, '\n')
-	return appendWithLock(filepath.Join(p.dir, "outcomes.jsonl"), line)
-}
-
-// LoadOutcomes reads outcomes.jsonl in append order. Tolerates
-// malformed lines (skipped). Missing file returns an empty slice and
-// no error.
-func (p *Path) LoadOutcomes() ([]schema.Outcome, error) {
-	return loadJSONL[schema.Outcome](filepath.Join(p.dir, "outcomes.jsonl"))
-}
-
-// LoadFindings reads findings.jsonl in append order. Same tolerant
-// semantics as LoadOutcomes — malformed lines are skipped, a missing
-// file is empty, not an error.
-func (p *Path) LoadFindings() ([]schema.Finding, error) {
-	return loadJSONL[schema.Finding](filepath.Join(p.dir, "findings.jsonl"))
-}
-
-// loadJSONL reads a JSONL file at path into a slice of T. Missing
-// file returns an empty slice and no error. Malformed lines are
-// skipped silently — the policy every record-reading helper in this
-// package shares (LoadOutcomes / LoadFindings delegate here).
-func loadJSONL[T any](path string) ([]T, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	defer f.Close()
-
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, jsonlScanInitBuf), jsonlScanMaxLine)
-	var out []T
-	for sc.Scan() {
-		var v T
-		if err := json.Unmarshal(sc.Bytes(), &v); err != nil {
-			continue
-		}
-		out = append(out, v)
-	}
-	return out, sc.Err()
-}
-
-// AppendReview appends one review entry to reviews_<author>.jsonl.
-// Cross-process safe via flock — the same author may have concurrent
-// `fettle review add` invocations during a parallel review run.
-func (p *Path) AppendReview(author string, review schema.Review) error {
-	if err := validateAuthorSlug(author); err != nil {
-		return err
-	}
-	line, err := json.Marshal(review)
-	if err != nil {
-		return err
-	}
-	line = append(line, '\n')
-	return appendWithLock(filepath.Join(p.dir, "reviews_"+author+".jsonl"), line)
-}
-
-// FindingExists reports whether findings.jsonl contains a row with
-// the given id. Used to validate review/outcome subjects.
-func (p *Path) FindingExists(id string) (bool, error) {
-	return idExistsIn(filepath.Join(p.dir, "findings.jsonl"), id)
-}
-
-// idExistsIn scans a JSONL file for a record whose top-level "id"
-// field matches. Tolerates malformed lines.
-func idExistsIn(path, id string) (bool, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return false, nil
-		}
-		return false, err
-	}
-	defer f.Close()
-
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, jsonlScanInitBuf), jsonlScanMaxLine)
-	var row struct {
-		ID string `json:"id"`
-	}
-	for sc.Scan() {
-		row.ID = ""
-		if err := json.Unmarshal(sc.Bytes(), &row); err != nil {
-			continue
-		}
-		if row.ID == id {
-			return true, nil
-		}
-	}
-	return false, sc.Err()
-}
-
-// validateAuthorSlug shares slugRegex with run names — the slug
-// becomes part of the reviews_<author>.jsonl filename, so the same
-// filesystem-safe character class applies. Unlike run slugs, an
-// empty author slug is rejected.
-func validateAuthorSlug(s string) error {
-	if s == "" {
-		return fmt.Errorf("author slug must not be empty")
-	}
-	if !slugRegex.MatchString(s) {
-		return fmt.Errorf("invalid author slug %q: only [A-Za-z0-9_-] allowed", s)
-	}
-	return nil
-}
-
-// CountFindingsForFile scans findings.jsonl and returns how many rows
-// have file == f. Used by the find harness to derive a per-file ledger
-// row from the delta of "before vs after the agent ran". Tolerates
-// malformed lines (skips them) so a partial-write under SIGKILL doesn't
-// poison the count.
-func (p *Path) CountFindingsForFile(f string) (int, error) {
-	fh, err := os.Open(filepath.Join(p.dir, "findings.jsonl"))
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return 0, nil
-		}
-		return 0, err
-	}
-	defer fh.Close()
-
-	sc := bufio.NewScanner(fh)
-	sc.Buffer(make([]byte, jsonlScanInitBuf), jsonlScanMaxLine)
-	var row struct {
-		File string `json:"file"`
-	}
-	count := 0
-	for sc.Scan() {
-		row.File = ""
-		if err := json.Unmarshal(sc.Bytes(), &row); err != nil {
-			continue
-		}
-		if row.File == f {
-			count++
-		}
-	}
-	return count, sc.Err()
 }
 
 // LoadDoneFiles returns the set of repo-relative paths whose latest entry
@@ -350,10 +192,7 @@ func (p *Path) RawDir() string {
 
 // FileHash returns the stable per-file slug used for raw/ output paths.
 func FileHash(repoRelPath string) string {
-	// Cheap, stable, doesn't need to be cryptographic — sha256 first 16
-	// hex chars matches the convention from the prior fettle codebase.
-	h := sha256ish(repoRelPath)
-	return h
+	return sha256ish(repoRelPath)
 }
 
 // agentInfoFromSpec maps an agent.Spec onto the manifest's AgentInfo
@@ -385,10 +224,9 @@ func generateName(stage, slug string) (string, error) {
 	return fmt.Sprintf("%s_%s_%s", stage, ts, slug), nil
 }
 
-// slugRegex is the shared validity check for run slugs and author
-// slugs: ASCII alphanumerics, hyphens, and underscores. Both flow into
-// filesystem paths (run folders and reviews_<author>.jsonl), so the
-// same character class keeps both filename-safe.
+// slugRegex is the shared validity check for run slugs and finding ids.
+// Both flow into filesystem paths (run folders and findings/<id>.json),
+// so the same character class keeps both filename-safe.
 var slugRegex = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // validateSlug returns an error if a non-empty run-name slug doesn't

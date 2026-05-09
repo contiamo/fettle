@@ -23,17 +23,18 @@ var addReviewFlags struct {
 
 var addReviewCmd = &cobra.Command{
 	Use:   "review",
-	Short: "Append a review entry to the active run's reviews_<author>.jsonl",
+	Short: "Append a review entry to the target finding's reviews[]",
 	Long: `add review records one review entry in the run identified by
-$FETTLE_RUN.
+$FETTLE_RUN. The entry is appended to the target finding's reviews[]
+array via an atomic-rename rewrite of findings/<id>.json.
 
-Author identity (the slug used in the filename) comes from
+Author identity (the canonical attribution stamp) comes from
 $FETTLE_AGENT. The harness sets that env var when invoking an agent
 during a review stage; humans calling ` + "`fettle add review`" + ` directly
 need to set it themselves (or use the UI, which manages identity).
 
-Subject is --finding ID. The harness validates that the id exists
-in the run's findings.jsonl and rejects unknown ids.
+Subject is --finding ID. The harness validates that a doc exists at
+findings/<id>.json and rejects unknown ids.
 
 Exit codes: 0 success, 1 validation error, 2 internal error.`,
 	RunE: runAddReview,
@@ -46,11 +47,12 @@ var listReviewsFlags struct {
 var listReviewsCmd = &cobra.Command{
 	Use:   "reviews",
 	Short: "Print all review entries in --run as a JSON array",
-	Long: `list reviews dumps every entry from every reviews_<author>.jsonl
-in --run as a flat, chronologically-sorted JSON array. Each entry
-includes the author derived from its filename.
+	Long: `list reviews walks every finding doc in --run and flattens the
+embedded reviews[] arrays into one chronologically-sorted JSON array.
+Each entry carries a synthesized {kind: "finding", id: <finding>}
+subject so consumers can route entries back to their finding.
 
-Empty runs (or runs with no reviews_*.jsonl files) print [].
+Empty runs (or runs whose findings have no review entries yet) print [].
 
 Exit codes: 0 success, 2 internal error.`,
 	RunE: runListReviews,
@@ -129,8 +131,7 @@ func runAddReview(cmd *cobra.Command, args []string) error {
 		return validationError([]string{kindErr.Error()})
 	}
 
-	slug := os.Getenv(fettleAgentEnv)
-	if slug == "" {
+	if os.Getenv(fettleAgentEnv) == "" {
 		return internalError(fmt.Errorf("%s is not set; cannot derive reviewer slug", fettleAgentEnv))
 	}
 	authorStamp, err := stamp()
@@ -157,15 +158,17 @@ func runAddReview(cmd *cobra.Command, args []string) error {
 		labels = &copied
 	}
 	review := schema.Review{
-		Subject:  subject,
 		Author:   authorStamp,
 		Labels:   labels,
 		Severity: severity,
 		Comment:  strings.TrimSpace(addReviewFlags.comment),
 		At:       time.Now().UTC(),
 	}
-	if err := rp.AppendReview(slug, review); err != nil {
-		return internalError(fmt.Errorf("append review: %w", err))
+	if err := rp.UpdateFinding(subject.ID, func(d *schema.FindingDoc) error {
+		d.Reviews = append(d.Reviews, review)
+		return nil
+	}); err != nil {
+		return internalError(fmt.Errorf("save review: %w", err))
 	}
 	return printAddResult(map[string]any{"subject": subject, "at": review.At, "author": review.Author}, addReviewFlags.verbose, subject.ID)
 }
@@ -225,10 +228,11 @@ func runShowReview(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// reviewEntry is one review record annotated with its author. The
-// on-disk schema.Review carries author via the filename
-// (reviews_<author>.jsonl); this struct flattens that for CLI
-// output.
+// reviewEntry is one review record paired with the synthesized
+// subject identifying the finding it belongs to. On disk the review
+// lives inside its finding's reviews[] array (no Subject stored);
+// this struct is the wire shape for `fettle list reviews` /
+// `fettle show review` flat output.
 type reviewEntry struct {
 	Subject schema.Subject `json:"subject"`
 	Author  string         `json:"author"`
@@ -267,9 +271,10 @@ type reviewCurrentEntry struct {
 	At       time.Time `json:"at"`
 }
 
-// loadAllReviewEntries reads every reviews_<author>.jsonl in runDir
-// and returns a flat chronological list. Tolerates malformed lines
-// (skipped, like other JSONL readers in the harness).
+// loadAllReviewEntries walks every finding doc in runDir and
+// flattens the embedded reviews[] arrays into one chronological list,
+// each entry tagged with its synthesized subject. Tolerates malformed
+// docs (skipped, like the rest of the read path).
 func loadAllReviewEntries(runDir string) ([]reviewEntry, error) {
 	rp, err := run.Open(runDir)
 	if err != nil {
@@ -370,7 +375,7 @@ func resolveReviewSubject(rp *run.Path, stage string, findingID string) (schema.
 		return schema.Subject{}, fmt.Errorf("check finding %q: %w", findingID, err)
 	}
 	if !exists {
-		return schema.Subject{}, fmt.Errorf("finding %q not found in this run's findings.jsonl", findingID)
+		return schema.Subject{}, fmt.Errorf("finding %q not found in this run", findingID)
 	}
 	return schema.Subject{Kind: schema.SubjectFinding, ID: findingID}, nil
 }

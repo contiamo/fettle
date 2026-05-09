@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -167,7 +166,7 @@ func runRunReview(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("read snapshotted review prompt: %w", err)
 	}
 
-	done, err := loadReviewedSubjects(in.rp.Dir(), in.author)
+	done, err := loadReviewedSubjects(in.rp, in.author)
 	if err != nil {
 		return fmt.Errorf("load existing reviews: %w", err)
 	}
@@ -182,9 +181,13 @@ func runRunReview(cmd *cobra.Command, args []string) error {
 // reviewFindings iterates the run's findings and invokes the agent
 // once per pending finding.
 func reviewFindings(ctx context.Context, logger *slog.Logger, in *reviewInputs, promptBody string, done map[string]bool) error {
-	findings, err := in.rp.LoadFindings()
+	docs, err := in.rp.LoadAllFindings()
 	if err != nil {
 		return fmt.Errorf("load findings: %w", err)
+	}
+	findings := make([]schema.Finding, len(docs))
+	for i, d := range docs {
+		findings[i] = d.Finding
 	}
 
 	pending := make([]schema.Finding, 0, len(findings))
@@ -376,31 +379,26 @@ func writePromptSidecar(rp *run.Path, id, prompt string) error {
 	return os.WriteFile(filepath.Join(rp.RawDir(), "review_"+id+".prompt.txt"), []byte(prompt), 0o644)
 }
 
-// loadReviewedSubjects returns the set of finding ids already reviewed
-// by author in this run. Empty if the file doesn't exist.
-func loadReviewedSubjects(runDir, author string) (map[string]bool, error) {
-	f, err := os.Open(filepath.Join(runDir, "reviews_"+author+".jsonl"))
+// loadReviewedSubjects returns the set of finding ids that author
+// has already reviewed in this run. The author argument is the
+// agent slug (FETTLE_AGENT) — a finding counts as "done by author"
+// if any of its reviews[] entries has a matching slug, regardless
+// of model. Switching the agent's model doesn't force re-review.
+func loadReviewedSubjects(rp *run.Path, author string) (map[string]bool, error) {
+	docs, err := rp.LoadAllFindings()
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return map[string]bool{}, nil
-		}
 		return nil, err
 	}
-	defer f.Close()
-
 	done := map[string]bool{}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 1<<16), 1<<20)
-	for sc.Scan() {
-		var r schema.Review
-		if err := json.Unmarshal(sc.Bytes(), &r); err != nil {
-			continue
-		}
-		if r.Subject.ID != "" {
-			done[r.Subject.ID] = true
+	for _, d := range docs {
+		for _, r := range d.Reviews {
+			if schema.AuthorSlug(r.Author) == author {
+				done[d.ID] = true
+				break
+			}
 		}
 	}
-	return done, sc.Err()
+	return done, nil
 }
 
 // reviewOne invokes the agent against a single finding. Errors only on

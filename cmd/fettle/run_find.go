@@ -67,8 +67,9 @@ var runFindCmd = &cobra.Command{
 	Long: `find creates a new run folder under runs/ (or resumes one with
 --resume), snapshots the find prompt into it, walks the target repo, and
 runs the configured agent on every file that matches the project's
-include/exclude globs. Findings are appended to findings.jsonl; per-file
-status is appended to files.jsonl for resume.
+include/exclude globs. Each finding the agent emits writes to its own
+findings/<id>.json doc; per-file status is appended to files.jsonl for
+resume.
 
 On --resume, the run's manifest (run.json) is authoritative — target
 repo, include/exclude globs, and agent/model/effort all come from there,
@@ -464,10 +465,10 @@ Got: %q`, agentScript)
 }
 
 // analyzeOne runs the agent against a single file. The agent writes
-// findings by shelling out to `fettle add finding`, which appends to
-// findings.jsonl under flock(2). The harness derives the per-file
-// ledger row from the count of this file's findings before/after the
-// agent ran.
+// findings by shelling out to `fettle add finding`, which writes one
+// findings/<id>.json doc per call (atomic create-only via os.Link).
+// The harness derives the per-file ledger row from the count of this
+// file's findings before/after the agent ran.
 func analyzeOne(ctx context.Context, rp *run.Path, spec agent.Spec, promptBody, repoRoot, absFile, relFile string) schema.FileStatus {
 	started := time.Now().UTC()
 	hash := run.FileHash(relFile)
@@ -488,7 +489,7 @@ func analyzeOne(ctx context.Context, rp *run.Path, spec agent.Spec, promptBody, 
 
 	stageSpec := spec
 	// AddDirs covers codex's sandbox: the spawned `fettle add finding`
-	// subprocess writes findings.jsonl in the run directory.
+	// subprocess writes findings/<id>.json files inside the run dir.
 	stageSpec.AddDirs = []string{rp.Dir()}
 	stageSpec.Env = []string{
 		"FETTLE_RUN=" + rp.Dir(),
@@ -512,7 +513,7 @@ func analyzeOne(ctx context.Context, rp *run.Path, spec agent.Spec, promptBody, 
 	res, err := agent.Run(ctx, stageSpec, prompt)
 	if res != nil {
 		// Best-effort log capture — the structured findings live in
-		// findings.jsonl; this file is for post-mortem debugging only.
+		// findings/<id>.json; this file is for post-mortem debugging only.
 		_ = os.WriteFile(logPath, res.Output, 0o644)
 	}
 	ended := time.Now().UTC()

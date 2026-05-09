@@ -1,45 +1,44 @@
 // Package server: review/outcome section assembly.
 //
-// The Finding and Group detail pages embed a review form + history feed
-// and an outcome form + history feed. Building those views requires
-// loading every reviews_<author>.jsonl plus outcomes.jsonl and applying
-// the FETTLE.md derivedCurrentLabels semantics: latest entry per author
-// replaces that author's set; cross-author display unions them.
+// The Finding detail page embeds a review form + history feed and an
+// outcome form + history feed. With the per-finding-doc storage layout
+// the doc carries both arrays inline, so the section builders just walk
+// the doc — no cross-file aggregation needed.
 //
 // The two POST handlers (review and outcome) re-use these builders so
-// the swap response renders identically to the initial GET.
+// the swap response renders identically to the initial GET; the
+// re-load goes through rp.LoadFinding to pick up the entry the
+// handler just appended.
 
 package server
 
 import (
 	"sort"
 
-	"github.com/contiamo/fettle/internal/run"
 	"github.com/contiamo/fettle/internal/schema"
 	"github.com/contiamo/fettle/internal/ui/templates"
 )
 
-// buildReviewView reads every reviews_<author>.jsonl in the run, filters
-// to entries on the given subject, and returns the section view: union
-// of latest-per-author labels, plus the chronological entry list with
-// each author's latest entry flagged. Errors propagate so the caller
-// can choose between rendering an inline error or a 500.
-func buildReviewView(rp *run.Path, runName string, subject schema.Subject) (templates.ReviewSectionView, error) {
-	all, err := rp.LoadAllReviews()
-	if err != nil {
-		return templates.ReviewSectionView{}, err
-	}
-	var matching []run.FlatReview
-	for _, e := range all {
-		if e.Subject == subject {
-			matching = append(matching, e)
-		}
-	}
+// buildReviewView walks the doc's Reviews slice and returns the
+// section view: union of latest-per-author labels (only counting
+// entries that actually touched labels), plus the chronological entry
+// list with each author's latest entry flagged. The doc is the single
+// source of truth — no separate JSONL load.
+//
+// Reviews are sorted by At before building entries: ordinary mutators
+// (UpdateFinding) append in time order, but a hand-edited doc could
+// be out of order. Downstream consumers (latestReviewerSeverity,
+// "IsLatest" flagging) assume chronological order, so we normalise
+// here.
+func buildReviewView(runName string, doc schema.FindingDoc) templates.ReviewSectionView {
+	reviews := make([]schema.Review, len(doc.Reviews))
+	copy(reviews, doc.Reviews)
+	sort.SliceStable(reviews, func(i, j int) bool { return reviews[i].At.Before(reviews[j].At) })
 
 	latestByAuthor := map[string]int{}
-	for i, e := range matching {
+	for i, e := range reviews {
 		j, ok := latestByAuthor[e.Author]
-		if !ok || matching[i].At.After(matching[j].At) {
+		if !ok || reviews[i].At.After(reviews[j].At) {
 			latestByAuthor[e.Author] = i
 		}
 	}
@@ -51,18 +50,18 @@ func buildReviewView(rp *run.Path, runName string, subject schema.Subject) (temp
 	// label set the UI should treat as "currently in effect from the
 	// review process".
 	latestLabelsByAuthor := map[string]int{}
-	for i, e := range matching {
+	for i, e := range reviews {
 		if e.Labels == nil {
 			continue
 		}
 		j, ok := latestLabelsByAuthor[e.Author]
-		if !ok || matching[i].At.After(matching[j].At) {
+		if !ok || reviews[i].At.After(reviews[j].At) {
 			latestLabelsByAuthor[e.Author] = i
 		}
 	}
 	labelSet := map[string]struct{}{}
 	for _, idx := range latestLabelsByAuthor {
-		for _, l := range *matching[idx].Labels {
+		for _, l := range *reviews[idx].Labels {
 			labelSet[l] = struct{}{}
 		}
 	}
@@ -72,8 +71,8 @@ func buildReviewView(rp *run.Path, runName string, subject schema.Subject) (temp
 	}
 	sort.Strings(currentLabels)
 
-	entries := make([]templates.ReviewEntryView, len(matching))
-	for i, e := range matching {
+	entries := make([]templates.ReviewEntryView, len(reviews))
+	for i, e := range reviews {
 		var labels []string
 		if e.Labels != nil {
 			labels = *e.Labels
@@ -89,26 +88,26 @@ func buildReviewView(rp *run.Path, runName string, subject schema.Subject) (temp
 		}
 	}
 
-	// InitialLabels seeds the labels editor with the subject's own
-	// LLM-set labels (Finding.Labels / Group.Labels). The reviewer
-	// curates from "what the LLM said" — adds, removes, replaces —
-	// rather than from the post-override effective set. A returning
-	// reviewer who'd already curated sees the LLM's labels again
-	// and re-applies their changes; their prior override is still
-	// visible in the entries feed below the form, so nothing's lost.
-	initial := []string{}
-	if labels, err := subjectLabels(rp, subject); err == nil {
-		initial = labels
+	// InitialLabels seeds the labels editor with the LLM-set labels
+	// (Finding.Labels). The reviewer curates from "what the LLM said"
+	// — adds, removes, replaces — rather than from the post-override
+	// effective set. A returning reviewer who'd already curated sees
+	// the LLM's labels again and re-applies their changes; their
+	// prior override is still visible in the entries feed below the
+	// form, so nothing's lost.
+	initial := doc.Labels
+	if initial == nil {
+		initial = []string{}
 	}
 
 	return templates.ReviewSectionView{
 		RunName:       runName,
-		SubjectKind:   subject.Kind,
+		SubjectKind:   schema.SubjectFinding,
 		InitialLabels: initial,
-		SubjectID:     subject.ID,
+		SubjectID:     doc.ID,
 		CurrentLabels: currentLabels,
 		Entries:       entries,
-	}, nil
+	}
 }
 
 // unionReviewerLabels returns the union of every per-author latest
@@ -142,54 +141,23 @@ func unionReviewerLabels(entries []templates.ReviewEntryView) ([]string, bool) {
 	return out, true
 }
 
-// subjectLabels resolves the LLM-set labels for the given subject
-// (Finding.Labels or Group.Labels). Used as the fallback initial
-// pre-fill for the review form's labels editor when no reviewer has
-// overridden yet — the reviewer sees the original LLM labels and
-// curates from there. Returns (nil, nil) for an unknown id rather
-// than failing — a missing subject is the caller's problem to
-// surface, not ours.
-func subjectLabels(rp *run.Path, subject schema.Subject) ([]string, error) {
-	switch subject.Kind {
-	case schema.SubjectFinding:
-		findings, err := rp.LoadFindings()
-		if err != nil {
-			return nil, err
-		}
-		for _, f := range findings {
-			if f.ID == subject.ID {
-				return f.Labels, nil
-			}
-		}
-	}
-	return nil, nil
-}
-
-// buildOutcomeView reads outcomes.jsonl, filters to the subject, and
-// returns the section view: chronological history with the last entry
-// also surfaced as Latest. Empty history yields a nil Latest so the
+// buildOutcomeView walks the doc's Outcomes slice and returns the
+// section view: chronological history with the last entry also
+// surfaced as Latest. Empty history yields a nil Latest so the
 // template can render the "no outcome yet" branch.
-func buildOutcomeView(rp *run.Path, runName string, subject schema.Subject) (templates.OutcomeSectionView, error) {
-	all, err := rp.LoadOutcomes()
-	if err != nil {
-		return templates.OutcomeSectionView{}, err
-	}
-	history := make([]schema.Outcome, 0, len(all))
-	for _, o := range all {
-		if o.Subject == subject {
-			history = append(history, o)
-		}
-	}
+func buildOutcomeView(runName string, doc schema.FindingDoc) templates.OutcomeSectionView {
+	history := make([]schema.Outcome, len(doc.Outcomes))
+	copy(history, doc.Outcomes)
 	sort.SliceStable(history, func(i, j int) bool { return history[i].At.Before(history[j].At) })
 
 	view := templates.OutcomeSectionView{
 		RunName:     runName,
-		SubjectKind: subject.Kind,
-		SubjectID:   subject.ID,
+		SubjectKind: schema.SubjectFinding,
+		SubjectID:   doc.ID,
 		History:     history,
 	}
 	if len(history) > 0 {
 		view.Latest = &history[len(history)-1]
 	}
-	return view, nil
+	return view
 }

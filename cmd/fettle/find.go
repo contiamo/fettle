@@ -36,13 +36,14 @@ var addFindingFlags struct {
 
 var addFindingCmd = &cobra.Command{
 	Use:   "finding",
-	Short: "Append one finding to the active run's findings.jsonl",
-	Long: `add finding records one finding in the run identified by $FETTLE_RUN.
+	Short: "Write one finding to the active run's findings/ directory",
+	Long: `add finding writes one new finding doc inside the run identified
+by $FETTLE_RUN. Each finding lives in its own findings/<id>.json file,
+created exclusively (os.Link) so two concurrent writers can't race on
+the same id.
 
 Intended to be called by the agent fettle has spawned during a find
-stage; the harness sets FETTLE_RUN before invoking the agent. Each
-invocation appends one row to findings.jsonl under a cross-process
-lock, so concurrent agent processes can write safely.
+stage; the harness sets FETTLE_RUN before invoking the agent.
 
 The id is generated server-side. Two findings with identical (file,
 line, title) get distinct ids — fettle does not dedupe.
@@ -59,8 +60,9 @@ var showFindingCmd = &cobra.Command{
 	Use:   "finding ID",
 	Short: "Print one finding record as JSON",
 	Long: `show finding prints a single finding from --run by id, as the
-{"data": {...}} envelope on stdout. Use --run to pick the find /
-merge / dedupe run that owns the finding.
+{"data": {...}} envelope on stdout. The output is just the finding
+fields — review/outcome history go through ` + "`fettle show review`" + `
+and ` + "`fettle show outcome`" + ` respectively.
 
 Exit codes: 0 found, 1 not found / validation, 2 internal error.`,
 	Args: cobra.ExactArgs(1),
@@ -75,8 +77,8 @@ var listFindingsCmd = &cobra.Command{
 	Use:   "findings",
 	Short: "Print all findings in --run as a JSON array",
 	Long: `list findings dumps every finding in --run as a JSON array on
-stdout. For ad-hoc filtering, pipe through jq. Empty runs (or
-missing findings.jsonl) print [].
+stdout. For ad-hoc filtering, pipe through jq. Empty runs (or runs
+whose findings/ directory has no docs yet) print [].
 
 Exit codes: 0 success, 2 internal error.`,
 	RunE: runListFindings,
@@ -109,19 +111,22 @@ func runShowFinding(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	findings, err := rp.LoadFindings()
+	doc, err := rp.LoadFinding(id)
 	if err != nil {
-		return internalError(fmt.Errorf("load findings: %w", err))
-	}
-	for _, f := range findings {
-		if f.ID == id {
-			if err := printJSON(f); err != nil {
-				return internalError(fmt.Errorf("emit finding: %w", err))
-			}
-			return nil
+		var nf run.FindingNotFoundError
+		if errors.As(err, &nf) {
+			return validationError([]string{fmt.Sprintf("finding %q not found in %s", id, showFindingFlags.run)})
 		}
+		return internalError(fmt.Errorf("load finding: %w", err))
 	}
-	return validationError([]string{fmt.Sprintf("finding %q not found in %s", id, showFindingFlags.run)})
+	// `show finding` returns just the finding fields, not the embedded
+	// review/outcome history — that's what `show review` / `show outcome`
+	// are for, and keeping them split preserves the JSON contract from
+	// before the per-finding-doc layout.
+	if err := printJSON(doc.Finding); err != nil {
+		return internalError(fmt.Errorf("emit finding: %w", err))
+	}
+	return nil
 }
 
 func runListFindings(cmd *cobra.Command, args []string) error {
@@ -129,14 +134,15 @@ func runListFindings(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	findings, err := rp.LoadFindings()
+	docs, err := rp.LoadAllFindings()
 	if err != nil {
 		return internalError(fmt.Errorf("load findings: %w", err))
 	}
-	if findings == nil {
-		findings = []schema.Finding{}
+	out := make([]schema.Finding, len(docs))
+	for i, d := range docs {
+		out[i] = d.Finding
 	}
-	if err := printJSON(findings); err != nil {
+	if err := printJSON(out); err != nil {
 		return internalError(fmt.Errorf("emit findings: %w", err))
 	}
 	return nil
@@ -239,24 +245,26 @@ func runAddFinding(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	finding := schema.Finding{
-		ID:          schema.NewFindingID(),
-		File:        addFindingFlags.file,
-		Line:        addFindingFlags.line,
-		Title:       strings.TrimSpace(addFindingFlags.title),
-		Description: strings.TrimSpace(addFindingFlags.description),
-		Suggestion:  strings.TrimSpace(addFindingFlags.suggestion),
-		Severity:    severity,
-		Labels:      labels,
-		References:  references,
-		AnchorLine:  anchorLine,
-		CreatedBy:   createdBy,
-		CreatedAt:   time.Now().UTC(),
+	doc := schema.FindingDoc{
+		Finding: schema.Finding{
+			ID:          schema.NewFindingID(),
+			File:        addFindingFlags.file,
+			Line:        addFindingFlags.line,
+			Title:       strings.TrimSpace(addFindingFlags.title),
+			Description: strings.TrimSpace(addFindingFlags.description),
+			Suggestion:  strings.TrimSpace(addFindingFlags.suggestion),
+			Severity:    severity,
+			Labels:      labels,
+			References:  references,
+			AnchorLine:  anchorLine,
+			CreatedBy:   createdBy,
+			CreatedAt:   time.Now().UTC(),
+		},
 	}
-	if err := rp.AppendFinding(finding); err != nil {
-		return internalError(fmt.Errorf("append finding: %w", err))
+	if err := rp.WriteFinding(doc); err != nil {
+		return internalError(fmt.Errorf("write finding: %w", err))
 	}
-	return printAddResult(map[string]any{"id": finding.ID}, addFindingFlags.verbose, finding.ID)
+	return printAddResult(map[string]any{"id": doc.ID}, addFindingFlags.verbose, doc.ID)
 }
 
 // stamp returns the canonical author/created_by string for the

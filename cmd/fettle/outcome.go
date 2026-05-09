@@ -44,9 +44,11 @@ var listOutcomesFlags struct {
 var listOutcomesCmd = &cobra.Command{
 	Use:   "outcomes",
 	Short: "Print all outcome events in --run as a JSON array",
-	Long: `list outcomes dumps every outcome event in --run's
-outcomes.jsonl as a chronologically-sorted JSON array. Empty runs
-(or missing outcomes.jsonl) print [].
+	Long: `list outcomes walks every finding doc in --run and flattens the
+embedded outcomes[] arrays into one chronologically-sorted JSON array.
+Each entry carries a synthesized {kind: "finding", id: <finding>}
+subject. Empty runs (or runs whose findings have no outcome events
+yet) print [].
 
 Exit codes: 0 success, 2 internal error.`,
 	RunE: runListOutcomes,
@@ -124,20 +126,38 @@ func runAddOutcome(cmd *cobra.Command, args []string) error {
 	}
 
 	o := schema.Outcome{
-		Subject: subject,
-		Author:  author,
-		Status:  strings.TrimSpace(addOutcomeFlags.status),
-		PRURL:   strings.TrimSpace(addOutcomeFlags.prURL),
-		At:      time.Now().UTC(),
+		Author: author,
+		Status: strings.TrimSpace(addOutcomeFlags.status),
+		PRURL:  strings.TrimSpace(addOutcomeFlags.prURL),
+		At:     time.Now().UTC(),
 	}
-	if err := rp.AppendOutcome(o); err != nil {
-		return internalError(fmt.Errorf("append outcome: %w", err))
+	if err := rp.UpdateFinding(subject.ID, func(d *schema.FindingDoc) error {
+		d.Outcomes = append(d.Outcomes, o)
+		return nil
+	}); err != nil {
+		return internalError(fmt.Errorf("save outcome: %w", err))
 	}
 	return printAddResult(map[string]any{
-		"subject": o.Subject,
+		"subject": subject,
 		"at":      o.At,
 		"author":  o.Author,
 	}, addOutcomeFlags.verbose, subject.ID)
+}
+
+// outcomeRecord is the wire shape for `list outcomes` / `show
+// outcome` output: schema.Outcome plus the synthesized Subject
+// identifying the finding, so the JSON contract stays the same as
+// before the per-finding-doc layout.
+type outcomeRecord struct {
+	Subject schema.Subject `json:"subject"`
+	Author  string         `json:"author"`
+	Status  string         `json:"status"`
+	PRURL   string         `json:"pr_url,omitempty"`
+	At      time.Time      `json:"at"`
+}
+
+func toOutcomeRecord(s schema.Subject, o schema.Outcome) outcomeRecord {
+	return outcomeRecord{Subject: s, Author: o.Author, Status: o.Status, PRURL: o.PRURL, At: o.At}
 }
 
 func runListOutcomes(cmd *cobra.Command, args []string) error {
@@ -145,15 +165,18 @@ func runListOutcomes(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	outcomes, err := rp.LoadOutcomes()
+	flat, err := rp.LoadAllOutcomes()
 	if err != nil {
 		return internalError(fmt.Errorf("load outcomes: %w", err))
 	}
-	if outcomes == nil {
-		outcomes = []schema.Outcome{}
+	out := make([]outcomeRecord, len(flat))
+	for i, fo := range flat {
+		out[i] = outcomeRecord{
+			Subject: fo.Subject, Author: fo.Author, Status: fo.Status, PRURL: fo.PRURL, At: fo.At,
+		}
 	}
-	sort.SliceStable(outcomes, func(i, j int) bool { return outcomes[i].At.Before(outcomes[j].At) })
-	if err := printJSON(outcomes); err != nil {
+	sort.SliceStable(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
+	if err := printJSON(out); err != nil {
 		return internalError(fmt.Errorf("emit outcomes: %w", err))
 	}
 	return nil
@@ -169,15 +192,13 @@ func runShowOutcome(cmd *cobra.Command, args []string) error {
 		return validationError([]string{kindErr.Error()})
 	}
 
-	all, err := rp.LoadOutcomes()
+	doc, err := rp.LoadFinding(subject.ID)
 	if err != nil {
-		return internalError(fmt.Errorf("load outcomes: %w", err))
+		return internalError(fmt.Errorf("load finding: %w", err))
 	}
-	matching := make([]schema.Outcome, 0, len(all))
-	for _, o := range all {
-		if o.Subject == subject {
-			matching = append(matching, o)
-		}
+	matching := make([]outcomeRecord, len(doc.Outcomes))
+	for i, o := range doc.Outcomes {
+		matching[i] = toOutcomeRecord(subject, o)
 	}
 	if len(matching) == 0 {
 		return validationError([]string{fmt.Sprintf("no outcome events for %s %q in %s", subject.Kind, subject.ID, showOutcomeFlags.run)})
@@ -235,7 +256,7 @@ func resolveOutcomeSubject(rp *run.Path, stage string, findingID string) (schema
 		return schema.Subject{}, fmt.Errorf("check finding %q: %w", findingID, err)
 	}
 	if !exists {
-		return schema.Subject{}, fmt.Errorf("finding %q not found in this run's findings.jsonl", findingID)
+		return schema.Subject{}, fmt.Errorf("finding %q not found in this run", findingID)
 	}
 	return schema.Subject{Kind: schema.SubjectFinding, ID: findingID}, nil
 }

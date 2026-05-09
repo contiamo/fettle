@@ -4,9 +4,9 @@
 // → validate → append → render swap). Identity errors bounce the
 // client to /identity?next=… via HX-Redirect; validation errors
 // re-render the section with an inline message; everything else is a
-// 500. Append correctness rides on internal/run's flock-based writers,
-// so concurrent CLI + UI writes serialize through the kernel without
-// the handler having to coordinate locks itself.
+// 500. Mutations land via run.UpdateFinding's atomic-rename helper —
+// the read-modify-write race window is documented and accepted in
+// fettle's single-user model.
 
 package server
 
@@ -67,14 +67,16 @@ func reviewPostHandler(projectDir, subjectKind string) http.HandlerFunc {
 		}
 
 		entry := schema.Review{
-			Subject:  subject,
 			Author:   ident.String(),
 			Labels:   labels,
 			Severity: severity,
 			Comment:  comment,
 			At:       time.Now().UTC(),
 		}
-		if err := rp.AppendReview(ident.Slug, entry); err != nil {
+		if err := rp.UpdateFinding(subject.ID, func(d *schema.FindingDoc) error {
+			d.Reviews = append(d.Reviews, entry)
+			return nil
+		}); err != nil {
 			renderReviewSwap(w, r, rp, runName, subject, fmt.Sprintf("save failed: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -106,13 +108,15 @@ func outcomePostHandler(projectDir, subjectKind string) http.HandlerFunc {
 		prURL := strings.TrimSpace(r.FormValue("pr_url"))
 
 		o := schema.Outcome{
-			Subject: subject,
-			Author:  ident.String(),
-			Status:  status,
-			PRURL:   prURL,
-			At:      time.Now().UTC(),
+			Author: ident.String(),
+			Status: status,
+			PRURL:  prURL,
+			At:     time.Now().UTC(),
 		}
-		if err := rp.AppendOutcome(o); err != nil {
+		if err := rp.UpdateFinding(subject.ID, func(d *schema.FindingDoc) error {
+			d.Outcomes = append(d.Outcomes, o)
+			return nil
+		}); err != nil {
 			renderOutcomeSwap(w, r, rp, runName, subject, fmt.Sprintf("save failed: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -277,16 +281,18 @@ func resolveStatus(status, other string) (string, string) {
 	}
 }
 
-// renderReviewSwap rebuilds the section view from disk and renders it
-// with optional inline error. HTMX swaps replace the section in place;
-// non-HTMX submits get the same partial (the form's hx-post wraps a
-// regular form post, so a no-JS user just sees the section HTML).
+// renderReviewSwap re-loads the finding doc and renders the review
+// section. HTMX swaps replace the section in place; non-HTMX submits
+// get the same partial (the form's hx-post wraps a regular form post,
+// so a no-JS user just sees the section HTML). The re-load is what
+// surfaces the entry the handler just appended.
 func renderReviewSwap(w http.ResponseWriter, r *http.Request, rp *run.Path, runName string, subject schema.Subject, inlineErr string, status int) {
-	view, err := buildReviewView(rp, runName, subject)
+	doc, err := rp.LoadFinding(subject.ID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("rebuild review section: %v", err), http.StatusInternalServerError)
 		return
 	}
+	view := buildReviewView(runName, doc)
 	view.Error = inlineErr
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if status != http.StatusOK {
@@ -298,11 +304,12 @@ func renderReviewSwap(w http.ResponseWriter, r *http.Request, rp *run.Path, runN
 }
 
 func renderOutcomeSwap(w http.ResponseWriter, r *http.Request, rp *run.Path, runName string, subject schema.Subject, inlineErr string, status int) {
-	view, err := buildOutcomeView(rp, runName, subject)
+	doc, err := rp.LoadFinding(subject.ID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("rebuild outcome section: %v", err), http.StatusInternalServerError)
 		return
 	}
+	view := buildOutcomeView(runName, doc)
 	view.Error = inlineErr
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if status != http.StatusOK {

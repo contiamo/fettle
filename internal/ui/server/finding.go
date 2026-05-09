@@ -63,32 +63,23 @@ func findingHandler(projectDir string) http.HandlerFunc {
 			http.Error(w, fmt.Sprintf("read manifest: %v", err), http.StatusInternalServerError)
 			return
 		}
-		switch manifest.Stage {
-		case "find", "merge", "dedupe":
-			// supported
-		default:
+		if manifest.Stage != "find" {
 			http.Error(w, fmt.Sprintf("findings not supported on %s runs", manifest.Stage), http.StatusBadRequest)
 			return
 		}
 
-		findings, err := rp.LoadFindings()
+		doc, err := rp.LoadFinding(id)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("load findings: %v", err), http.StatusInternalServerError)
-			return
-		}
-		var found *schema.Finding
-		for i := range findings {
-			if findings[i].ID == id {
-				found = &findings[i]
-				break
+			var nf run.FindingNotFoundError
+			if errors.As(err, &nf) {
+				http.NotFound(w, r)
+				return
 			}
-		}
-		if found == nil {
-			http.NotFound(w, r)
+			http.Error(w, fmt.Sprintf("load finding: %v", err), http.StatusInternalServerError)
 			return
 		}
 
-		view, err := buildFindingDetail(rp, manifest, *found)
+		view, err := buildFindingDetail(rp, manifest, doc)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("build finding view: %v", err), http.StatusInternalServerError)
 			return
@@ -114,50 +105,40 @@ func findingHandler(projectDir string) http.HandlerFunc {
 // runHandler (pre-render the right pane on workspace load) so both
 // paths render identical detail.
 //
-// Reviews are loaded once here and used for two things: building the
-// review section (per-author entries + current-labels union) and
-// resolving effective severity (latest reviewer Severity override
-// across authors, falling back to Finding.Severity). The detail
-// header's SeverityPill renders the resolved value.
-func buildFindingDetail(rp *run.Path, manifest schema.RunManifest, f schema.Finding) (templates.FindingView, error) {
-	preview := loadPreview(manifest.TargetRepo, f, previewWindow)
+// Reviews and outcomes come straight off the doc — they're embedded
+// in the same JSON file the caller already loaded. Effective
+// severity / label resolution walks the same Reviews slice once so
+// the detail header's pills and the InitialLabels editor pre-fill
+// stay in sync without re-reading from disk.
+func buildFindingDetail(_ *run.Path, manifest schema.RunManifest, doc schema.FindingDoc) (templates.FindingView, error) {
+	preview := loadPreview(manifest.TargetRepo, doc.Finding, previewWindow)
 
-	subject := schema.Subject{Kind: schema.SubjectFinding, ID: f.ID}
-	reviewView, err := buildReviewView(rp, manifest.Name, subject)
-	if err != nil {
-		return templates.FindingView{}, fmt.Errorf("load reviews: %w", err)
-	}
-	outcomeView, err := buildOutcomeView(rp, manifest.Name, subject)
-	if err != nil {
-		return templates.FindingView{}, fmt.Errorf("load outcomes: %w", err)
-	}
+	reviewView := buildReviewView(manifest.Name, doc)
+	outcomeView := buildOutcomeView(manifest.Name, doc)
 
-	effective := f.Severity
+	effective := doc.Severity
 	if override, ok := latestReviewerSeverity(reviewView.Entries); ok {
 		effective = &override
 	}
 
 	// Effective labels: union of every per-author latest entry that
 	// touched labels; falls back to Finding.Labels when no reviewer
-	// has overridden. buildReviewView already populates
-	// reviewView.InitialLabels with this same value via subjectLabels;
-	// we recompute here so the FindingView's own header chips render
-	// the same set without depending on the review-section view.
-	effectiveLabels := f.Labels
+	// has overridden.
+	effectiveLabels := doc.Labels
 	if union, ok := unionReviewerLabels(reviewView.Entries); ok {
 		effectiveLabels = union
 	}
 
 	return templates.FindingView{
 		Manifest:          manifest,
-		Finding:           f,
+		Finding:           doc.Finding,
 		EffectiveSeverity: effective,
 		EffectiveLabels:   effectiveLabels,
 		Preview: templates.CodePreview{
 			Path:          preview.Path,
 			Error:         preview.Error,
 			Lines:         toTemplateLines(preview.Lines),
-			Target:        f.Line,
+			Target:        doc.Line,
 			Anchor:        anchorStateToTemplate(preview.Anchor),
 			OriginalLine:  preview.OriginalLine,
 			EffectiveLine: preview.EffectiveLine,

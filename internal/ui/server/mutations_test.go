@@ -50,45 +50,33 @@ func envSet(t *testing.T, k, v string) {
 	})
 }
 
-// makeFindRun builds a minimal find run with one finding and returns
-// (projectDir, runName, findingID). Manifest is hand-rolled so the
-// test doesn't depend on the higher-level Create* helpers.
+// makeFindRun builds a minimal find run with one finding doc and
+// returns (projectDir, runName, findingID).
 func makeFindRun(t *testing.T) (string, string, string) {
 	t.Helper()
-	projectDir := t.TempDir()
-	runName := "find_20260101T000000Z_test"
-	runDir := filepath.Join(projectDir, "runs", runName)
-	if err := os.MkdirAll(runDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	manifest := `{
-  "name": "` + runName + `",
-  "stage": "find",
-  "fettle_version": "0.1.0",
-  "created_at": "2026-01-01T00:00:00Z",
-  "target_repo": "/tmp/repo"
-}
-`
-	if err := os.WriteFile(filepath.Join(runDir, "run.json"), []byte(manifest), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	projectDir, runName := makeRunDir(t, "find_20260101T000000Z_test")
 	findingID := "abc123"
-	if err := os.WriteFile(filepath.Join(runDir, "findings.jsonl"),
-		[]byte(`{"id":"`+findingID+`","file":"x.go","line":1,"title":"T","description":"D","suggestion":"S","severity":null,"labels":[],"references":[],"created_by":"agent:claude","created_at":"2026-01-01T00:00:00Z"}`+"\n"),
-		0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeFindingDoc(t, projectDir, runName, findingID, "")
 	return projectDir, runName, findingID
 }
 
-// makeFindRunMulti is the multi-finding twin of makeFindRun for tests
-// that need a bulk-action target. Returns (projectDir, runName, ids).
+// makeFindRunMulti is the multi-finding twin of makeFindRun for
+// bulk-action tests. Returns (projectDir, runName, ids).
 func makeFindRunMulti(t *testing.T, ids ...string) (string, string, []string) {
 	t.Helper()
+	projectDir, runName := makeRunDir(t, "find_20260101T000000Z_bulk")
+	for _, id := range ids {
+		writeFindingDoc(t, projectDir, runName, id, "medium")
+	}
+	return projectDir, runName, ids
+}
+
+// makeRunDir writes the run folder + manifest + findings/ subdir.
+func makeRunDir(t *testing.T, runName string) (string, string) {
+	t.Helper()
 	projectDir := t.TempDir()
-	runName := "find_20260101T000000Z_bulk"
 	runDir := filepath.Join(projectDir, "runs", runName)
-	if err := os.MkdirAll(runDir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(runDir, "findings"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	manifest := `{
@@ -102,14 +90,22 @@ func makeFindRunMulti(t *testing.T, ids ...string) (string, string, []string) {
 	if err := os.WriteFile(filepath.Join(runDir, "run.json"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	var lines string
-	for _, id := range ids {
-		lines += `{"id":"` + id + `","file":"x.go","line":1,"title":"T","description":"D","suggestion":"S","severity":"medium","labels":[],"references":[],"created_by":"agent:claude","created_at":"2026-01-01T00:00:00Z"}` + "\n"
+	return projectDir, runName
+}
+
+// writeFindingDoc writes one findings/<id>.json to the run. severity
+// is "" → null on disk; non-empty → stored as a *string.
+func writeFindingDoc(t *testing.T, projectDir, runName, id, severity string) {
+	t.Helper()
+	sevField := "null"
+	if severity != "" {
+		sevField = `"` + severity + `"`
 	}
-	if err := os.WriteFile(filepath.Join(runDir, "findings.jsonl"), []byte(lines), 0o644); err != nil {
+	body := `{"id":"` + id + `","file":"x.go","line":1,"title":"T","description":"D","suggestion":"S","severity":` + sevField + `,"labels":[],"references":[],"created_by":"agent:claude","created_at":"2026-01-01T00:00:00Z"}` + "\n"
+	path := filepath.Join(projectDir, "runs", runName, "findings", id+".json")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return projectDir, runName, ids
 }
 
 func newTestHandler(projectDir string) http.Handler {
@@ -289,10 +285,7 @@ func TestOutcomePost_AppendsWithAuthor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	all, err := rp.LoadOutcomes()
-	if err != nil {
-		t.Fatal(err)
-	}
+	all := loadFindingOutcomes(t, rp, findingID)
 	if len(all) != 1 {
 		t.Fatalf("got %d outcomes, want 1", len(all))
 	}
@@ -327,7 +320,7 @@ func TestOutcomePost_OtherStatusUsesFreeText(t *testing.T) {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	rp, _ := run.Open(filepath.Join(projectDir, "runs", runName))
-	all, _ := rp.LoadOutcomes()
+	all := loadFindingOutcomes(t, rp, findingID)
 	if len(all) != 1 || all[0].Status != "deferred-to-q3" {
 		t.Errorf("got %+v, want status=deferred-to-q3", all)
 	}
@@ -355,18 +348,18 @@ func TestReviewView_DerivedCurrentLabels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	subject := schema.Subject{Kind: schema.SubjectFinding, ID: findingID}
 
 	// alice: two entries, latest wins (replaces, not unions)
-	mustAppendReview(t, rp, "alice", schema.Review{Subject: subject, Labels: ptrSlice("old", "ack"), At: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)})
-	mustAppendReview(t, rp, "alice", schema.Review{Subject: subject, Labels: ptrSlice("ack", "fp"), At: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)})
+	mustAppendReview(t, rp, findingID, "alice", schema.Review{Labels: ptrSlice("old", "ack"), At: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)})
+	mustAppendReview(t, rp, findingID, "alice", schema.Review{Labels: ptrSlice("ack", "fp"), At: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)})
 	// bob: one entry
-	mustAppendReview(t, rp, "bob", schema.Review{Subject: subject, Labels: ptrSlice("sev:high"), At: time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)})
+	mustAppendReview(t, rp, findingID, "bob", schema.Review{Labels: ptrSlice("sev:high"), At: time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)})
 
-	view, err := buildReviewView(rp, runName, subject)
+	doc, err := rp.LoadFinding(findingID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	view := buildReviewView(runName, doc)
 
 	// alice's "old" must be gone (replaced by her later set), bob's
 	// "sev:high" must appear.
@@ -403,18 +396,28 @@ func ptrSlice(items ...string) *[]string {
 	return &s
 }
 
-func mustAppendReview(t *testing.T, rp *run.Path, author string, r schema.Review) {
+func mustAppendReview(t *testing.T, rp *run.Path, findingID, author string, r schema.Review) {
 	t.Helper()
-	// The author slug is what the filename uses for routing/locking;
-	// the record's Author field is the canonical "who reviewed this"
-	// stamp that buildReviewView keys on. Default it to the human form
-	// of the slug so tests don't have to repeat it on every literal.
 	if r.Author == "" {
 		r.Author = "human:" + author
 	}
-	if err := rp.AppendReview(author, r); err != nil {
-		t.Fatalf("AppendReview: %v", err)
+	if err := rp.UpdateFinding(findingID, func(d *schema.FindingDoc) error {
+		d.Reviews = append(d.Reviews, r)
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateFinding: %v", err)
 	}
+}
+
+// loadFindingOutcomes is a test helper for the LoadOutcomes call
+// pattern that disappeared with the per-finding-doc layout.
+func loadFindingOutcomes(t *testing.T, rp *run.Path, id string) []schema.Outcome {
+	t.Helper()
+	doc, err := rp.LoadFinding(id)
+	if err != nil {
+		t.Fatalf("LoadFinding: %v", err)
+	}
+	return doc.Outcomes
 }
 
 func TestIdentitySave_RoundTripsThroughResolver(t *testing.T) {
@@ -595,27 +598,25 @@ func TestReviewView_LabelOverrideNilDoesntTouch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	subject := schema.Subject{Kind: schema.SubjectFinding, ID: findingID}
 
 	// Alice sets ack/fp, then later submits an entry with Labels=nil
 	// (a comment-only edit). Her latest non-nil entry stays canonical
 	// for the override union.
-	mustAppendReview(t, rp, "alice", schema.Review{
-		Subject: subject,
-		Labels:  ptrSlice("ack", "fp"),
-		At:      time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	mustAppendReview(t, rp, findingID, "alice", schema.Review{
+		Labels: ptrSlice("ack", "fp"),
+		At:     time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
-	mustAppendReview(t, rp, "alice", schema.Review{
-		Subject: subject,
+	mustAppendReview(t, rp, findingID, "alice", schema.Review{
 		Labels:  nil, // didn't touch labels this time
 		Comment: "second thought",
 		At:      time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
 	})
 
-	view, err := buildReviewView(rp, runName, subject)
+	doc, err := rp.LoadFinding(findingID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	view := buildReviewView(runName, doc)
 	want := []string{"ack", "fp"}
 	if len(view.CurrentLabels) != len(want) {
 		t.Fatalf("CurrentLabels = %v, want %v", view.CurrentLabels, want)
@@ -630,23 +631,21 @@ func TestReviewView_LabelOverrideNilDoesntTouch(t *testing.T) {
 func TestReviewView_LabelExplicitClear(t *testing.T) {
 	projectDir, runName, findingID := makeFindRun(t)
 	rp, _ := run.Open(filepath.Join(projectDir, "runs", runName))
-	subject := schema.Subject{Kind: schema.SubjectFinding, ID: findingID}
 
 	// Alice sets ack, then explicitly clears (Labels = &[]). Her
 	// latest is now the empty override; CurrentLabels collapses to
 	// empty rather than re-using the older non-empty entry.
-	mustAppendReview(t, rp, "alice", schema.Review{
-		Subject: subject,
-		Labels:  ptrSlice("ack"),
-		At:      time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	mustAppendReview(t, rp, findingID, "alice", schema.Review{
+		Labels: ptrSlice("ack"),
+		At:     time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
 	empty := []string{}
-	mustAppendReview(t, rp, "alice", schema.Review{
-		Subject: subject,
-		Labels:  &empty,
-		At:      time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+	mustAppendReview(t, rp, findingID, "alice", schema.Review{
+		Labels: &empty,
+		At:     time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
 	})
-	view, _ := buildReviewView(rp, runName, subject)
+	doc, _ := rp.LoadFinding(findingID)
+	view := buildReviewView(runName, doc)
 	if len(view.CurrentLabels) != 0 {
 		t.Errorf("CurrentLabels = %v, want empty (alice cleared)", view.CurrentLabels)
 	}
