@@ -9,11 +9,8 @@ project.
 ```
 .fettle.json              committed; target_repo: "../.."
 instructions/
-  find.md                 real Go conventions / code-smells prompt
+  find.md                 Go conventions / code-smells prompt
   review.md               per-finding review prompt
-  review_group.md         per-group (cluster-level) review prompt
-  dedupe.md               cross-run consolidation prompt
-  group.md                clustering prompt (PR-sized batches)
 runs/                     gitignored; created on first stage run
 ```
 
@@ -35,7 +32,9 @@ fettle --dir examples/self-scan run find --limit 5
 ```
 
 `--limit 5` keeps the first run cheap. Drop it for a full scan.
-Output goes to `examples/self-scan/runs/find_<UTC-ts>_<slug>/`.
+Output goes to `examples/self-scan/runs/find_<UTC-ts>_<slug>/`,
+with each finding written to its own `findings/<id>.json` doc
+inside that run folder.
 
 To resume a killed scan:
 
@@ -43,13 +42,11 @@ To resume a killed scan:
 fettle --dir examples/self-scan run find --resume runs/<run-folder>/
 ```
 
-The snapshotted prompt at `<run>/instructions/find.md` is what runs on
-resume — editing the template here doesn't retroactively affect a
-running scan.
+The snapshotted prompt at `<run>/instructions/find.md` is what runs
+on resume — editing the template here doesn't retroactively affect
+a running scan.
 
-## Play with the rest of the pipeline
-
-Once you have a find run, every other CLI works against it. Browse:
+## Browse and inspect
 
 ```sh
 fettle --dir examples/self-scan list runs
@@ -58,7 +55,15 @@ fettle --dir examples/self-scan list findings --run runs/<run>/
 fettle --dir examples/self-scan show finding --run runs/<run>/ <id>
 ```
 
-Review the findings (one agent invocation per finding):
+Or open the workspace UI:
+
+```sh
+fettle --dir examples/self-scan ui
+```
+
+## Review the findings
+
+Either with an agent (one invocation per finding):
 
 ```sh
 fettle --dir examples/self-scan run review --run runs/<run>/
@@ -66,41 +71,16 @@ fettle --dir examples/self-scan list reviews --run runs/<run>/
 fettle --dir examples/self-scan show review --run runs/<run>/ --finding <id>
 ```
 
-Cluster into PR-sized batches:
+…or by clicking through the UI as a human reviewer. Both append to
+the same `reviews[]` array inside each finding doc; both flow
+through the same atomic-rename write.
 
-```sh
-fettle --dir examples/self-scan run group --run runs/<run>/
-fettle --dir examples/self-scan list groups --run runs/<group-run>/
-```
-
-Review the clusters at the group level (one agent invocation per
-group, using `instructions/review_group.md`):
-
-```sh
-fettle --dir examples/self-scan run review --run runs/<group-run>/
-fettle --dir examples/self-scan list reviews --run runs/<group-run>/
-fettle --dir examples/self-scan show review --run runs/<group-run>/ --group <id>
-```
-
-Mark outcomes as you ship fixes:
+## Mark outcomes as you ship fixes
 
 ```sh
 fettle --dir examples/self-scan add outcome --run runs/<run>/ --finding <id> --status merged --pr <url>
 fettle --dir examples/self-scan show outcome --run runs/<run>/ --finding <id>
 fettle --dir examples/self-scan list outcomes --run runs/<run>/
-```
-
-For a second find run with a different agent, then dedupe:
-
-```sh
-fettle --dir examples/self-scan run find --agent codex --limit 5 --name codex-pass
-fettle --dir examples/self-scan run dedupe --run runs/<find1>/ --run runs/<find2>/
-```
-
-Or merge two non-overlapping runs (e.g. one over `**/*.go`, another over `**/*.ts`):
-
-```sh
-fettle --dir examples/self-scan run merge --run runs/<go-run>/ --run runs/<ts-run>/
 ```
 
 ## Adapting this example

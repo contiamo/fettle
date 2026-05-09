@@ -42,12 +42,12 @@ internal/ui/
 │   ├── types.go               Go-side view structs + context keys (ReviewerContextKey, etc.)
 │   ├── layout.templ           Layout shell, header, breadcrumb, theme menu, reviewer indicator
 │   ├── runs.templ             Run picker (landing page)
-│   ├── run.templ              Per-run findings table / group cards
+│   ├── run.templ              Three-pane workspace: filters / list / finding detail
 │   ├── finding.templ          Finding detail (preview, sections, review, outcome)
-│   ├── group.templ            Group detail (members, review, outcome)
 │   ├── identity.templ         /identity prompt form
 │   ├── review.templ           ReviewSection + form + history feed (HTMX swap target)
 │   ├── outcome.templ          OutcomeSection + form + history feed (HTMX swap target)
+│   ├── components.templ       Shared atoms (SeverityPill, OutcomePill, LabelChips, …)
 │   └── *_templ.go             GENERATED — `templ generate` writes these. Committed
 │                              so plain `go build` works on a fresh worktree.
 ├── components/                templui-installed primitives. Each subdir is one
@@ -59,11 +59,11 @@ internal/ui/
 │   ├── server.go              chi router, middleware wiring
 │   ├── middleware.go          withReviewer (resolves identity → ctx)
 │   ├── runs.go                GET /
-│   ├── run.go                 GET /runs/{name}
+│   ├── run.go                 GET /runs/{name} (three-pane workspace)
 │   ├── finding.go             GET /runs/{name}/finding/{id}
-│   ├── group.go               GET /runs/{name}/group/{id}
 │   ├── identity.go            GET/POST /identity
-│   ├── mutations.go           POST /runs/{name}/{kind}/{id}/{review|outcome}
+│   ├── mutations.go           POST /runs/{name}/finding/{id}/{review|outcome}
+│   ├── bulk.go                POST /runs/{name}/bulk/review
 │   ├── sections.go            buildReviewView / buildOutcomeView (shared GET+POST)
 │   └── preview.go             Code preview reader + safeJoin
 └── ts/
@@ -151,8 +151,8 @@ the `.templ` and any per-component JS. Per-component JS lands in
 clone builds without templui being on PATH).
 
 **Currently installed**: `aspectratio`, `badge`, `button`, `card`,
-`dropdown`, `icon`, `popover`, `table`, plus the shared `utils`
-helper.
+`dropdown`, `form`, `icon`, `input`, `label`, `popover`, `selectbox`,
+`table`, `textarea`, plus the shared `utils` helper.
 
 **Do not** redefine button/badge/card primitives inline. Reach for the
 templui component first — it's already wired to the theme tokens.
@@ -200,15 +200,19 @@ oklch values under `.dark`.
 - **Whole-row click**: any element with `data-row-link="<href>"` is
   clickable. Handler in `app.ts` bails on `closest("a")` /
   `closest("button")` so middle-click and inline interactives keep
-  working. Use this for table rows and group cards. Always include a
-  proper `<a>` inside as well so screen readers + keyboard nav work.
+  working. Use this for run-picker table rows. (Finding-list rows
+  in the workspace use HTMX directly and are deliberately skipped
+  by this handler.) Always include a proper `<a>` inside so screen
+  readers + keyboard nav work.
 - **Asset cache busting**: links and scripts in `Layout` use
   `assetURL("/static/dist/foo.js", JSVersion)` which appends
   `?v=<sha>`. Hashes are computed at init from the embedded files.
 - **Path validation**: route params (`{name}`, `{id}`) get
   regex-checked at the handler level (`runNamePattern`,
-  `findingIDPattern`, `inputRunPattern`) before any filesystem join.
-  Keep this when adding routes that take user-controlled segments.
+  `findingIDPattern`) before any filesystem join. The
+  `internal/run` storage helpers also validate finding ids
+  pre-open. Keep this when adding routes that take user-controlled
+  segments.
 - **No silent feature flags / fallback paths**: this codebase prefers
   failing loudly. If you find yourself adding "if A else B" defensive
   branches, ask first.
@@ -252,9 +256,6 @@ task selfscan -- --agent claude --concurrency 4
 - **Live reload / SSE**: full-page reload only. Don't add fsnotify.
 - **Syntax highlighting** in code preview: deferred. Server-side
   chroma is the planned next step.
-- **Walkback for merge/dedupe code preview**: the preview reads
-  `manifest.target_repo` directly, which is empty for merge/dedupe.
-  Resolving via `members[].from_run` is deferred.
 - **Label autocomplete**: review form takes a free-text labels input.
 - **Indicator avatar / "team" view**: no notion of who else is reviewing.
 - **CSRF**: see HTMX section above.
