@@ -76,15 +76,20 @@ type Instructions struct {
 	Review string `json:"review"`
 }
 
-// NewConfig returns a Config populated with sensible defaults for `init`.
+// NewConfig returns a Config populated with sensible defaults for
+// `init`. Include defaults to `**/*` and Exclude is empty because
+// fettle is language-agnostic — the user narrows to their domain
+// (e.g. `**/*.go`, `src/**/*.{ts,tsx}`) after init. The walker
+// already hard-skips .git / .hg / .svn / node_modules regardless of
+// globs, so the defaults won't pull in the worst noise.
 func NewConfig(targetRepo, agent, model string) Config {
 	return Config{
 		FettleVersion: Version,
 		CreatedAt:     time.Now().UTC(),
 		TargetRepo:    targetRepo,
 		Agent:         AgentRef{Name: agent, Model: model},
-		Include:       []string{"**/*.go"},
-		Exclude:       []string{"vendor/**", "node_modules/**", "**/*_generated.go"},
+		Include:       []string{"**/*"},
+		Exclude:       []string{},
 		Instructions: Instructions{
 			Find:   filepath.Join(Subdir, "instructions", "find.md"),
 			Review: filepath.Join(Subdir, "instructions", "review.md"),

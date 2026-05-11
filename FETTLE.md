@@ -139,6 +139,13 @@ move them outside `.fettle/` if you'd rather have them tracked
 under your normal docs path. `target_repo` is also relative to the
 host, so `"../.."` portably points two levels up.
 
+`include` / `exclude` are doublestar globs evaluated against
+repo-relative paths. `fettle init` writes `include: ["**/*"]` and
+no excludes — narrow to your domain (e.g. `**/*.go`,
+`src/**/*.{ts,tsx}`) before the first `fettle run find` or you'll
+scan every text file in the target. The walker hard-skips `.git/`,
+`.hg/`, `.svn/`, and `node_modules/` regardless of globs.
+
 ## Instructions (you write these)
 
 You supply one markdown document per agent stage (`find` and
