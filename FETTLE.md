@@ -140,11 +140,19 @@ under your normal docs path. `target_repo` is also relative to the
 host, so `"../.."` portably points two levels up.
 
 `include` / `exclude` are doublestar globs evaluated against
-repo-relative paths. `fettle init` writes `include: ["**/*"]` and
-no excludes — narrow to your domain (e.g. `**/*.go`,
-`src/**/*.{ts,tsx}`) before the first `fettle run find` or you'll
-scan every text file in the target. The walker hard-skips `.git/`,
-`.hg/`, `.svn/`, and `node_modules/` regardless of globs.
+repo-relative paths. `fettle init` requires at least one
+`--include` glob — fettle is language-agnostic and refuses to guess
+a default that would either be too narrow (Go-only) or scan every
+text file in the repo. Examples:
+
+```sh
+fettle init --include '**/*.go'
+fettle init --include 'src/**/*.{ts,tsx}' --include '**/*.css'
+fettle init --include '**/*.py' --exclude 'tests/**'
+```
+
+The walker hard-skips `.git/`, `.hg/`, `.svn/`, and `node_modules/`
+regardless of globs.
 
 ## Instructions (you write these)
 
@@ -203,9 +211,11 @@ global flags. Every command emits the `{"data": ...}` envelope when
 `--json` is passed; reads always emit it.
 
 ```
-fettle init [--target REPO] [--agent claude|codex]
+fettle init --include GLOB [--include GLOB ...] [--exclude GLOB ...]
+            [--target REPO] [--agent claude|codex]
     Create a new fettle project in cwd. Writes .fettle/config.json
-    and a stub .fettle/instructions/ tree.
+    and a stub .fettle/instructions/ tree. At least one --include
+    glob is required — see `fettle init --help` for examples.
 
 # Stage runners (agent-driven)
 

@@ -10,20 +10,40 @@ import (
 )
 
 var initFlags struct {
-	target string
-	agent  string
-	model  string
+	target  string
+	agent   string
+	model   string
+	include []string
+	exclude []string
 }
 
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Create a new fettle project in the current directory",
+	Long: `init creates .fettle/ in the current directory with a stub
+instructions/ tree and a config.json scoped to the patterns you pass.
+
+At least one --include glob is required. fettle is language-agnostic
+— there's no sensible language-neutral default ` + "`include`" + ` that won't
+either be too narrow (Go-only) or scan every text file in the repo
+(images, lockfiles, build artifacts). Pass the globs that match your
+domain:
+
+  fettle init --include '**/*.go'
+  fettle init --include 'src/**/*.{ts,tsx}' --include '**/*.css'
+  fettle init --include '**/*.py' --exclude 'tests/**'
+
+The walker hard-skips ` + "`.git/` / `.hg/` / `.svn/` / `node_modules/`" + `
+regardless of globs, so you don't need to exclude those.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		switch initFlags.agent {
 		case "claude", "codex":
 			// supported
 		default:
 			return fmt.Errorf("unsupported agent %q (supported: claude, codex)", initFlags.agent)
+		}
+		if len(initFlags.include) == 0 {
+			return fmt.Errorf("at least one --include glob is required (e.g. --include '**/*.go'); see `fettle init --help`")
 		}
 		dir, err := projectDir()
 		if err != nil {
@@ -40,7 +60,7 @@ var initCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("resolve target: %w", err)
 		}
-		cfg := project.NewConfig(absTarget, initFlags.agent, initFlags.model)
+		cfg := project.NewConfig(absTarget, initFlags.agent, initFlags.model, initFlags.include, initFlags.exclude)
 		if err := project.Init(dir, cfg); err != nil {
 			return err
 		}
@@ -54,6 +74,8 @@ func init() {
 	initCmd.Flags().StringVar(&initFlags.target, "target", "", "target repository path (default: current directory)")
 	initCmd.Flags().StringVar(&initFlags.agent, "agent", "claude", "default agent: claude or codex")
 	initCmd.Flags().StringVar(&initFlags.model, "model", "", "default model (empty = agent CLI default)")
+	initCmd.Flags().StringArrayVar(&initFlags.include, "include", nil, "doublestar glob for files to scan (required, repeatable)")
+	initCmd.Flags().StringArrayVar(&initFlags.exclude, "exclude", nil, "doublestar glob for files to skip (repeatable)")
 	initCmd.GroupID = groupProject
 	rootCmd.AddCommand(initCmd)
 }
