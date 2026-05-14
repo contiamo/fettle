@@ -5,6 +5,7 @@
   "agent": {
     "name": "claude"
   },
+  "walker": "git",
   "include": [
     "**/*.go"
   ],

@@ -141,6 +141,7 @@ type RunManifest struct {
 	CompletedAt   *time.Time     `json:"completed_at,omitempty"`
 	TargetRepo    string         `json:"target_repo,omitempty"`
 	TargetRepoGit *GitInfo       `json:"target_repo_git,omitempty"`
+	Walker        string         `json:"walker,omitempty"` // "git" | "fs"; omitted on pre-walker-field runs (treat as "git")
 	Include       []string       `json:"include,omitempty"`
 	Exclude       []string       `json:"exclude,omitempty"`
 	Agent         *AgentInfo     `json:"agent,omitempty"`

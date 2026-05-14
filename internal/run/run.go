@@ -55,6 +55,7 @@ type CreateFindOpts struct {
 	ProjectDir     string
 	Slug           string
 	TargetRepo     string
+	Walker         string // "git" | "fs"; baked into the manifest so resume is honest
 	Include        []string
 	Exclude        []string
 	FindPrompt     string // full text to snapshot
@@ -98,6 +99,7 @@ func CreateForFind(opts CreateFindOpts) (*Path, error) {
 		CreatedAt:     time.Now().UTC(),
 		TargetRepo:    opts.TargetRepo,
 		TargetRepoGit: ReadGit(opts.TargetRepo),
+		Walker:        opts.Walker,
 		Include:       opts.Include,
 		Exclude:       opts.Exclude,
 		Agent:         agentInfoFromSpec(opts.FindSpec),

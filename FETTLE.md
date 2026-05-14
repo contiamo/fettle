@@ -124,8 +124,9 @@ project's config:
   "created_at": "2026-04-30T10:56:00Z",
   "target_repo": "/abs/path/to/repo",
   "agent": { "name": "claude", "model": "sonnet" },
+  "walker": "git",
   "include": ["**/*.go", "**/*.ts"],
-  "exclude": ["vendor/**", "node_modules/**", "**/*_generated.go"],
+  "exclude": ["vendor/**", "**/*_generated.go"],
   "instructions": {
     "find":   ".fettle/instructions/find.md",
     "review": ".fettle/instructions/review.md"
@@ -139,6 +140,17 @@ move them outside `.fettle/` if you'd rather have them tracked
 under your normal docs path. `target_repo` is also relative to the
 host, so `"../.."` portably points two levels up.
 
+`walker` chooses how files are enumerated in the target repo:
+
+- `"git"` (default): asks `git ls-files` for the union of tracked
+  and untracked-not-ignored files, so `.gitignore` rules are
+  honoured automatically. No need to repeat `node_modules/`,
+  build artifacts, dependency caches, etc. in `exclude`. Requires
+  the target to be a git repo.
+- `"fs"`: walks the filesystem directly; only the user's
+  `include` / `exclude` globs filter. Use for non-git targets or
+  when you explicitly want to scan files that are gitignored.
+
 `include` / `exclude` are doublestar globs evaluated against
 repo-relative paths. `fettle init` requires at least one
 `--include` glob — there's no project-independent default, and a
@@ -151,8 +163,8 @@ fettle init --include 'src/**/*.{ts,tsx}' --include '**/*.css'
 fettle init --include '**/*.py' --exclude 'tests/**'
 ```
 
-The walker hard-skips `.git/`, `.hg/`, `.svn/`, and `node_modules/`
-regardless of globs.
+With `walker: "git"`, anything in `.gitignore` is dropped on top
+of your `exclude` patterns.
 
 ## Instructions (you write these)
 
@@ -212,10 +224,11 @@ global flags. Every command emits the `{"data": ...}` envelope when
 
 ```
 fettle init --include GLOB [--include GLOB ...] [--exclude GLOB ...]
-            [--target REPO] [--agent claude|codex]
+            [--walker git|fs] [--target REPO] [--agent claude|codex]
     Create a new fettle project in cwd. Writes .fettle/config.json
     and a stub .fettle/instructions/ tree. At least one --include
-    glob is required — see `fettle init --help` for examples.
+    glob is required; --walker defaults to git (honour .gitignore).
+    See `fettle init --help` for examples.
 
 # Stage runners (agent-driven)
 

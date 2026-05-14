@@ -13,6 +13,7 @@ var initFlags struct {
 	target  string
 	agent   string
 	model   string
+	walker  string
 	include []string
 	exclude []string
 }
@@ -33,14 +34,21 @@ match the files you actually want scanned:
   fettle init --include 'src/**/*.{ts,tsx}' --include '**/*.css'
   fettle init --include '**/*.py' --exclude 'tests/**'
 
-The walker hard-skips ` + "`.git/` / `.hg/` / `.svn/` / `node_modules/`" + `
-regardless of globs, so you don't need to exclude those.`,
+With the default --walker git, anything in .gitignore is dropped
+on top of your --exclude patterns. Use --walker fs for non-git
+targets or when you want to scan ignored files explicitly.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		switch initFlags.agent {
 		case "claude", "codex":
 			// supported
 		default:
 			return fmt.Errorf("unsupported agent %q (supported: claude, codex)", initFlags.agent)
+		}
+		switch initFlags.walker {
+		case project.WalkerGit, project.WalkerFS:
+			// supported
+		default:
+			return fmt.Errorf("unsupported walker %q (supported: git, fs)", initFlags.walker)
 		}
 		if len(initFlags.include) == 0 {
 			return fmt.Errorf("at least one --include glob is required (e.g. --include '**/*.go'); see `fettle init --help`")
@@ -60,7 +68,7 @@ regardless of globs, so you don't need to exclude those.`,
 		if err != nil {
 			return fmt.Errorf("resolve target: %w", err)
 		}
-		cfg := project.NewConfig(absTarget, initFlags.agent, initFlags.model, initFlags.include, initFlags.exclude)
+		cfg := project.NewConfig(absTarget, initFlags.agent, initFlags.model, initFlags.walker, initFlags.include, initFlags.exclude)
 		if err := project.Init(dir, cfg); err != nil {
 			return err
 		}
@@ -74,6 +82,7 @@ func init() {
 	initCmd.Flags().StringVar(&initFlags.target, "target", "", "target repository path (default: current directory)")
 	initCmd.Flags().StringVar(&initFlags.agent, "agent", "claude", "default agent: claude or codex")
 	initCmd.Flags().StringVar(&initFlags.model, "model", "", "default model (empty = agent CLI default)")
+	initCmd.Flags().StringVar(&initFlags.walker, "walker", project.WalkerGit, "file enumerator: git (honour .gitignore) or fs (raw filesystem walk)")
 	initCmd.Flags().StringArrayVar(&initFlags.include, "include", nil, "doublestar glob for files to scan (required, repeatable)")
 	initCmd.Flags().StringArrayVar(&initFlags.exclude, "exclude", nil, "doublestar glob for files to skip (repeatable)")
 	initCmd.GroupID = groupProject

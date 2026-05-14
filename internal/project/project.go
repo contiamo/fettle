@@ -33,6 +33,14 @@ const Subdir = ".fettle"
 // ConfigFile is the manifest filename inside Subdir.
 const ConfigFile = "config.json"
 
+// Walker values for Config.Walker. WalkerGit (default) goes through
+// `git ls-files` so `.gitignore` rules are honoured automatically.
+// WalkerFS walks the filesystem and only filters by the user's globs.
+const (
+	WalkerGit = "git"
+	WalkerFS  = "fs"
+)
+
 // ConfigPath returns the absolute path to a project's config.json given
 // the project's host directory. Centralised so callers don't open-code
 // the join.
@@ -52,9 +60,13 @@ type Config struct {
 	CreatedAt     time.Time    `json:"created_at"`
 	TargetRepo    string       `json:"target_repo"`
 	Agent         AgentRef     `json:"agent"`
-	Include       []string     `json:"include"`
-	Exclude       []string     `json:"exclude"`
-	Instructions  Instructions `json:"instructions"`
+	// Walker chooses how files are enumerated in the target repo:
+	// WalkerGit (default) honours .gitignore; WalkerFS walks the
+	// filesystem and filters only by Include/Exclude.
+	Walker       string       `json:"walker"`
+	Include      []string     `json:"include"`
+	Exclude      []string     `json:"exclude"`
+	Instructions Instructions `json:"instructions"`
 }
 
 // AgentRef points at the agent fettle invokes for a stage. Set Name to
@@ -85,18 +97,22 @@ type Instructions struct {
 //
 // The walker hard-skips .git / .hg / .svn / node_modules regardless
 // of globs.
-func NewConfig(targetRepo, agent, model string, include, exclude []string) Config {
+func NewConfig(targetRepo, agent, model, walker string, include, exclude []string) Config {
 	if include == nil {
 		include = []string{}
 	}
 	if exclude == nil {
 		exclude = []string{}
 	}
+	if walker == "" {
+		walker = WalkerGit
+	}
 	return Config{
 		FettleVersion: Version,
 		CreatedAt:     time.Now().UTC(),
 		TargetRepo:    targetRepo,
 		Agent:         AgentRef{Name: agent, Model: model},
+		Walker:        walker,
 		Include:       include,
 		Exclude:       exclude,
 		Instructions: Instructions{

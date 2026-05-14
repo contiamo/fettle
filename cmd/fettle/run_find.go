@@ -99,6 +99,7 @@ func init() {
 type findInputs struct {
 	rp         *run.Path
 	targetRepo string
+	walker     string
 	include    []string
 	exclude    []string
 	spec       agent.Spec
@@ -125,7 +126,15 @@ func runFind(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	files, err := walk.Walk(in.targetRepo, in.include, in.exclude)
+	var files []string
+	switch in.walker {
+	case project.WalkerGit:
+		files, err = walk.WalkGit(in.targetRepo, in.include, in.exclude)
+	case project.WalkerFS:
+		files, err = walk.WalkFS(in.targetRepo, in.include, in.exclude)
+	default:
+		return fmt.Errorf("unknown walker %q in project config (supported: git, fs)", in.walker)
+	}
 	if err != nil {
 		return fmt.Errorf("walk target repo: %w", err)
 	}
@@ -320,9 +329,16 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 				savedLimit = int(f)
 			}
 		}
+		walker := m.Walker
+		if walker == "" {
+			// Pre-walker-field runs default to git so behaviour matches
+			// what `fettle init` would write today.
+			walker = project.WalkerGit
+		}
 		return &findInputs{
 			rp:         rp,
 			targetRepo: m.TargetRepo,
+			walker:     walker,
 			include:    m.Include,
 			exclude:    m.Exclude,
 			limit:      savedLimit,
@@ -436,10 +452,15 @@ Got: %q`, agentScript)
 	if err != nil {
 		return nil, fmt.Errorf("read find prompt %s: %w", promptAbs, err)
 	}
+	walker := cfg.Walker
+	if walker == "" {
+		walker = project.WalkerGit
+	}
 	rp, err := run.CreateForFind(run.CreateFindOpts{
 		ProjectDir:     projectDir,
 		Slug:           findFlags.name,
 		TargetRepo:     targetRepo,
+		Walker:         walker,
 		Include:        include,
 		Exclude:        exclude,
 		FindPrompt:     string(promptBody),
@@ -457,6 +478,7 @@ Got: %q`, agentScript)
 	return &findInputs{
 		rp:         rp,
 		targetRepo: targetRepo,
+		walker:     walker,
 		include:    include,
 		exclude:    exclude,
 		limit:      findFlags.limit,
