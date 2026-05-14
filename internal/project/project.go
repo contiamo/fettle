@@ -77,10 +77,11 @@ type Instructions struct {
 }
 
 // NewConfig assembles the Config that `init` writes. include and
-// exclude come from the user's flags — fettle is language-agnostic
-// and refuses to guess a sensible default, so the caller (`cmd/fettle`)
-// is responsible for collecting them up front and rejecting an empty
-// include list before reaching this function.
+// exclude come from the user's flags — there's no
+// project-independent default for include that does the right
+// thing, so the caller (`cmd/fettle`) is responsible for
+// collecting them and rejecting an empty include list before
+// reaching this function.
 //
 // The walker hard-skips .git / .hg / .svn / node_modules regardless
 // of globs.

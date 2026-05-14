@@ -23,11 +23,11 @@ var initCmd = &cobra.Command{
 	Long: `init creates .fettle/ in the current directory with a stub
 instructions/ tree and a config.json scoped to the patterns you pass.
 
-At least one --include glob is required. fettle is language-agnostic
-— there's no sensible language-neutral default ` + "`include`" + ` that won't
-either be too narrow (Go-only) or scan every text file in the repo
-(images, lockfiles, build artifacts). Pass the globs that match your
-domain:
+At least one --include glob is required — there's no
+project-independent default that would do the right thing, and a
+permissive one (` + "`**/*`" + `) would pull in lockfiles, vendored
+dependencies, generated code, and binary blobs. Pass the globs that
+match the files you actually want scanned:
 
   fettle init --include '**/*.go'
   fettle init --include 'src/**/*.{ts,tsx}' --include '**/*.css'

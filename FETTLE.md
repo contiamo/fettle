@@ -141,9 +141,9 @@ host, so `"../.."` portably points two levels up.
 
 `include` / `exclude` are doublestar globs evaluated against
 repo-relative paths. `fettle init` requires at least one
-`--include` glob — fettle is language-agnostic and refuses to guess
-a default that would either be too narrow (Go-only) or scan every
-text file in the repo. Examples:
+`--include` glob — there's no project-independent default, and a
+permissive one (`**/*`) would pull in lockfiles, vendored
+dependencies, generated code, and binary blobs. Examples:
 
 ```sh
 fettle init --include '**/*.go'
