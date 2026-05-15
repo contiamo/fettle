@@ -291,8 +291,8 @@ type ReviewSectionView struct {
 	RunName       string
 	SubjectKind   string // always "finding" today
 	SubjectID     string
-	CurrentLabels []string          // union across authors' latest entries
-	InitialLabels []string          // pre-fill for the labels editor
+	CurrentLabels []string          // resolver output for the subject
+	InitialLabels []string          // pre-fill for the labels editor (= the resolved set)
 	Entries       []ReviewEntryView // oldest first
 	Error         string            // surfaced inline on validation failure
 }
@@ -304,19 +304,26 @@ type ReviewSectionView struct {
 // effective severity for the finding is the latest such entry across
 // authors, falling back to Finding.Severity when none is set.
 //
-// Labels carries the reviewer's label override (or empty if not).
-// LabelsTouched preserves the nil-vs-empty distinction the schema
-// makes: false means this entry didn't touch labels (don't show a
-// "set labels to" line), true with empty Labels means this entry
-// explicitly cleared, true with non-empty means override.
+// Add and Remove carry this entry's label delta. Either may be empty;
+// both empty means the entry didn't touch labels (a comment-only or
+// severity-only update). The template renders Add as green chips and
+// Remove as red chips so the history feed reads as a series of
+// changes rather than as snapshots.
 type ReviewEntryView struct {
-	Author        string
-	Labels        []string
-	LabelsTouched bool
-	Severity      *string
-	Comment       string
-	At            time.Time
-	IsLatest      bool
+	Author   string
+	Add      []string
+	Remove   []string
+	Severity *string
+	Comment  string
+	At       time.Time
+	IsLatest bool
+}
+
+// LabelsTouched reports whether this entry made any change to labels.
+// Used by the template to suppress the label-change row entirely on
+// pure-comment / pure-severity entries.
+func (e ReviewEntryView) LabelsTouched() bool {
+	return len(e.Add) > 0 || len(e.Remove) > 0
 }
 
 // PostURL returns the HTMX target path for the review form on this
@@ -333,8 +340,8 @@ type OutcomeSectionView struct {
 	RunName     string
 	SubjectKind string
 	SubjectID   string
-	Latest      *schema.Outcome
-	History     []schema.Outcome // chronological, oldest first; includes Latest as last entry
+	Latest      *schema.OutcomeEntry
+	History     []schema.OutcomeEntry // chronological, oldest first; includes Latest as last entry
 	Error       string
 }
 

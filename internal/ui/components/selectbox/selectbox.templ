@@ -221,14 +221,6 @@ templ Trigger(props ...TriggerProps) {
 				{ p.Attributes... }
 			/>
 			{ children... }
-			<span
-				class="ml-1 hidden cursor-pointer text-muted-foreground hover:text-foreground"
-				data-tui-selectbox-clear-trigger
-				aria-label="Clear selection"
-				role="button"
-			>
-				@icon.CircleX(icon.Props{Class: "size-3.5"})
-			</span>
 			<span class="pointer-events-none ml-1" data-tui-selectbox-chevron>
 				@icon.ChevronDown(icon.Props{Class: "size-4 text-muted-foreground"})
 			</span>

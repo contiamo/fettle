@@ -4,9 +4,8 @@
 // → validate → append → render swap). Identity errors bounce the
 // client to /identity?next=… via HX-Redirect; validation errors
 // re-render the section with an inline message; everything else is a
-// 500. Mutations land via run.UpdateFinding's atomic-rename helper —
-// the read-modify-write race window is documented and accepted in
-// fettle's single-user model.
+// 500. Reviews and outcomes append to per-session JSONL streams in
+// the run dir; see internal/run for the append + read helpers.
 
 package server
 
@@ -20,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/contiamo/fettle/internal/identity"
 	"github.com/contiamo/fettle/internal/project"
 	"github.com/contiamo/fettle/internal/run"
 	"github.com/contiamo/fettle/internal/schema"
@@ -44,6 +44,7 @@ func reviewPostHandler(projectDir, subjectKind string) http.HandlerFunc {
 		if !ok {
 			return
 		}
+		defer rp.Close()
 
 		ident, ok := requireIdentity(w, r)
 		if !ok {
@@ -54,30 +55,44 @@ func reviewPostHandler(projectDir, subjectKind string) http.HandlerFunc {
 			http.Error(w, "parse form", http.StatusBadRequest)
 			return
 		}
-		labels := parseReviewLabels(r.PostForm)
+		add, remove, labelsTouched, labelErr := parseReviewLabelOps(rp, subject.ID, r.PostForm)
+		if labelErr != "" {
+			renderReviewSwap(w, r, rp, runName, subject, labelErr, http.StatusBadRequest)
+			return
+		}
 		comment := strings.TrimSpace(r.FormValue("comment"))
 		severity := parseReviewSeverity(r.FormValue("severity"))
 
 		// Empty submit (no labels touched, no comment, no severity
-		// change) rejected — the entry would carry no meaning. Note
-		// that an explicit "clear my labels" (Labels = &[]) counts
-		// as touched, distinguishable from "didn't touch" (nil).
-		if labels == nil && comment == "" && severity == nil {
+		// change) rejected — the entry would carry no meaning.
+		if !labelsTouched && comment == "" && severity == nil {
 			renderReviewSwap(w, r, rp, runName, subject, "Add at least one label, a comment, or a severity.", http.StatusBadRequest)
 			return
 		}
 
-		entry := schema.Review{
+		entry := schema.ReviewEntry{
+			Kind:     subject.Kind,
+			ID:       subject.ID,
 			Author:   ident.String(),
-			Labels:   labels,
+			At:       time.Now().UTC(),
+			Add:      add,
+			Remove:   remove,
 			Severity: severity,
 			Comment:  comment,
-			At:       time.Now().UTC(),
 		}
-		if err := rp.UpdateFinding(subject.ID, func(d *schema.FindingDoc) error {
-			d.Reviews = append(d.Reviews, entry)
-			return nil
-		}); err != nil {
+		// Validate up front so a malformed entry surfaces as a 400
+		// (inline error in the swap response) rather than the 500
+		// AppendReviewEntry's internal validate would produce.
+		if err := schema.ValidateReviewEntry(entry); err != nil {
+			renderReviewSwap(w, r, rp, runName, subject, err.Error(), http.StatusBadRequest)
+			return
+		}
+		human, agent, err := uiWriterIdentity(ident)
+		if err != nil {
+			renderReviewSwap(w, r, rp, runName, subject, fmt.Sprintf("resolve writer identity: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if err := rp.AppendReviewEntry(entry, human, agent); err != nil {
 			renderReviewSwap(w, r, rp, runName, subject, fmt.Sprintf("save failed: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -91,6 +106,7 @@ func outcomePostHandler(projectDir, subjectKind string) http.HandlerFunc {
 		if !ok {
 			return
 		}
+		defer rp.Close()
 
 		ident, ok := requireIdentity(w, r)
 		if !ok {
@@ -108,16 +124,24 @@ func outcomePostHandler(projectDir, subjectKind string) http.HandlerFunc {
 		}
 		prURL := strings.TrimSpace(r.FormValue("pr_url"))
 
-		o := schema.Outcome{
+		entry := schema.OutcomeEntry{
+			Kind:   subject.Kind,
+			ID:     subject.ID,
 			Author: ident.String(),
+			At:     time.Now().UTC(),
 			Status: status,
 			PRURL:  prURL,
-			At:     time.Now().UTC(),
 		}
-		if err := rp.UpdateFinding(subject.ID, func(d *schema.FindingDoc) error {
-			d.Outcomes = append(d.Outcomes, o)
-			return nil
-		}); err != nil {
+		if err := schema.ValidateOutcomeEntry(entry); err != nil {
+			renderOutcomeSwap(w, r, rp, runName, subject, err.Error(), http.StatusBadRequest)
+			return
+		}
+		human, agent, err := uiWriterIdentity(ident)
+		if err != nil {
+			renderOutcomeSwap(w, r, rp, runName, subject, fmt.Sprintf("resolve writer identity: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if err := rp.AppendOutcomeEntry(entry, human, agent); err != nil {
 			renderOutcomeSwap(w, r, rp, runName, subject, fmt.Sprintf("save failed: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -175,7 +199,7 @@ func openSubjectForMutation(w http.ResponseWriter, r *http.Request, projectDir, 
 func subjectExists(rp *run.Path, kind, id string) (bool, error) {
 	switch kind {
 	case schema.SubjectFinding:
-		return rp.FindingExists(id)
+		return rp.FindingEntryExists(id)
 	default:
 		return false, fmt.Errorf("unknown subject kind %q", kind)
 	}
@@ -193,29 +217,106 @@ func stageAccepts(stage, subjectKind string) error {
 	return nil
 }
 
-// parseReviewLabels reads the "labels" form value with nil-means-
-// don't-touch semantics:
-//   - The form omits the labels field entirely (or sets a hidden
-//     edit-toggle to off) → no "labels" key in the post body → nil.
-//     The reviewer's prior label override (if any) carries forward;
-//     otherwise the LLM's Finding.Labels stay in effect.
-//   - The form posts labels="" (edit-toggle on, input cleared) →
-//     &[]string{} — explicit clear.
-//   - The form posts labels="ack, fp" (edit-toggle on, content) →
-//     &[]string{"ack","fp"} — override.
+// parseReviewLabelOps converts the single-finding form's `labels`
+// field into the add/remove arrays the JSONL entry carries. The form
+// posts a snapshot of the labels the reviewer wants the finding to
+// end up with; the handler diffs that against the *currently
+// resolved* label set and emits add for "in target, not in current"
+// + remove for "in current, not in target".
 //
-// We key on map presence rather than empty-string-vs-omitted
-// because Go's url.Values returns "" for both. The form ensures the
-// labels input is `disabled` while in "no change" preview mode so
-// the field doesn't appear in PostForm at all when the user didn't
-// engage the editor.
-func parseReviewLabels(form url.Values) *[]string {
+// labelsTouched is true when the form's labels field was present in
+// the post body (the reviewer engaged the editor), regardless of
+// whether the diff yields any ops. This preserves the existing
+// "submit must have at least one of labels|comment|severity" check
+// at the call site.
+//
+// Returns a non-empty errMsg when the diff can't be computed (the
+// review-load fails, etc.).
+func parseReviewLabelOps(rp *run.Path, findingID string, form url.Values) (add, remove []string, labelsTouched bool, errMsg string) {
 	raw, ok := form["labels"]
 	if !ok {
-		return nil
+		return []string{}, []string{}, false, ""
 	}
-	parsed := parseLabels(strings.Join(raw, ","))
-	return &parsed
+	labelsTouched = true
+	target := parseLabels(strings.Join(raw, ","))
+	finding, err := loadFindingEntry(rp, findingID)
+	if err != nil {
+		return nil, nil, false, fmt.Sprintf("load finding: %v", err)
+	}
+	if finding == nil {
+		return nil, nil, false, "finding not found"
+	}
+	subjectReviews, err := loadSubjectReviews(rp, findingID)
+	if err != nil {
+		return nil, nil, false, fmt.Sprintf("load reviews: %v", err)
+	}
+	current := schema.ResolveLabels(finding.Labels, subjectReviews)
+	add, remove = diffLabelSets(current, target)
+	return add, remove, labelsTouched, ""
+}
+
+// diffLabelSets returns (add, remove) such that applying remove
+// then add to current yields target (modulo order, which we
+// normalise via the resolver). Both result slices are non-nil and
+// sorted so the entry marshals deterministically.
+func diffLabelSets(current, target []string) (add, remove []string) {
+	currentSet := make(map[string]struct{}, len(current))
+	for _, l := range current {
+		currentSet[l] = struct{}{}
+	}
+	targetSet := make(map[string]struct{}, len(target))
+	for _, l := range target {
+		targetSet[l] = struct{}{}
+	}
+	add = []string{}
+	for l := range targetSet {
+		if _, ok := currentSet[l]; !ok {
+			add = append(add, l)
+		}
+	}
+	remove = []string{}
+	for l := range currentSet {
+		if _, ok := targetSet[l]; !ok {
+			remove = append(remove, l)
+		}
+	}
+	slicesSort(add)
+	slicesSort(remove)
+	return add, remove
+}
+
+// slicesSort is a tiny indirection so this file doesn't import the
+// stdlib `slices` package just for one sort call when the rest of
+// the file's helpers stay self-contained.
+func slicesSort(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j-1] > s[j]; j-- {
+			s[j-1], s[j] = s[j], s[j-1]
+		}
+	}
+}
+
+// uiWriterIdentity resolves the (human, agent) filename segments for
+// a UI write. The UI runs as the active reviewer's identity — never
+// in agent mode — so agent is always "" and human is the identity
+// slug (already validated against the artifact slug class via
+// internal/identity).
+func uiWriterIdentity(ident identity.Resolved) (string, string, error) {
+	if ident.Slug == "" {
+		return "", "", fmt.Errorf("ui: identity has no slug")
+	}
+	if ident.IsAgent {
+		// The UI doesn't drive agent mode today, but if a future
+		// surface does (e.g. a "review as <agent>" affordance), the
+		// human segment still needs to come from somewhere — fall back
+		// to ResolveOperator's chain.
+		human, err := identity.ResolveOperator()
+		if err != nil {
+			return "", "", err
+		}
+		return human, ident.Slug, nil
+	}
+	return ident.Slug, "", nil
 }
 
 // parseReviewSeverity reads the "severity" form value. Empty (the
@@ -282,18 +383,26 @@ func resolveStatus(status, other string) (string, string) {
 	}
 }
 
-// renderReviewSwap re-loads the finding doc and renders the review
-// section. HTMX swaps replace the section in place; non-HTMX submits
-// get the same partial (the form's hx-post wraps a regular form post,
-// so a no-JS user just sees the section HTML). The re-load is what
-// surfaces the entry the handler just appended.
+// renderReviewSwap rebuilds the review section and renders it. HTMX
+// swaps replace the section in place; non-HTMX submits get the same
+// partial (the form's hx-post wraps a regular form post, so a no-JS
+// user just sees the section HTML). The rebuild is what surfaces the
+// entry the handler just appended.
 func renderReviewSwap(w http.ResponseWriter, r *http.Request, rp *run.Path, runName string, subject schema.Subject, inlineErr string, status int) {
-	doc, err := rp.LoadFinding(subject.ID)
+	finding, err := loadFindingEntry(rp, subject.ID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("rebuild review section: %v", err), http.StatusInternalServerError)
 		return
 	}
-	view := buildReviewView(runName, doc)
+	if finding == nil {
+		http.Error(w, "finding disappeared mid-request", http.StatusInternalServerError)
+		return
+	}
+	view, err := buildReviewView(runName, rp, *finding)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("rebuild review section: %v", err), http.StatusInternalServerError)
+		return
+	}
 	view.Error = inlineErr
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if status != http.StatusOK {
@@ -305,12 +414,11 @@ func renderReviewSwap(w http.ResponseWriter, r *http.Request, rp *run.Path, runN
 }
 
 func renderOutcomeSwap(w http.ResponseWriter, r *http.Request, rp *run.Path, runName string, subject schema.Subject, inlineErr string, status int) {
-	doc, err := rp.LoadFinding(subject.ID)
+	view, err := buildOutcomeView(runName, rp, subject.ID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("rebuild outcome section: %v", err), http.StatusInternalServerError)
 		return
 	}
-	view := buildOutcomeView(runName, doc)
 	view.Error = inlineErr
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if status != http.StatusOK {

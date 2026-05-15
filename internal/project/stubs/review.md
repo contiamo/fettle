@@ -44,5 +44,7 @@ Skip it when the label is self-explanatory.
   another reviewer — pick your own opinion only if you disagree.
 - Don't review out-of-scope subjects with `confirmed`. Use
   `out-of-scope` so downstream stages can drop them.
-- Don't write a comment without a label. Empty `--label` + comment
-  is rejected by the harness.
+- Don't write a comment alone if no label change applies — at least
+  one of `--add-label`, `--remove-label`, `--severity`, or
+  `--comment` is required by the harness, so a comment-only entry
+  is fine; an empty submit is rejected.

@@ -28,7 +28,7 @@ type Handler = chi.Router
 // run folders are read from disk per-request, so adding/removing runs
 // while the server is up is reflected on the next page load.
 func New(projectDir string, cfg project.Config) Handler {
-	_ = cfg // reserved for future routes that read .fettle/config.json fields
+	_ = cfg // reserved for future routes that read fettle.json fields
 
 	r := chi.NewRouter()
 

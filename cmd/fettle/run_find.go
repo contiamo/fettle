@@ -64,17 +64,17 @@ var findFlags struct {
 var runFindCmd = &cobra.Command{
 	Use:   "find",
 	Short: "Run the find agent on every matching file in the target repo",
-	Long: `find creates a new run folder under .fettle/runs/ (or resumes
-one with --resume), snapshots the find prompt into it, walks the
-target repo, and runs the configured agent on every file that matches
-the project's include/exclude globs. Each finding the agent emits
-writes to its own findings/<id>.json doc; per-file status is appended
-to files.jsonl for resume.
+	Long: `find creates a new run folder under <project>/runs/ (or
+resumes one with --resume), snapshots the find prompt into it, walks
+the target repo, and runs the configured agent on every file that
+matches the project's include/exclude globs. Findings emitted by the
+agent append to the run's findings_*.jsonl stream; per-file status is
+appended to files.jsonl for resume.
 
 On --resume, the run's manifest (run.json) is authoritative — target
-repo, include/exclude globs, and agent/model/effort all come from there,
-not from .fettle/config.json. Flags that would change those values are
-rejected.`,
+repo, include/exclude globs, and agent/model/effort all come from
+there, not from fettle.json. Flags that would change those values
+are rejected.`,
 	RunE: runFind,
 }
 
@@ -356,7 +356,7 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 	cfg, err := project.Load(projectDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("no .fettle/config.json in %s — run `fettle init` first", projectDir)
+			return nil, fmt.Errorf("no fettle.json in %s — run `fettle init <path>` first, or pass --project-dir / set $FETTLE_PROJECT_DIR", projectDir)
 		}
 		return nil, fmt.Errorf("load project: %w", err)
 	}
@@ -405,7 +405,7 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 		agentScript = findFlags.script
 		// Default the label to "custom" unless the user already named
 		// it via cfg (e.g. agent.name = "security-pass" alongside
-		// agent.script in .fettle/config.json). Mutex above prevents --agent
+		// agent.script in fettle.json). Mutex above prevents --agent
 		// overriding here.
 		if cfg.Agent.Script == "" {
 			agentName = "custom"
@@ -429,7 +429,7 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 		if _, err := exec.LookPath(agentScript); err != nil {
 			if strings.ContainsAny(agentScript, " \t") {
 				return nil, fmt.Errorf(`--agent-script takes a single path, not a command-with-args.
-For arguments, write a small wrapper script with the args baked in, or set agent.args in .fettle/config.json.
+For arguments, write a small wrapper script with the args baked in, or set agent.args in fettle.json.
 Got: %q`, agentScript)
 			}
 			return nil, fmt.Errorf("agent script %q not executable: %w", agentScript, err)
@@ -524,7 +524,7 @@ func analyzeOne(ctx context.Context, rp *run.Path, spec agent.Spec, promptBody, 
 		stageSpec.Env = append(stageSpec.Env, "FETTLE_EFFORT="+spec.Effort)
 	}
 
-	before, countErr := rp.CountFindingsForFile(relFile)
+	before, countErr := rp.CountFindingEntriesForFile(relFile)
 	if countErr != nil {
 		return schema.FileStatus{
 			File: relFile, Status: schema.StatusError,
@@ -539,7 +539,7 @@ func analyzeOne(ctx context.Context, rp *run.Path, spec agent.Spec, promptBody, 
 		_ = os.WriteFile(logPath, res.Output, 0o644)
 	}
 	ended := time.Now().UTC()
-	after, countErr := rp.CountFindingsForFile(relFile)
+	after, countErr := rp.CountFindingEntriesForFile(relFile)
 	if countErr != nil {
 		// findings may have been committed by the agent; we just can't
 		// count. Surface as error so the file retries; random ids mean

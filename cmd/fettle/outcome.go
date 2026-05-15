@@ -125,29 +125,38 @@ func runAddOutcome(cmd *cobra.Command, args []string) error {
 		return validationError([]string{err.Error()})
 	}
 
-	o := schema.Outcome{
+	entry := schema.OutcomeEntry{
+		Kind:   schema.SubjectFinding,
+		ID:     subject.ID,
 		Author: author,
+		At:     time.Now().UTC(),
 		Status: strings.TrimSpace(addOutcomeFlags.status),
 		PRURL:  strings.TrimSpace(addOutcomeFlags.prURL),
-		At:     time.Now().UTC(),
 	}
-	if err := rp.UpdateFinding(subject.ID, func(d *schema.FindingDoc) error {
-		d.Outcomes = append(d.Outcomes, o)
-		return nil
-	}); err != nil {
+	if err := schema.ValidateOutcomeEntry(entry); err != nil {
+		return validationError([]string{err.Error()})
+	}
+	human, agent, err := writerIdentity()
+	if err != nil {
+		return validationError([]string{err.Error()})
+	}
+	if err := rp.AppendOutcomeEntry(entry, human, agent); err != nil {
 		return internalError(fmt.Errorf("save outcome: %w", err))
+	}
+	if err := rp.Close(); err != nil {
+		return internalError(fmt.Errorf("close run: %w", err))
 	}
 	return printAddResult(map[string]any{
 		"subject": subject,
-		"at":      o.At,
-		"author":  o.Author,
+		"at":      entry.At,
+		"author":  entry.Author,
 	}, addOutcomeFlags.verbose, subject.ID)
 }
 
 // outcomeRecord is the wire shape for `list outcomes` / `show
-// outcome` output: schema.Outcome plus the synthesized Subject
-// identifying the finding, so the JSON contract stays the same as
-// before the per-finding-doc layout.
+// outcome` output: the OutcomeEntry's payload paired with a synthesized
+// {kind, id} Subject so consumers can route entries back to a finding
+// the same way they did before the on-disk layout flipped to JSONL.
 type outcomeRecord struct {
 	Subject schema.Subject `json:"subject"`
 	Author  string         `json:"author"`
@@ -156,23 +165,23 @@ type outcomeRecord struct {
 	At      time.Time      `json:"at"`
 }
 
-func toOutcomeRecord(s schema.Subject, o schema.Outcome) outcomeRecord {
-	return outcomeRecord{Subject: s, Author: o.Author, Status: o.Status, PRURL: o.PRURL, At: o.At}
-}
-
 func runListOutcomes(cmd *cobra.Command, args []string) error {
 	rp, _, err := openRunWithManifest(listOutcomesFlags.run)
 	if err != nil {
 		return err
 	}
-	flat, err := rp.LoadAllOutcomes()
+	all, err := rp.LoadOutcomeEntries()
 	if err != nil {
 		return internalError(fmt.Errorf("load outcomes: %w", err))
 	}
-	out := make([]outcomeRecord, len(flat))
-	for i, fo := range flat {
+	out := make([]outcomeRecord, len(all))
+	for i, e := range all {
 		out[i] = outcomeRecord{
-			Subject: fo.Subject, Author: fo.Author, Status: fo.Status, PRURL: fo.PRURL, At: fo.At,
+			Subject: schema.Subject{Kind: e.Kind, ID: e.ID},
+			Author:  e.Author,
+			Status:  e.Status,
+			PRURL:   e.PRURL,
+			At:      e.At,
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
@@ -192,26 +201,37 @@ func runShowOutcome(cmd *cobra.Command, args []string) error {
 		return validationError([]string{kindErr.Error()})
 	}
 
-	doc, err := rp.LoadFinding(subject.ID)
+	all, err := rp.LoadOutcomeEntries()
 	if err != nil {
-		return internalError(fmt.Errorf("load finding: %w", err))
+		return internalError(fmt.Errorf("load outcomes: %w", err))
 	}
-	matching := make([]outcomeRecord, len(doc.Outcomes))
-	for i, o := range doc.Outcomes {
-		matching[i] = toOutcomeRecord(subject, o)
+	matchingEntries := make([]schema.OutcomeEntry, 0, len(all))
+	for _, e := range all {
+		if e.Kind == subject.Kind && e.ID == subject.ID {
+			matchingEntries = append(matchingEntries, e)
+		}
 	}
-	if len(matching) == 0 {
+	if len(matchingEntries) == 0 {
 		return validationError([]string{fmt.Sprintf("no outcome events for %s %q in %s", subject.Kind, subject.ID, showOutcomeFlags.run)})
 	}
-	sort.SliceStable(matching, func(i, j int) bool { return matching[i].At.Before(matching[j].At) })
 
 	if showOutcomeFlags.all {
-		if err := printJSON(matching); err != nil {
+		// Full history — same chronological order as the resolver
+		// uses, with the (At, AuthorSlug) tie-breaker preserved.
+		history := schema.SortOutcomesChronological(matchingEntries)
+		out := make([]outcomeRecord, len(history))
+		for i, e := range history {
+			out[i] = outcomeRecord{Subject: subject, Author: e.Author, Status: e.Status, PRURL: e.PRURL, At: e.At}
+		}
+		if err := printJSON(out); err != nil {
 			return internalError(fmt.Errorf("emit outcomes: %w", err))
 		}
 		return nil
 	}
-	if err := printJSON(matching[len(matching)-1]); err != nil {
+	latest := schema.ResolveOutcome(matchingEntries)
+	if err := printJSON(outcomeRecord{
+		Subject: subject, Author: latest.Author, Status: latest.Status, PRURL: latest.PRURL, At: latest.At,
+	}); err != nil {
 		return internalError(fmt.Errorf("emit outcome: %w", err))
 	}
 	return nil
@@ -251,7 +271,7 @@ func resolveOutcomeSubject(rp *run.Path, stage string, findingID string) (schema
 	if stage != "find" {
 		return schema.Subject{}, fmt.Errorf("unsupported run stage %q for outcome", stage)
 	}
-	exists, err := rp.FindingExists(findingID)
+	exists, err := rp.FindingEntryExists(findingID)
 	if err != nil {
 		return schema.Subject{}, fmt.Errorf("check finding %q: %w", findingID, err)
 	}

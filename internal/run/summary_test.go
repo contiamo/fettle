@@ -6,12 +6,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/contiamo/fettle/internal/schema"
 )
 
-// TestSummarize_findRun verifies the JSON shape and counts when the run
-// folder has a few finding docs — some with reviews and outcomes
-// embedded — that Summarize aggregates into the row shown by
-// `fettle list runs`.
+// TestSummarize_findRun verifies the JSON shape and counts after a
+// run has been written through the new JSONL stream layout — three
+// findings, three review entries, one outcome entry. Mirrors the
+// shape every consumer of `fettle list runs` / `fettle show run`
+// depends on.
 func TestSummarize_findRun(t *testing.T) {
 	dir := t.TempDir()
 
@@ -26,15 +30,47 @@ func TestSummarize_findRun(t *testing.T) {
 }
 `
 	mustWrite(t, filepath.Join(dir, "run.json"), manifest)
-	if err := os.Mkdir(filepath.Join(dir, findingsSubdir), 0o755); err != nil {
-		t.Fatalf("mkdir findings: %v", err)
+
+	rp := &Path{dir: dir}
+	for _, f := range []struct {
+		id, file string
+	}{
+		{"a", "x.go"},
+		{"b", "y.go"},
+		{"c", "z.go"},
+	} {
+		if err := rp.AppendFindingEntry(schema.FindingEntry{
+			Kind: schema.SubjectFinding,
+			Finding: schema.Finding{
+				ID: f.id, File: f.file, Line: 1, Title: f.id,
+				CreatedBy: "agent:claude/sonnet",
+				CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+				Labels:    []string{}, References: []schema.Reference{},
+			},
+		}, "tester", "claude-sonnet"); err != nil {
+			t.Fatal(err)
+		}
 	}
-	mustWrite(t, filepath.Join(dir, findingsSubdir, "a.json"),
-		`{"id":"a","file":"x.go","line":1,"title":"A","description":"","suggestion":"","severity":null,"labels":null,"references":null,"created_by":"","created_at":"2026-01-01T00:00:00Z","reviews":[{"author":"agent:claude/sonnet","at":"2026-01-01T00:01:00Z","comment":"x"},{"author":"human:michael","at":"2026-01-01T00:02:00Z","comment":"y"}]}`+"\n")
-	mustWrite(t, filepath.Join(dir, findingsSubdir, "b.json"),
-		`{"id":"b","file":"y.go","line":2,"title":"B","description":"","suggestion":"","severity":null,"labels":null,"references":null,"created_by":"","created_at":"2026-01-01T00:00:00Z","reviews":[{"author":"human:michael","at":"2026-01-01T00:03:00Z","comment":"z"}],"outcomes":[{"author":"human:michael","status":"wontfix","at":"2026-01-01T00:04:00Z"}]}`+"\n")
-	mustWrite(t, filepath.Join(dir, findingsSubdir, "c.json"),
-		`{"id":"c","file":"z.go","line":3,"title":"C","description":"","suggestion":"","severity":null,"labels":null,"references":null,"created_by":"","created_at":"2026-01-01T00:00:00Z"}`+"\n")
+	// Three reviews across findings.
+	for i, e := range []schema.ReviewEntry{
+		{Kind: schema.SubjectFinding, ID: "a", Author: "agent:claude/sonnet", At: time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC), Add: []string{}, Remove: []string{}, Comment: "x"},
+		{Kind: schema.SubjectFinding, ID: "a", Author: "human:michael", At: time.Date(2026, 1, 1, 0, 2, 0, 0, time.UTC), Add: []string{}, Remove: []string{}, Comment: "y"},
+		{Kind: schema.SubjectFinding, ID: "b", Author: "human:michael", At: time.Date(2026, 1, 1, 0, 3, 0, 0, time.UTC), Add: []string{}, Remove: []string{}, Comment: "z"},
+	} {
+		if err := rp.AppendReviewEntry(e, "tester", ""); err != nil {
+			t.Fatalf("append review %d: %v", i, err)
+		}
+	}
+	// One outcome.
+	if err := rp.AppendOutcomeEntry(schema.OutcomeEntry{
+		Kind: schema.SubjectFinding, ID: "b", Author: "human:michael",
+		At: time.Date(2026, 1, 1, 0, 4, 0, 0, time.UTC), Status: "wontfix",
+	}, "tester", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := rp.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	s, err := Summarize(dir)
 	if err != nil {
@@ -56,8 +92,6 @@ func TestSummarize_findRun(t *testing.T) {
 		t.Errorf("Outcomes = %d, want 1", s.Counts.Outcomes)
 	}
 
-	// JSON shape stability — these tags are part of the CLI contract
-	// (`fettle list runs`, `fettle show run`).
 	b, err := json.Marshal(s)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -80,38 +114,65 @@ func TestSummarize_findRun(t *testing.T) {
 	}
 }
 
-// TestSummarize_malformedDocCountedButNotParsed: a half-written
-// finding doc still counts toward Findings (it's a file an agent
-// emitted, even if a torn write left it unreadable), but its zero
-// reviews/outcomes don't pollute the parsed totals. Locks in the
-// "Findings = ListFindingIDs len; Reviews/Outcomes = parsed sums"
-// split documented in summary.go's godoc.
-func TestSummarize_malformedDocCountedButNotParsed(t *testing.T) {
+// TestSummarize_malformedLineSkipped covers the torn-append case: a
+// findings_*.jsonl file with one good line and one corrupt line. The
+// good line counts; the bad one is skipped (the loader logs but
+// doesn't fail). Reviews / outcomes counts only reflect parsed lines.
+func TestSummarize_malformedLineSkipped(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "run.json"),
 		`{"name":"r","stage":"find","fettle_version":"0.1.0","created_at":"2026-01-01T00:00:00Z"}`+"\n")
-	if err := os.Mkdir(filepath.Join(dir, findingsSubdir), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
+
+	rp := &Path{dir: dir}
+	if err := rp.AppendFindingEntry(schema.FindingEntry{
+		Kind: schema.SubjectFinding,
+		Finding: schema.Finding{
+			ID: "good", File: "x.go", Line: 1, Title: "T",
+			CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			Labels:    []string{}, References: []schema.Reference{},
+		},
+	}, "tester", "claude"); err != nil {
+		t.Fatal(err)
 	}
-	mustWrite(t, filepath.Join(dir, findingsSubdir, "good.json"),
-		`{"id":"good","file":"x.go","line":1,"title":"T","description":"","suggestion":"","severity":null,"labels":null,"references":null,"created_by":"","created_at":"2026-01-01T00:00:00Z","reviews":[{"author":"a","at":"2026-01-01T00:01:00Z"}]}`+"\n")
-	mustWrite(t, filepath.Join(dir, findingsSubdir, "bad.json"), "not valid json")
+	if err := rp.AppendReviewEntry(schema.ReviewEntry{
+		Kind: schema.SubjectFinding, ID: "good", Author: "a",
+		At: time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC),
+		Add: []string{}, Remove: []string{},
+	}, "tester", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := rp.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Append a corrupt line to the findings file.
+	files, _ := os.ReadDir(dir)
+	for _, f := range files {
+		if strings.HasPrefix(f.Name(), "findings_") {
+			p := filepath.Join(dir, f.Name())
+			fh, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0o644)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fh.WriteString("not valid json\n")
+			fh.Close()
+		}
+	}
 
 	s, err := Summarize(dir)
 	if err != nil {
 		t.Fatalf("Summarize: %v", err)
 	}
-	if s.Counts.Findings == nil || *s.Counts.Findings != 2 {
-		t.Errorf("Findings = %v, want 2 (file count, malformed included)", s.Counts.Findings)
+	if s.Counts.Findings == nil || *s.Counts.Findings != 1 {
+		t.Errorf("Findings = %v, want 1 (malformed line skipped)", s.Counts.Findings)
 	}
 	if s.Counts.Reviews != 1 {
-		t.Errorf("Reviews = %d, want 1 (only parsed docs contribute)", s.Counts.Reviews)
+		t.Errorf("Reviews = %d, want 1", s.Counts.Reviews)
 	}
 }
 
-// TestSummarize_emptyRun: no findings/ directory yet (run created but
-// the agent hasn't written anything). Counts should all be zero, no
-// errors.
+// TestSummarize_emptyRun: run dir with only the manifest. Every
+// count is zero, no errors.
 func TestSummarize_emptyRun(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "run.json"),
@@ -129,7 +190,7 @@ func TestSummarize_emptyRun(t *testing.T) {
 }
 
 // TestCountLines_missingFile returns zero, not an error — files.jsonl
-// (the last remaining JSONL stream) may not exist on a partial run.
+// (the harness's per-file ledger) may not exist on a partial run.
 func TestCountLines_missingFile(t *testing.T) {
 	n, err := CountLines(filepath.Join(t.TempDir(), "nope.jsonl"))
 	if err != nil {

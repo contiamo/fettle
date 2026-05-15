@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"time"
 
 	"github.com/contiamo/fettle/internal/anchor"
 	"github.com/contiamo/fettle/internal/project"
@@ -61,29 +60,53 @@ func runHandler(projectDir string) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		// One pass to load every finding doc — each carries its own
-		// reviews + outcomes inline. Effective severity / labels /
-		// outcome computations all walk these docs without re-reading
-		// any per-author or per-event file.
-		docs, err := rp.LoadAllFindings()
+		// Three jsonl scans — once each over findings, reviews, and
+		// outcomes — then group reviews/outcomes by subject id so the
+		// resolver runs once per finding. The scan cost is paid up
+		// front and amortised across every finding on the page.
+		entries, err := rp.LoadFindingEntries()
 		if err != nil {
 			http.Error(w, fmt.Sprintf("load findings: %v", err), http.StatusInternalServerError)
 			return
 		}
-		findings := make([]schema.Finding, len(docs))
-		for i, d := range docs {
-			findings[i] = d.Finding
+		// Two findings_*.jsonl files could (rarely) contain the same
+		// id — second find run, resume, etc. Dedupe by id, keeping the
+		// latest CreatedAt so we never show a half-overwritten finding.
+		dedupe := make(map[string]schema.FindingEntry, len(entries))
+		for _, e := range entries {
+			if existing, ok := dedupe[e.ID]; ok && !e.CreatedAt.After(existing.CreatedAt) {
+				continue
+			}
+			dedupe[e.ID] = e
 		}
-		sevOverrides := severityOverridesFromDocs(docs)
-		lblOverrides := labelOverridesFromDocs(docs)
-		outcomeMap := outcomeStatusesFromDocs(docs)
+		findingEntries := make([]schema.FindingEntry, 0, len(dedupe))
+		for _, e := range dedupe {
+			findingEntries = append(findingEntries, e)
+		}
+		reviewsAll, err := rp.LoadReviewEntries()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("load reviews: %v", err), http.StatusInternalServerError)
+			return
+		}
+		outcomesAll, err := rp.LoadOutcomeEntries()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("load outcomes: %v", err), http.StatusInternalServerError)
+			return
+		}
+		reviewsByID := groupReviewsBySubject(reviewsAll)
+		outcomesByID := groupOutcomesBySubject(outcomesAll)
+
+		findings := make([]schema.Finding, len(findingEntries))
+		for i, e := range findingEntries {
+			findings[i] = e.Finding
+		}
+		sevOverrides := severityOverridesFromEntries(findingEntries, reviewsByID)
+		lblOverrides := labelOverridesFromEntries(findingEntries, reviewsByID)
+		outcomeMap := outcomeStatusesFromEntries(outcomesByID)
 		sortFindingsBySeverity(findings, sevOverrides)
-		// Re-pair docs to findings after the sort so pickSelected can
-		// hand its match through to buildFindingDetail without another
-		// scan.
-		docByID := make(map[string]schema.FindingDoc, len(docs))
-		for _, d := range docs {
-			docByID[d.ID] = d
+		entryByID := make(map[string]schema.FindingEntry, len(findingEntries))
+		for _, e := range findingEntries {
+			entryByID[e.ID] = e
 		}
 
 		anchors, staleCount := computeAnchorStates(manifest.TargetRepo, findings)
@@ -109,7 +132,7 @@ func runHandler(projectDir string) http.HandlerFunc {
 		focus := r.URL.Query().Get("focus")
 		selected := pickSelected(findings, focus)
 		if selected != nil {
-			detail, err := buildFindingDetail(rp, manifest, docByID[selected.ID])
+			detail, err := buildFindingDetail(rp, manifest, entryByID[selected.ID])
 			if err != nil {
 				http.Error(w, fmt.Sprintf("build detail: %v", err), http.StatusInternalServerError)
 				return
@@ -273,77 +296,115 @@ func sortFindingsBySeverity(findings []schema.Finding, overrides map[string]stri
 	})
 }
 
-// labelOverridesFromDocs returns finding-id → effective label set
-// for any finding with a reviewer label override. Per-author latest
-// non-nil entry wins; the union across authors is the resulting set.
-// A finding whose only entries are nil-labels stays out of the map
-// (no override → fall back to Finding.Labels); a finding whose
-// latest-non-nil entry is &[] stays in the map with an empty slice
-// (explicit clear).
-func labelOverridesFromDocs(docs []schema.FindingDoc) map[string][]string {
-	type stamped struct {
-		labels []string
-		at     time.Time
-	}
-	out := map[string][]string{}
-	for _, d := range docs {
-		perAuthor := map[string]stamped{}
-		any := false
-		for _, r := range d.Reviews {
-			if r.Labels == nil {
-				continue
-			}
-			any = true
-			existing, ok := perAuthor[r.Author]
-			if !ok || r.At.After(existing.at) {
-				perAuthor[r.Author] = stamped{labels: *r.Labels, at: r.At}
-			}
-		}
-		if !any {
+// groupReviewsBySubject returns finding-id → review entries
+// targeting that finding. Used by the run-page render to call
+// schema.ResolveLabels / ResolveSeverity once per finding without
+// re-scanning the full review list.
+func groupReviewsBySubject(entries []schema.ReviewEntry) map[string][]schema.ReviewEntry {
+	out := make(map[string][]schema.ReviewEntry)
+	for _, e := range entries {
+		if e.Kind != schema.SubjectFinding {
 			continue
 		}
-		seen := map[string]struct{}{}
-		for _, s := range perAuthor {
-			for _, l := range s.labels {
-				seen[l] = struct{}{}
-			}
-		}
-		u := make([]string, 0, len(seen))
-		for l := range seen {
-			u = append(u, l)
-		}
-		slices.Sort(u)
-		out[d.ID] = u
+		out[e.ID] = append(out[e.ID], e)
 	}
 	return out
 }
 
-// severityOverridesFromDocs returns finding-id → severity-string for
-// findings with a reviewer-set severity. Latest non-nil-severity
-// entry wins (across all authors); findings where every entry left
-// severity nil stay out of the map and inherit Finding.Severity at
-// display time.
-func severityOverridesFromDocs(docs []schema.FindingDoc) map[string]string {
-	out := map[string]string{}
-	for _, d := range docs {
-		var latestAt time.Time
-		var latestSev string
-		found := false
-		for _, r := range d.Reviews {
-			if r.Severity == nil {
-				continue
-			}
-			if !found || r.At.After(latestAt) {
-				latestAt = r.At
-				latestSev = *r.Severity
-				found = true
-			}
+// groupOutcomesBySubject mirrors groupReviewsBySubject for outcomes.
+func groupOutcomesBySubject(entries []schema.OutcomeEntry) map[string][]schema.OutcomeEntry {
+	out := make(map[string][]schema.OutcomeEntry)
+	for _, e := range entries {
+		if e.Kind != schema.SubjectFinding {
+			continue
 		}
-		if found {
-			out[d.ID] = latestSev
-		}
+		out[e.ID] = append(out[e.ID], e)
 	}
 	return out
+}
+
+// labelOverridesFromEntries returns finding-id → effective label set
+// when the resolver's output differs from the LLM seed. Findings whose
+// resolved set is identical to the seed (no reviewer touched labels,
+// or adds and removes cancelled out) stay out of the map so the
+// row-rendering helpers can fall back to Finding.Labels.
+func labelOverridesFromEntries(findings []schema.FindingEntry, reviewsByID map[string][]schema.ReviewEntry) map[string][]string {
+	out := map[string][]string{}
+	for _, f := range findings {
+		revs := reviewsByID[f.ID]
+		if len(revs) == 0 {
+			continue
+		}
+		resolved := schema.ResolveLabels(f.Labels, revs)
+		if labelSetsEqual(resolved, f.Labels) {
+			continue
+		}
+		out[f.ID] = resolved
+	}
+	return out
+}
+
+// severityOverridesFromEntries returns finding-id → effective
+// severity when a reviewer set one. Findings whose resolved severity
+// equals the seed stay out of the map (template falls back to
+// Finding.Severity).
+func severityOverridesFromEntries(findings []schema.FindingEntry, reviewsByID map[string][]schema.ReviewEntry) map[string]string {
+	out := map[string]string{}
+	for _, f := range findings {
+		revs := reviewsByID[f.ID]
+		if len(revs) == 0 {
+			continue
+		}
+		resolved := schema.ResolveSeverity(f.Severity, revs)
+		if resolved == nil {
+			continue
+		}
+		if f.Severity != nil && *resolved == *f.Severity {
+			continue
+		}
+		out[f.ID] = *resolved
+	}
+	return out
+}
+
+// labelSetsEqual reports set equality on two label slices (order-
+// independent, duplicate-insensitive). The resolver returns a sorted
+// set; the seed might not be sorted, so we normalise both sides.
+func labelSetsEqual(a, b []string) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	if len(a) != len(b) {
+		// Different cardinalities of *unique* labels are unequal too,
+		// but the cheap path handles the common case.
+		seenA := map[string]struct{}{}
+		for _, x := range a {
+			seenA[x] = struct{}{}
+		}
+		seenB := map[string]struct{}{}
+		for _, x := range b {
+			seenB[x] = struct{}{}
+		}
+		if len(seenA) != len(seenB) {
+			return false
+		}
+		for k := range seenA {
+			if _, ok := seenB[k]; !ok {
+				return false
+			}
+		}
+		return true
+	}
+	seen := map[string]struct{}{}
+	for _, x := range a {
+		seen[x] = struct{}{}
+	}
+	for _, x := range b {
+		if _, ok := seen[x]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // severityRankOfEffective is severityRankOf applied to the effective
@@ -399,27 +460,21 @@ func computeFacetsWithOverrides(findings []schema.Finding, sevOverrides map[stri
 	}
 }
 
-// outcomeStatusesFromDocs returns finding-id → the latest outcome
-// status for findings with at least one outcome event. Findings
-// whose outcomes[] is empty (or whose latest entry has an empty
-// status — corrupt) stay out of the map; the row's data-outcome
-// renders as "" and the rail's "no outcome" facet matches.
-func outcomeStatusesFromDocs(docs []schema.FindingDoc) map[string]string {
+// outcomeStatusesFromEntries returns finding-id → the latest outcome
+// status for findings with at least one outcome event. Calls the
+// canonical resolver per-finding so the run page agrees with the
+// detail page on what "current" means. Findings without an outcome
+// entry — or whose latest entry has an empty status — stay out of the
+// map; the row's data-outcome renders as "" and the rail's "no
+// outcome" facet matches.
+func outcomeStatusesFromEntries(outcomesByID map[string][]schema.OutcomeEntry) map[string]string {
 	out := map[string]string{}
-	for _, d := range docs {
-		var latestAt time.Time
-		var latestStatus string
-		found := false
-		for _, o := range d.Outcomes {
-			if !found || o.At.After(latestAt) {
-				latestAt = o.At
-				latestStatus = o.Status
-				found = true
-			}
+	for id, entries := range outcomesByID {
+		latest := schema.ResolveOutcome(entries)
+		if latest == nil || latest.Status == "" {
+			continue
 		}
-		if found && latestStatus != "" {
-			out[d.ID] = latestStatus
-		}
+		out[id] = latest.Status
 	}
 	return out
 }

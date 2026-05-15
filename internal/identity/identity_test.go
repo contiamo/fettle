@@ -171,13 +171,17 @@ func TestResolved_String_Shapes(t *testing.T) {
 }
 
 func TestValidateSlug(t *testing.T) {
-	good := []string{"alice", "alice_bob", "alice-bob", "Alice123"}
+	good := []string{"alice", "alice-bob", "Alice123"}
 	for _, s := range good {
 		if err := ValidateSlug(s); err != nil {
 			t.Errorf("ValidateSlug(%q) = %v, want nil", s, err)
 		}
 	}
-	bad := []string{"", "a b", "a/b", "..", "a.b"}
+	// `_` is excluded because the artifact filename format
+	// (`<kind>_<datetime>_<human>[_<agent>].jsonl`) uses `_` as its
+	// field separator — slugs containing `_` would make parsing
+	// ambiguous.
+	bad := []string{"", "a b", "a/b", "..", "a.b", "alice_bob"}
 	for _, s := range bad {
 		if err := ValidateSlug(s); err == nil {
 			t.Errorf("ValidateSlug(%q) = nil, want error", s)

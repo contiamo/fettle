@@ -22,10 +22,6 @@ import (
 	"github.com/contiamo/fettle/internal/schema"
 )
 
-// findingsSubdir is the per-run directory holding one JSON file per
-// finding. Centralised so callers don't open-code the literal.
-const findingsSubdir = "findings"
-
 // jsonlScanInitBuf and jsonlScanMaxLine size the bufio.Scanner buffer
 // `LoadDoneFiles` shares with the rest of the package — files.jsonl is
 // the last remaining JSONL stream after the per-finding-doc migration.
@@ -45,6 +41,10 @@ type Path struct {
 	dir        string
 	filesMu    sync.Mutex
 	manifestMu sync.Mutex
+	// streamsMu protects streams; see append.go for the lazy-open
+	// scheme that backs Append{Finding,Review,Outcome}Entry.
+	streamsMu sync.Mutex
+	streams   map[streamKey]*stream
 }
 
 // Dir returns the absolute path of the run folder.
@@ -80,7 +80,7 @@ func CreateForFind(opts CreateFindOpts) (*Path, error) {
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create run dir: %w", err)
 	}
-	for _, sub := range []string{"instructions", "raw", findingsSubdir} {
+	for _, sub := range []string{"instructions", "raw"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
 			return nil, fmt.Errorf("mkdir %s: %w", sub, err)
 		}
@@ -227,9 +227,14 @@ func generateName(stage, slug string) (string, error) {
 }
 
 // slugRegex is the shared validity check for run slugs and finding ids.
-// Both flow into filesystem paths (run folders and findings/<id>.json),
-// so the same character class keeps both filename-safe.
-var slugRegex = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+// Both flow into filesystem paths (run folders and the JSONL artifact
+// streams under each run), so the same character class keeps both
+// filename-safe.
+//
+// Underscore is excluded on purpose: the artifact filename format uses
+// `_` as its field separator (`<kind>_<datetime>_<human>[_<agent>].jsonl`),
+// so a slug containing `_` would break `ParseArtifactFilename`.
+var slugRegex = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
 
 // validateSlug returns an error if a non-empty run-name slug doesn't
 // match slugRegex. Empty is allowed — generateName picks a random
@@ -239,7 +244,7 @@ func validateSlug(s string) error {
 		return nil
 	}
 	if !slugRegex.MatchString(s) {
-		return fmt.Errorf("invalid run slug %q: only [A-Za-z0-9_-] allowed", s)
+		return fmt.Errorf("invalid run slug %q: only [A-Za-z0-9-] allowed", s)
 	}
 	return nil
 }

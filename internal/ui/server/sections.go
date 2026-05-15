@@ -1,101 +1,78 @@
 // Package server: review/outcome section assembly.
 //
 // The Finding detail page embeds a review form + history feed and an
-// outcome form + history feed. With the per-finding-doc storage layout
-// the doc carries both arrays inline, so the section builders just walk
-// the doc — no cross-file aggregation needed.
+// outcome form + history feed. Reviews and outcomes live in
+// per-session JSONL streams under the run directory; section
+// builders load all entries, filter to this subject, sort
+// chronologically, and feed the result into the templates view types.
 //
 // The two POST handlers (review and outcome) re-use these builders so
-// the swap response renders identically to the initial GET; the
-// re-load goes through rp.LoadFinding to pick up the entry the
-// handler just appended.
+// the swap response renders identically to the initial GET.
 
 package server
 
 import (
 	"sort"
 
+	"github.com/contiamo/fettle/internal/run"
 	"github.com/contiamo/fettle/internal/schema"
 	"github.com/contiamo/fettle/internal/ui/templates"
 )
 
-// buildReviewView walks the doc's Reviews slice and returns the
-// section view: union of latest-per-author labels (only counting
-// entries that actually touched labels), plus the chronological entry
-// list with each author's latest entry flagged. The doc is the single
-// source of truth — no separate JSONL load.
+// buildReviewView assembles the review section for one subject. It
+// loads every review entry from the run's reviews_*.jsonl streams,
+// filters to the entries that reference this finding, and renders the
+// chronological history plus the resolver-driven "current labels" set.
 //
-// Reviews are sorted by At before building entries: ordinary mutators
-// (UpdateFinding) append in time order, but a hand-edited doc could
-// be out of order. Downstream consumers (latestReviewerSeverity,
-// "IsLatest" flagging) assume chronological order, so we normalise
-// here.
-func buildReviewView(runName string, doc schema.FindingDoc) templates.ReviewSectionView {
-	reviews := make([]schema.Review, len(doc.Reviews))
-	copy(reviews, doc.Reviews)
-	sort.SliceStable(reviews, func(i, j int) bool { return reviews[i].At.Before(reviews[j].At) })
+// The current-labels set is what the template displays at the top of
+// the section ("Resolved labels: …"); it's the same value
+// schema.ResolveLabels would return for the finding, so every surface
+// in the UI sees one consistent number.
+func buildReviewView(runName string, rp *run.Path, finding schema.FindingEntry) (templates.ReviewSectionView, error) {
+	all, err := rp.LoadReviewEntries()
+	if err != nil {
+		return templates.ReviewSectionView{}, err
+	}
+	subjectReviews := filterReviewsForSubject(all, schema.SubjectFinding, finding.ID)
+	sort.SliceStable(subjectReviews, func(i, j int) bool {
+		if subjectReviews[i].At.Equal(subjectReviews[j].At) {
+			return schema.AuthorSlug(subjectReviews[i].Author) < schema.AuthorSlug(subjectReviews[j].Author)
+		}
+		return subjectReviews[i].At.Before(subjectReviews[j].At)
+	})
+
+	resolved := schema.ResolveLabels(finding.Labels, subjectReviews)
 
 	latestByAuthor := map[string]int{}
-	for i, e := range reviews {
+	for i, e := range subjectReviews {
 		j, ok := latestByAuthor[e.Author]
-		if !ok || reviews[i].At.After(reviews[j].At) {
+		if !ok || subjectReviews[i].At.After(subjectReviews[j].At) {
 			latestByAuthor[e.Author] = i
 		}
 	}
-	// "Current labels" tracks each reviewer's latest entry where
-	// Labels != nil — i.e., the last time they actually asserted
-	// something about labels. Comment-only edits (Labels = nil) don't
-	// supersede a prior override; an explicit clear (Labels = &[])
-	// does. The union across all such latest-touched entries is the
-	// label set the UI should treat as "currently in effect from the
-	// review process".
-	latestLabelsByAuthor := map[string]int{}
-	for i, e := range reviews {
-		if e.Labels == nil {
-			continue
-		}
-		j, ok := latestLabelsByAuthor[e.Author]
-		if !ok || reviews[i].At.After(reviews[j].At) {
-			latestLabelsByAuthor[e.Author] = i
-		}
-	}
-	labelSet := map[string]struct{}{}
-	for _, idx := range latestLabelsByAuthor {
-		for _, l := range *reviews[idx].Labels {
-			labelSet[l] = struct{}{}
-		}
-	}
-	currentLabels := make([]string, 0, len(labelSet))
-	for l := range labelSet {
-		currentLabels = append(currentLabels, l)
-	}
-	sort.Strings(currentLabels)
 
-	entries := make([]templates.ReviewEntryView, len(reviews))
-	for i, e := range reviews {
-		var labels []string
-		if e.Labels != nil {
-			labels = *e.Labels
-		}
+	entries := make([]templates.ReviewEntryView, len(subjectReviews))
+	for i, e := range subjectReviews {
 		entries[i] = templates.ReviewEntryView{
-			Author:        e.Author,
-			Labels:        labels,
-			LabelsTouched: e.Labels != nil,
-			Severity:      e.Severity,
-			Comment:       e.Comment,
-			At:            e.At,
-			IsLatest:      latestByAuthor[e.Author] == i,
+			Author:   e.Author,
+			Add:      e.Add,
+			Remove:   e.Remove,
+			Severity: e.Severity,
+			Comment:  e.Comment,
+			At:       e.At,
+			IsLatest: latestByAuthor[e.Author] == i,
 		}
 	}
 
-	// InitialLabels seeds the labels editor with the LLM-set labels
-	// (Finding.Labels). The reviewer curates from "what the LLM said"
-	// — adds, removes, replaces — rather than from the post-override
-	// effective set. A returning reviewer who'd already curated sees
-	// the LLM's labels again and re-applies their changes; their
-	// prior override is still visible in the entries feed below the
-	// form, so nothing's lost.
-	initial := doc.Labels
+	// InitialLabels seeds the labels editor with the *currently
+	// resolved* label set — what the reviewer sees on the finding
+	// right now — not the LLM's seed. The single-finding form posts
+	// a snapshot of the desired set, and the handler diffs it
+	// against the resolved set to produce the add/remove arrays;
+	// if InitialLabels were the seed instead, opening the editor
+	// after someone else added labels would prefill a stale set
+	// and the submit would emit spurious removes.
+	initial := resolved
 	if initial == nil {
 		initial = []string{}
 	}
@@ -104,60 +81,62 @@ func buildReviewView(runName string, doc schema.FindingDoc) templates.ReviewSect
 		RunName:       runName,
 		SubjectKind:   schema.SubjectFinding,
 		InitialLabels: initial,
-		SubjectID:     doc.ID,
-		CurrentLabels: currentLabels,
+		SubjectID:     finding.ID,
+		CurrentLabels: resolved,
 		Entries:       entries,
-	}
+	}, nil
 }
 
-// unionReviewerLabels returns the union of every per-author latest
-// entry that touched labels, plus a flag indicating whether any
-// reviewer touched labels at all. False = no override; the caller
-// falls back to the subject's own labels.
-func unionReviewerLabels(entries []templates.ReviewEntryView) ([]string, bool) {
-	latestByAuthor := map[string][]string{}
-	any := false
-	for _, e := range entries {
-		if !e.LabelsTouched {
-			continue
+// buildOutcomeView assembles the outcome section for one subject.
+// Loads every outcome entry, filters to this finding, sorts, and
+// surfaces the latest as the "current outcome" plus the chronological
+// history.
+func buildOutcomeView(runName string, rp *run.Path, subjectID string) (templates.OutcomeSectionView, error) {
+	all, err := rp.LoadOutcomeEntries()
+	if err != nil {
+		return templates.OutcomeSectionView{}, err
+	}
+	subject := filterOutcomesForSubject(all, schema.SubjectFinding, subjectID)
+	sort.SliceStable(subject, func(i, j int) bool {
+		if subject[i].At.Equal(subject[j].At) {
+			return schema.AuthorSlug(subject[i].Author) < schema.AuthorSlug(subject[j].Author)
 		}
-		any = true
-		latestByAuthor[e.Author] = e.Labels
-	}
-	if !any {
-		return nil, false
-	}
-	seen := map[string]struct{}{}
-	for _, ls := range latestByAuthor {
-		for _, l := range ls {
-			seen[l] = struct{}{}
-		}
-	}
-	out := make([]string, 0, len(seen))
-	for l := range seen {
-		out = append(out, l)
-	}
-	sort.Strings(out)
-	return out, true
-}
-
-// buildOutcomeView walks the doc's Outcomes slice and returns the
-// section view: chronological history with the last entry also
-// surfaced as Latest. Empty history yields a nil Latest so the
-// template can render the "no outcome yet" branch.
-func buildOutcomeView(runName string, doc schema.FindingDoc) templates.OutcomeSectionView {
-	history := make([]schema.Outcome, len(doc.Outcomes))
-	copy(history, doc.Outcomes)
-	sort.SliceStable(history, func(i, j int) bool { return history[i].At.Before(history[j].At) })
+		return subject[i].At.Before(subject[j].At)
+	})
 
 	view := templates.OutcomeSectionView{
 		RunName:     runName,
 		SubjectKind: schema.SubjectFinding,
-		SubjectID:   doc.ID,
-		History:     history,
+		SubjectID:   subjectID,
+		History:     subject,
 	}
-	if len(history) > 0 {
-		view.Latest = &history[len(history)-1]
+	if len(subject) > 0 {
+		latest := subject[len(subject)-1]
+		view.Latest = &latest
 	}
-	return view
+	return view, nil
+}
+
+// filterReviewsForSubject returns the subset of entries whose
+// (kind, id) matches.
+func filterReviewsForSubject(entries []schema.ReviewEntry, kind, id string) []schema.ReviewEntry {
+	out := make([]schema.ReviewEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.Kind == kind && e.ID == id {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// filterOutcomesForSubject returns the subset of entries whose
+// (kind, id) matches.
+func filterOutcomesForSubject(entries []schema.OutcomeEntry, kind, id string) []schema.OutcomeEntry {
+	out := make([]schema.OutcomeEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.Kind == kind && e.ID == id {
+			out = append(out, e)
+		}
+	}
+	return out
 }

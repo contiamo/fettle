@@ -1,7 +1,13 @@
-// Package project owns the fettle project directory: the .fettle/
-// subdir holds every artifact fettle owns (config.json, instructions/,
-// runs/), so a fettle project can sit alongside an existing git repo
-// without polluting its root.
+// Package project owns the fettle project directory. A project is any
+// directory containing a `fettle.json` at its root; that file is both
+// the on-disk config and the marker discovery uses to tell "this is a
+// fettle project" from any other folder.
+//
+// The project dir's name is whatever the user picked at `fettle init`
+// time — `fettle init foobar` makes `foobar/` the project root,
+// `fettle init .` makes the cwd the project root. Subsequent commands
+// find it by upward-walk from cwd, or by the `--project-dir` flag /
+// `FETTLE_PROJECT_DIR` env override.
 package project
 
 import (
@@ -15,23 +21,22 @@ import (
 	"time"
 )
 
-// stubFS holds the per-stage prompt templates `fettle init` writes into
-// .fettle/instructions/. They're proper markdown files in stubs/, not
-// Go const strings, so they're easy to edit with normal markdown tooling.
+// stubFS holds the per-stage prompt templates `fettle init` writes
+// into the project's instructions/ subdirectory.
 //
 //go:embed stubs/*.md
 var stubFS embed.FS
 
-// Version is the fettle version stamped into config.json on init.
+// Version is the fettle version stamped into fettle.json on init.
 const Version = "0.1.0"
 
-// Subdir is the per-project directory that holds every fettle artifact:
-// config.json, instructions/, runs/. Mirrors the .git / .cargo / .cache
-// convention so fettle stays out of the host repo's root.
-const Subdir = ".fettle"
+// ConfigName is the project's manifest filename. Its presence at the
+// root of a directory is what marks that directory as a fettle project.
+const ConfigName = "fettle.json"
 
-// ConfigFile is the manifest filename inside Subdir.
-const ConfigFile = "config.json"
+// ErrNotInProject is returned by FindProjectDir when no fettle.json
+// can be found by upward-walking from the starting directory.
+var ErrNotInProject = errors.New("not inside a fettle project (no fettle.json found upward from cwd)")
 
 // Walker values for Config.Walker. WalkerGit (default) goes through
 // `git ls-files` so `.gitignore` rules are honoured automatically.
@@ -41,25 +46,56 @@ const (
 	WalkerFS  = "fs"
 )
 
-// ConfigPath returns the absolute path to a project's config.json given
-// the project's host directory. Centralised so callers don't open-code
-// the join.
+// ConfigPath returns the absolute path to a project's fettle.json.
 func ConfigPath(dir string) string {
-	return filepath.Join(dir, Subdir, ConfigFile)
+	return filepath.Join(dir, ConfigName)
 }
 
-// RunsDir returns the absolute path to a project's runs/ directory
-// given its host directory. Run folders live under .fettle/runs/.
+// RunsDir returns the absolute path to a project's runs/ directory.
 func RunsDir(dir string) string {
-	return filepath.Join(dir, Subdir, "runs")
+	return filepath.Join(dir, "runs")
 }
 
-// Config is the on-disk shape of <project>/.fettle/config.json.
+// InstructionsDir returns the absolute path to a project's
+// instructions/ directory.
+func InstructionsDir(dir string) string {
+	return filepath.Join(dir, "instructions")
+}
+
+// FindProjectDir upward-walks from startDir looking for a directory
+// containing a fettle.json. Returns the absolute path of the directory
+// that holds it, or ErrNotInProject when the walk hits the filesystem
+// root without finding one.
+//
+// Used by every command except `fettle init` itself: init takes its
+// target as a positional argument so it can create the project
+// wherever the user names; everything else upward-walks like
+// `git`/`hg`/`go` to let invocation from any subdirectory just work.
+func FindProjectDir(startDir string) (string, error) {
+	dir, err := filepath.Abs(startDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve start dir: %w", err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ConfigName)); err == nil {
+			return dir, nil
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return "", fmt.Errorf("stat %s: %w", filepath.Join(dir, ConfigName), err)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", ErrNotInProject
+		}
+		dir = parent
+	}
+}
+
+// Config is the on-disk shape of <project>/fettle.json.
 type Config struct {
-	FettleVersion string       `json:"fettle_version"`
-	CreatedAt     time.Time    `json:"created_at"`
-	TargetRepo    string       `json:"target_repo"`
-	Agent         AgentRef     `json:"agent"`
+	FettleVersion string   `json:"fettle_version"`
+	CreatedAt     time.Time `json:"created_at"`
+	TargetRepo    string   `json:"target_repo"`
+	Agent         AgentRef `json:"agent"`
 	// Walker chooses how files are enumerated in the target repo:
 	// WalkerGit (default) honours .gitignore; WalkerFS walks the
 	// filesystem and filters only by Include/Exclude.
@@ -69,20 +105,17 @@ type Config struct {
 	Instructions Instructions `json:"instructions"`
 }
 
-// AgentRef points at the agent fettle invokes for a stage. Set Name to
-// "claude" or "codex" for built-in dispatch, or set Script to a path
-// for a custom wrapper (see internal/agent.runCustom for the env
-// contract scripts can rely on).
+// AgentRef points at the agent fettle invokes for a stage.
 type AgentRef struct {
 	Name   string `json:"name,omitempty"`
 	Model  string `json:"model,omitempty"`
 	Script string `json:"script,omitempty"`
 }
 
-// Instructions points at the editable prompt templates, relative to the
-// project's host directory (the same dir that contains .fettle/). The
-// defaults live under .fettle/instructions/ but a user is free to point
-// at any path they want — fettle reads them verbatim.
+// Instructions points at the editable prompt templates, relative to
+// the project directory. Defaults live under instructions/ at the
+// project root but a user is free to point at any path they want —
+// fettle reads them verbatim.
 type Instructions struct {
 	Find   string `json:"find"`
 	Review string `json:"review"`
@@ -90,13 +123,9 @@ type Instructions struct {
 
 // NewConfig assembles the Config that `init` writes. include and
 // exclude come from the user's flags — there's no
-// project-independent default for include that does the right
-// thing, so the caller (`cmd/fettle`) is responsible for
-// collecting them and rejecting an empty include list before
-// reaching this function.
-//
-// The walker hard-skips .git / .hg / .svn / node_modules regardless
-// of globs.
+// project-independent default for include that does the right thing,
+// so the caller is responsible for collecting them and rejecting an
+// empty include list before reaching this function.
 func NewConfig(targetRepo, agent, model, walker string, include, exclude []string) Config {
 	if include == nil {
 		include = []string{}
@@ -116,14 +145,15 @@ func NewConfig(targetRepo, agent, model, walker string, include, exclude []strin
 		Include:       include,
 		Exclude:       exclude,
 		Instructions: Instructions{
-			Find:   filepath.Join(Subdir, "instructions", "find.md"),
-			Review: filepath.Join(Subdir, "instructions", "review.md"),
+			Find:   filepath.Join("instructions", "find.md"),
+			Review: filepath.Join("instructions", "review.md"),
 		},
 	}
 }
 
-// Init writes a fresh fettle project at dir. Fails if .fettle/config.json
-// already exists; existing instruction stubs are preserved.
+// Init writes a fresh fettle project at dir. Caller is responsible
+// for the directory existing and being empty (or being safe to add to);
+// Init only populates it. Fails if fettle.json already exists.
 func Init(dir string, cfg Config) error {
 	cfgPath := ConfigPath(dir)
 	if _, err := os.Stat(cfgPath); err == nil {
@@ -132,14 +162,12 @@ func Init(dir string, cfg Config) error {
 		return fmt.Errorf("stat %s: %w", cfgPath, err)
 	}
 
-	insDir := filepath.Join(dir, Subdir, "instructions")
-	if err := os.MkdirAll(insDir, 0o755); err != nil {
+	if err := os.MkdirAll(InstructionsDir(dir), 0o755); err != nil {
 		return fmt.Errorf("create instructions/: %w", err)
 	}
-	if err := writeStubs(insDir); err != nil {
+	if err := writeStubs(InstructionsDir(dir)); err != nil {
 		return err
 	}
-
 	if err := os.MkdirAll(RunsDir(dir), 0o755); err != nil {
 		return fmt.Errorf("create runs/: %w", err)
 	}
@@ -154,7 +182,7 @@ func Init(dir string, cfg Config) error {
 	return nil
 }
 
-// Load reads .fettle/config.json from a project's host directory.
+// Load reads fettle.json from a project's directory.
 func Load(dir string) (Config, error) {
 	var cfg Config
 	cfgPath := ConfigPath(dir)
@@ -169,10 +197,9 @@ func Load(dir string) (Config, error) {
 }
 
 // ResolveTargetRepo returns the target repo as an absolute path,
-// treating a relative `target_repo` as relative to projectDir (the
-// host directory containing .fettle/). This lets a committed config
-// portably reference a target via "../.." (or similar) without baking
-// in machine-specific absolute paths.
+// treating a relative `target_repo` as relative to projectDir. This
+// lets a committed config portably reference a target via "../.."
+// (or similar) without baking in machine-specific absolute paths.
 func (c Config) ResolveTargetRepo(projectDir string) (string, error) {
 	if filepath.IsAbs(c.TargetRepo) {
 		return c.TargetRepo, nil

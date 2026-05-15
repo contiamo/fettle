@@ -232,12 +232,17 @@ templ reviewEntry(e ReviewEntryView) {
 			</div>
 			<span class="text-muted-foreground tabular-nums">{ e.At.Format("2006-01-02 15:04 MST") }</span>
 		</div>
-		if e.LabelsTouched {
-			if len(e.Labels) > 0 {
-				@LabelChips(e.Labels)
-			} else {
-				@EmptyHint("cleared labels")
-			}
+		if len(e.Add) > 0 {
+			<div class="flex items-baseline gap-2 flex-wrap text-xs">
+				<span class="text-muted-foreground shrink-0">added</span>
+				@LabelChips(e.Add)
+			</div>
+		}
+		if len(e.Remove) > 0 {
+			<div class="flex items-baseline gap-2 flex-wrap text-xs">
+				<span class="text-muted-foreground shrink-0">removed</span>
+				@LabelChips(e.Remove)
+			</div>
 		}
 		if strings.TrimSpace(e.Comment) != "" {
 			<p class="text-[13.5px] text-foreground whitespace-pre-wrap leading-relaxed">

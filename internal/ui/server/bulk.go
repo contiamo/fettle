@@ -6,10 +6,11 @@
 //
 // The matching/exclude semantics described on the client side
 // (findings.ts) are resolved into a flat ids list before the request
-// hits this layer — the wire format is always {finding_ids: [...]}
-// plus the same Labels/Severity/Comment fields the per-finding form
-// accepts. Each id flows through a separate UpdateFinding call; the
-// docs are independent files so there's no shared lock to contend on.
+// hits this layer. The wire format is {finding_ids: [...]} plus
+// add_label / remove_label / severity / comment. Each id appends one
+// ReviewEntry to the same reviews_*.jsonl stream — same author/at,
+// same delta — so the bulk action reads as a single coherent
+// audit-trail block.
 
 package server
 
@@ -68,28 +69,63 @@ func bulkReviewHandler(projectDir string) http.HandlerFunc {
 			}
 		}
 
-		labels := parseReviewLabels(r.PostForm)
+		// Bulk reviews carry a label delta (add/remove arrays) directly
+		// — there's no per-finding "current" to diff against because
+		// each finding has its own resolved set. The UI form sends
+		// `labels` (additive — the bulk editor only ever asks "add
+		// these"); programmatic callers can also send `add_label`
+		// and `remove_label` for explicit removal.
+		addLabels := parseLabels(strings.Join(append(
+			append([]string(nil), r.PostForm["labels"]...),
+			r.PostForm["add_label"]...,
+		), ","))
+		removeLabels := parseLabels(strings.Join(r.PostForm["remove_label"], ","))
 		severity := parseReviewSeverity(r.FormValue("severity"))
 		comment := strings.TrimSpace(r.FormValue("comment"))
-		if labels == nil && severity == nil && comment == "" {
-			http.Error(w, "set at least one of labels, severity, or comment", http.StatusBadRequest)
+		if len(addLabels) == 0 && len(removeLabels) == 0 && severity == nil && comment == "" {
+			http.Error(w, "set at least one of labels, add_label, remove_label, severity, or comment", http.StatusBadRequest)
+			return
+		}
+		if overlap, ok := firstSharedLabel(addLabels, removeLabels); ok {
+			http.Error(w, fmt.Sprintf("label %q appears in both add and remove", overlap), http.StatusBadRequest)
+			return
+		}
+
+		human, agent, err := uiWriterIdentity(ident)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("resolve writer identity: %v", err), http.StatusInternalServerError)
 			return
 		}
 
 		now := time.Now().UTC()
 		stamp := ident.String()
+		defer rp.Close()
+		// Validate one representative entry up front. Add/Remove/
+		// Severity/Comment are identical across ids; the only thing
+		// that varies is the subject id, which we already validated
+		// against the run's id set above. Failing here surfaces
+		// "invalid payload" once with a 400 instead of N times with
+		// 500s.
+		probe := schema.ReviewEntry{
+			Kind: schema.SubjectFinding, ID: ids[0], Author: stamp, At: now,
+			Add: addLabels, Remove: removeLabels, Severity: severity, Comment: comment,
+		}
+		if err := schema.ValidateReviewEntry(probe); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		for _, id := range ids {
-			entry := schema.Review{
+			entry := schema.ReviewEntry{
+				Kind:     schema.SubjectFinding,
+				ID:       id,
 				Author:   stamp,
-				Labels:   labels,
+				At:       now,
+				Add:      addLabels,
+				Remove:   removeLabels,
 				Severity: severity,
 				Comment:  comment,
-				At:       now,
 			}
-			if err := rp.UpdateFinding(id, func(d *schema.FindingDoc) error {
-				d.Reviews = append(d.Reviews, entry)
-				return nil
-			}); err != nil {
+			if err := rp.AppendReviewEntry(entry, human, agent); err != nil {
 				http.Error(w, fmt.Sprintf("save review for %s: %v", id, err), http.StatusInternalServerError)
 				return
 			}
@@ -121,18 +157,35 @@ func openRunForBulkMutation(w http.ResponseWriter, r *http.Request, projectDir s
 	return name, rp, true
 }
 
+// firstSharedLabel returns the first label in a that also appears
+// in b (with `true`), or `"", false` if there is no overlap. Used by
+// the bulk handler to surface "label X is in both add and remove"
+// as a 400 before the entry hits AppendReviewEntry's validator.
+func firstSharedLabel(a, b []string) (string, bool) {
+	bset := make(map[string]struct{}, len(b))
+	for _, l := range b {
+		bset[l] = struct{}{}
+	}
+	for _, l := range a {
+		if _, ok := bset[l]; ok {
+			return l, true
+		}
+	}
+	return "", false
+}
+
 // loadFindingIDSet returns the set of finding ids in the run for
-// existence-checks. ListFindingIDs walks the findings/ directory
-// directly — much cheaper than parsing every doc just to know which
-// ids are valid.
+// existence-checks. Scans every findings_*.jsonl stream once and
+// builds a small set — cheap enough at the cardinalities fettle
+// targets that a persistent index isn't worth the bookkeeping.
 func loadFindingIDSet(rp *run.Path) (map[string]struct{}, error) {
-	ids, err := rp.ListFindingIDs()
+	entries, err := rp.LoadFindingEntries()
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		out[id] = struct{}{}
+	out := make(map[string]struct{}, len(entries))
+	for _, e := range entries {
+		out[e.ID] = struct{}{}
 	}
 	return out, nil
 }

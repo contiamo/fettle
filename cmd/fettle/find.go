@@ -111,19 +111,24 @@ func runShowFinding(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	doc, err := rp.LoadFinding(id)
+	entries, err := rp.LoadFindingEntries()
 	if err != nil {
-		var nf run.FindingNotFoundError
-		if errors.As(err, &nf) {
-			return validationError([]string{fmt.Sprintf("finding %q not found in %s", id, showFindingFlags.run)})
-		}
-		return internalError(fmt.Errorf("load finding: %w", err))
+		return internalError(fmt.Errorf("load findings: %w", err))
 	}
-	// `show finding` returns just the finding fields, not the embedded
-	// review/outcome history — that's what `show review` / `show outcome`
-	// are for, and keeping them split preserves the JSON contract from
-	// before the per-finding-doc layout.
-	if err := printJSON(doc.Finding); err != nil {
+	var match *schema.FindingEntry
+	for i, e := range entries {
+		if e.ID == id {
+			if match == nil || e.CreatedAt.After(match.CreatedAt) {
+				match = &entries[i]
+			}
+		}
+	}
+	if match == nil {
+		return validationError([]string{fmt.Sprintf("finding %q not found in %s", id, showFindingFlags.run)})
+	}
+	// `show finding` returns just the finding fields, not its review /
+	// outcome history — those go through `show review` / `show outcome`.
+	if err := printJSON(match.Finding); err != nil {
 		return internalError(fmt.Errorf("emit finding: %w", err))
 	}
 	return nil
@@ -134,13 +139,24 @@ func runListFindings(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	docs, err := rp.LoadAllFindings()
+	entries, err := rp.LoadFindingEntries()
 	if err != nil {
 		return internalError(fmt.Errorf("load findings: %w", err))
 	}
-	out := make([]schema.Finding, len(docs))
-	for i, d := range docs {
-		out[i] = d.Finding
+	// Dedupe by id: two findings_*.jsonl files in the same run (rare —
+	// would mean fettle find ran twice on a resume path) shouldn't
+	// cause the list to surface the same finding twice. Latest
+	// CreatedAt wins.
+	dedupe := make(map[string]schema.FindingEntry, len(entries))
+	for _, e := range entries {
+		if existing, ok := dedupe[e.ID]; ok && !e.CreatedAt.After(existing.CreatedAt) {
+			continue
+		}
+		dedupe[e.ID] = e
+	}
+	out := make([]schema.Finding, 0, len(dedupe))
+	for _, e := range dedupe {
+		out = append(out, e.Finding)
 	}
 	if err := printJSON(out); err != nil {
 		return internalError(fmt.Errorf("emit findings: %w", err))
@@ -245,7 +261,8 @@ func runAddFinding(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	doc := schema.FindingDoc{
+	entry := schema.FindingEntry{
+		Kind: schema.SubjectFinding,
 		Finding: schema.Finding{
 			ID:          schema.NewFindingID(),
 			File:        addFindingFlags.file,
@@ -261,10 +278,44 @@ func runAddFinding(cmd *cobra.Command, args []string) error {
 			CreatedAt:   time.Now().UTC(),
 		},
 	}
-	if err := rp.WriteFinding(doc); err != nil {
+	human, agent, err := writerIdentity()
+	if err != nil {
+		return validationError([]string{err.Error()})
+	}
+	if err := rp.AppendFindingEntry(entry, human, agent); err != nil {
 		return internalError(fmt.Errorf("write finding: %w", err))
 	}
-	return printAddResult(map[string]any{"id": doc.ID}, addFindingFlags.verbose, doc.ID)
+	if err := rp.Close(); err != nil {
+		return internalError(fmt.Errorf("close run: %w", err))
+	}
+	return printAddResult(map[string]any{"id": entry.ID}, addFindingFlags.verbose, entry.ID)
+}
+
+// writerIdentity returns the (human, agent) slug pair the writer
+// should stamp into the artifact filename. agent is "" for purely
+// human-driven invocations. The human comes from
+// identity.ResolveOperator (its chain falls through to the OS user
+// so brand-new installs work without prior setup); the agent comes
+// from $FETTLE_AGENT (+ $FETTLE_MODEL when set), sanitised through
+// run.SanitizeAgentSlug.
+func writerIdentity() (human, agent string, err error) {
+	human, err = identity.ResolveOperator()
+	if err != nil {
+		return "", "", err
+	}
+	name := strings.TrimSpace(os.Getenv(fettleAgentEnv))
+	if name == "" {
+		return human, "", nil
+	}
+	combined := name
+	if model := strings.TrimSpace(os.Getenv(fettleModelEnv)); model != "" {
+		combined = name + "/" + model
+	}
+	agent, err = run.SanitizeAgentSlug(combined)
+	if err != nil {
+		return "", "", err
+	}
+	return human, agent, nil
 }
 
 // stamp returns the canonical author/created_by string for the

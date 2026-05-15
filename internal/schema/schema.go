@@ -8,28 +8,11 @@ import (
 	"time"
 )
 
-// FindingDoc is the on-disk shape of `runs/<run>/findings/<id>.json`. It
-// embeds the finding fields a `find`-stage agent emits, plus the
-// chronological histories of reviews and outcomes that have been recorded
-// against this finding. The file path identifies the finding, so neither
-// Reviews[] nor Outcomes[] entries carry a Subject — that's synthesized at
-// the boundary by CLI / API consumers that need flat output.
-//
-// FindingDoc is the storage type. The plain Finding (below) is what callers
-// emit when they want "just the finding": `fettle show finding`,
-// `fettle list findings`, and the review-agent SUBJECT_JSON prompt
-// variable. Keeping the two split means the agent's prompt isn't polluted
-// with prior-review history at review time, and the CLI output contract
-// stays compatible with what a consumer of `findings.jsonl` used to see.
-type FindingDoc struct {
-	Finding
-	Reviews  []Review  `json:"reviews,omitempty"`
-	Outcomes []Outcome `json:"outcomes,omitempty"`
-}
-
-// Finding is one issue produced by `fettle find`. On disk it lives inside
-// FindingDoc; in memory and on the wire it's emitted standalone wherever
-// callers want the finding without its review/outcome histories.
+// Finding is the LLM-emitted payload of one issue. It's embedded in
+// FindingEntry on disk (see entries.go), and also surfaced standalone
+// wherever the CLI / UI needs the finding without its review history
+// (`fettle show finding`, `fettle list findings`, the review-agent
+// SUBJECT_JSON prompt variable).
 type Finding struct {
 	ID          string      `json:"id"`
 	File        string      `json:"file"`
@@ -98,40 +81,6 @@ const (
 	SubjectFinding = "finding"
 )
 
-// Review is one entry in a finding's reviews[] array. Append-only history;
-// each entry is the writing author's update to the finding. Author is
-// the canonical attribution stamp (`human:<slug>` or
-// `agent:<slug>[/<model>]`). nil-don't-touch semantics on Labels and
-// Severity let a comment-only entry sit on top of a prior override
-// without wiping it; see field comments.
-type Review struct {
-	Author string `json:"author"`
-	// Labels uses pointer-to-slice to distinguish three states:
-	//   nil           — reviewer didn't touch labels on this entry,
-	//                   their prior override (if any) carries forward,
-	//                   otherwise the LLM's Finding.Labels stay in effect.
-	//   &[]           — explicit clear: the reviewer is asserting "no
-	//                   labels on this finding from me" and the LLM's
-	//                   set is suppressed (when no other reviewer has
-	//                   added back into the union).
-	//   &["a", "b"]   — these labels are this reviewer's current set,
-	//                   replacing any prior override they made.
-	// Effective labels for a finding = union of every reviewer's
-	// latest non-nil Labels override, falling back to Finding.Labels
-	// when no reviewer has touched labels.
-	Labels *[]string `json:"labels,omitempty"`
-	// Severity, when non-nil, is the reviewer's judgment that
-	// overrides the LLM's initial Finding.Severity for display and
-	// sorting. nil means "no judgment" — defer to the find-time
-	// value. The effective severity for a finding at any point in
-	// time is "the latest review entry whose Severity is non-nil,
-	// across all reviewers", falling back to Finding.Severity when
-	// no reviewer has set one.
-	Severity *string   `json:"severity,omitempty"`
-	Comment  string    `json:"comment,omitempty"`
-	At       time.Time `json:"at"`
-}
-
 // RunManifest is the contents of run.json.
 type RunManifest struct {
 	Name          string         `json:"name"`
@@ -176,17 +125,6 @@ func NewFindingID() string {
 		panic("crypto/rand: " + err.Error())
 	}
 	return hex.EncodeToString(b[:])
-}
-
-// Outcome is one entry in a finding's outcomes[] array — a record of
-// what happened to the finding (PR merged, won't fix, etc.). Append-only;
-// latest entry wins for "current state" display, but the full history is
-// preserved.
-type Outcome struct {
-	Author string    `json:"author"`
-	Status string    `json:"status"`
-	PRURL  string    `json:"pr_url,omitempty"`
-	At     time.Time `json:"at"`
 }
 
 // AuthorSlug strips the `human:` / `agent:` prefix and any `/<model>`

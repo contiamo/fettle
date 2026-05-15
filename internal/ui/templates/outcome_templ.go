@@ -94,7 +94,7 @@ func OutcomeSection(v OutcomeSectionView) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "\" hx-target=\"#outcome-section\" hx-swap=\"outerHTML\" class=\"space-y-3 rounded-md border border-border bg-card p-3.5\"><div class=\"grid grid-cols-1 sm:grid-cols-3 gap-3\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "\" hx-target=\"#outcome-section\" hx-swap=\"outerHTML\" class=\"space-y-3 rounded-md border border-border bg-card p-3.5\"><div class=\"flex flex-col sm:flex-row gap-3\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -303,7 +303,7 @@ func OutcomeSection(v OutcomeSectionView) templ.Component {
 				}
 				return nil
 			})
-			templ_7745c5c3_Err = form.Item(form.ItemProps{Class: "sm:col-span-1"}).Render(templ.WithChildren(ctx, templ_7745c5c3_Var3), templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = form.Item(form.ItemProps{Class: "sm:w-56 sm:shrink-0"}).Render(templ.WithChildren(ctx, templ_7745c5c3_Var3), templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -358,7 +358,10 @@ func OutcomeSection(v OutcomeSectionView) templ.Component {
 				}
 				return nil
 			})
-			templ_7745c5c3_Err = form.Item(form.ItemProps{Class: "sm:col-span-2"}).Render(templ.WithChildren(ctx, templ_7745c5c3_Var12), templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = form.Item(form.ItemProps{
+				Class:      "sm:flex-1",
+				Attributes: templ.Attributes{"hidden": true, "data-outcome-status-other": true},
+			}).Render(templ.WithChildren(ctx, templ_7745c5c3_Var12), templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -437,7 +440,7 @@ func OutcomeSection(v OutcomeSectionView) templ.Component {
 					var templ_7745c5c3_Var17 string
 					templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(v.Error)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/templates/outcome.templ`, Line: 93, Col: 15}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/templates/outcome.templ`, Line: 96, Col: 15}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 					if templ_7745c5c3_Err != nil {
@@ -510,7 +513,7 @@ func OutcomeSection(v OutcomeSectionView) templ.Component {
 	})
 }
 
-func outcomeEntry(o schema.Outcome, isLatest bool) templ.Component {
+func outcomeEntry(o schema.OutcomeEntry, isLatest bool) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -560,7 +563,7 @@ func outcomeEntry(o schema.Outcome, isLatest bool) templ.Component {
 		var templ_7745c5c3_Var20 string
 		templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.JoinStringErrs(o.At.Format("2006-01-02 15:04 MST"))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/templates/outcome.templ`, Line: 126, Col: 89}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/templates/outcome.templ`, Line: 129, Col: 89}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var20))
 		if templ_7745c5c3_Err != nil {
@@ -578,7 +581,7 @@ func outcomeEntry(o schema.Outcome, isLatest bool) templ.Component {
 			var templ_7745c5c3_Var21 templ.SafeURL
 			templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(o.PRURL))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/templates/outcome.templ`, Line: 129, Col: 35}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/templates/outcome.templ`, Line: 132, Col: 35}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var21))
 			if templ_7745c5c3_Err != nil {
@@ -591,7 +594,7 @@ func outcomeEntry(o schema.Outcome, isLatest bool) templ.Component {
 			var templ_7745c5c3_Var22 string
 			templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinStringErrs(o.PRURL)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/templates/outcome.templ`, Line: 129, Col: 112}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/ui/templates/outcome.templ`, Line: 132, Col: 112}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var22))
 			if templ_7745c5c3_Err != nil {

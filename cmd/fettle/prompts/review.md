@@ -40,17 +40,19 @@ For each subject you decide to label, run a single shell command:
 ```bash
 fettle add review \
   --{{.SubjectKind}} '{{.SubjectID}}' \
-  --label confirmed \
-  --label 'category:something' \
+  --add-label confirmed \
+  --add-label 'category:something' \
   --comment 'Brief reasoning.'
 ```
 
 **Required**: exactly one of `--{{.SubjectKind}} '{{.SubjectID}}'`
-(other subject kind is rejected for this run); at least one
-`--label` or a `--comment`.
+(other subject kind is rejected for this run); at least one of
+`--add-label`, `--remove-label`, `--severity`, or `--comment`.
 
-**Optional**: more `--label` flags (repeatable, `prefix:value`
-convention); a `--comment` for free-form reasoning.
+**Optional**: more `--add-label` flags (repeatable, `prefix:value`
+convention); `--remove-label` to drop labels from the finding's
+effective set; `--severity X` to set the reviewer's severity
+judgement; a `--comment` for free-form reasoning.
 
 **Shell quoting**: wrap every string flag in single quotes so spaces
 and shell metacharacters pass through unchanged. For literal single

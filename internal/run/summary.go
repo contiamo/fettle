@@ -35,14 +35,12 @@ type Counts struct {
 
 // Summarize reads the manifest, counts the records in the run folder,
 // and returns the row shown by `fettle list runs` / `fettle show run`.
-// Missing artifacts (no findings/ dir on a fresh run) contribute zero
+// Missing artifacts (empty run dir, no findings yet) contribute zero
 // counts so partial runs render cleanly.
 //
-// Findings count = number of `findings/<id>.json` files (including
-// any that fail to parse — the file existing means an agent emitted
-// a finding, even if a torn write left it unreadable). Reviews and
-// outcomes counts walk the parsed docs and skip malformed ones; a
-// rebuild after a crash will surface the warning during render.
+// Counts dedupe by id within a stream (rare — same id in two
+// findings_*.jsonl files only happens on a re-run / resume) so the
+// number reflects "distinct findings" rather than "lines written."
 func Summarize(runDir string) (Summary, error) {
 	rp, err := Open(runDir)
 	if err != nil {
@@ -53,20 +51,23 @@ func Summarize(runDir string) (Summary, error) {
 		return Summary{}, err
 	}
 
-	ids, err := rp.ListFindingIDs()
-	if err != nil {
-		return Summary{}, fmt.Errorf("list findings: %w", err)
-	}
-	findingCount := len(ids)
-
-	docs, err := rp.LoadAllFindings()
+	findings, err := rp.LoadFindingEntries()
 	if err != nil {
 		return Summary{}, fmt.Errorf("load findings: %w", err)
 	}
-	reviews, outcomes := 0, 0
-	for _, d := range docs {
-		reviews += len(d.Reviews)
-		outcomes += len(d.Outcomes)
+	seenFindings := make(map[string]struct{}, len(findings))
+	for _, f := range findings {
+		seenFindings[f.ID] = struct{}{}
+	}
+	findingCount := len(seenFindings)
+
+	reviewEntries, err := rp.LoadReviewEntries()
+	if err != nil {
+		return Summary{}, fmt.Errorf("load reviews: %w", err)
+	}
+	outcomeEntries, err := rp.LoadOutcomeEntries()
+	if err != nil {
+		return Summary{}, fmt.Errorf("load outcomes: %w", err)
 	}
 	return Summary{
 		Name:        m.Name,
@@ -74,7 +75,7 @@ func Summarize(runDir string) (Summary, error) {
 		CreatedAt:   m.CreatedAt,
 		CompletedAt: m.CompletedAt,
 		TargetRepo:  m.TargetRepo,
-		Counts:      Counts{Findings: &findingCount, Reviews: reviews, Outcomes: outcomes},
+		Counts:      Counts{Findings: &findingCount, Reviews: len(reviewEntries), Outcomes: len(outcomeEntries)},
 	}, nil
 }
 

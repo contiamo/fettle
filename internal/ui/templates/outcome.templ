@@ -33,8 +33,8 @@ templ OutcomeSection(v OutcomeSectionView) {
 				hx-swap="outerHTML"
 				class="space-y-3 rounded-md border border-border bg-card p-3.5"
 			>
-				<div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-					@form.Item(form.ItemProps{Class: "sm:col-span-1"}) {
+				<div class="flex flex-col sm:flex-row gap-3">
+					@form.Item(form.ItemProps{Class: "sm:w-56 sm:shrink-0"}) {
 						@form.Label(form.LabelProps{For: "outcome-status"}) {
 							Status
 						}
@@ -61,7 +61,10 @@ templ OutcomeSection(v OutcomeSectionView) {
 							}
 						}
 					}
-					@form.Item(form.ItemProps{Class: "sm:col-span-2"}) {
+					@form.Item(form.ItemProps{
+						Class:      "sm:flex-1",
+						Attributes: templ.Attributes{"hidden": true, "data-outcome-status-other": true},
+					}) {
 						@form.Label(form.LabelProps{For: "outcome-status-other"}) {
 							Status (if other)
 						}
@@ -112,7 +115,7 @@ templ OutcomeSection(v OutcomeSectionView) {
 	</section>
 }
 
-templ outcomeEntry(o schema.Outcome, isLatest bool) {
+templ outcomeEntry(o schema.OutcomeEntry, isLatest bool) {
 	<li class="rounded-md border border-border bg-surface-sunken p-3 space-y-1.5">
 		<div class="flex items-center justify-between gap-3 text-xs">
 			<div class="flex items-center gap-2">

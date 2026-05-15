@@ -170,7 +170,12 @@ templ SeverityPill(severity *string) {
 // (nothing selected): renders the placeholder in muted text so the
 // trigger looks like a real "pick one" hint.
 templ richSelectDisplay(placeholder string) {
-	<span data-rich-select-display data-placeholder={ placeholder } class="block flex-1 text-left truncate">
+	// flex+items-center keeps the chip vertically centered inside the
+	// trigger; avoiding `truncate` (overflow:hidden) keeps the chip's
+	// rounded border from being clipped top/bottom against the line
+	// box. No `min-w-0` so the chip's intrinsic width is respected
+	// instead of being squeezed by the chevron sibling.
+	<span data-rich-select-display data-placeholder={ placeholder } class="flex flex-1 items-center text-left">
 		<span class="text-muted-foreground">{ placeholder }</span>
 	</span>
 	<span class="select-value hidden" data-tui-selectbox-placeholder={ placeholder }></span>

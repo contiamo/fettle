@@ -89,6 +89,8 @@ export function initFindingFilters() {
   initBulkSelection();
   initEditToggles();
   initRichSelect();
+  initOutcomeStatusOther();
+  initPopoverStateSync();
   refreshRichSelectDisplays();
 
   // Reflect the initial selection (server-rendered) and scroll the
@@ -141,6 +143,52 @@ function initEditToggles() {
 // Templui's own click handler runs first (selecting the item,
 // updating the hidden input, closing the popover); ours runs
 // afterwards via document-level event delegation.
+// initOutcomeStatusOther shows the free-text "Status (if other)" field
+// only while the outcome form's status selectbox holds "other". The
+// selectbox's hidden input dispatches a 'change' event whenever the
+// selection changes (set or cleared); document-level delegation
+// covers the outcome form even after HTMX swaps it in.
+function initOutcomeStatusOther() {
+  document.addEventListener("change", (ev) => {
+    const t = ev.target;
+    if (!(t instanceof HTMLInputElement) || t.name !== "status") return;
+    const wrapper = t
+      .closest("form")
+      ?.querySelector<HTMLElement>("[data-outcome-status-other]");
+    if (!wrapper) return;
+    wrapper.hidden = t.value !== "other";
+  });
+}
+
+// initPopoverStateSync papers over a bug in the vendored templui
+// selectbox: when an item is picked, selectbox.js calls
+// `content.hidePopover()` directly without updating the
+// `data-tui-popover-open` attribute that popover.js' toggle logic
+// reads. The next click on the trigger then sees a stale "open"
+// state, toggles it to "closed" (a visual no-op since the popover
+// is already hidden), and only the second click actually opens it.
+//
+// The browser's native popover `toggle` event fires on every
+// show/hide, so we use it as ground truth and mirror the state onto
+// the bookkeeping attributes on content + triggers. Capture phase
+// because `toggle` doesn't bubble.
+function initPopoverStateSync() {
+  document.addEventListener(
+    "toggle",
+    (ev) => {
+      const t = ev.target as HTMLElement | null;
+      if (!t || !t.matches("[data-tui-popover-content]")) return;
+      const open = (ev as ToggleEvent).newState === "open" ? "true" : "false";
+      t.setAttribute("data-tui-popover-open", open);
+      const root = t.closest("[data-tui-popover-root]");
+      root
+        ?.querySelectorAll<HTMLElement>("[data-tui-popover-trigger]")
+        .forEach((tr) => tr.setAttribute("data-tui-popover-open", open));
+    },
+    true,
+  );
+}
+
 function initRichSelect() {
   document.addEventListener("click", (ev) => {
     const item = (ev.target as HTMLElement | null)?.closest<HTMLElement>(

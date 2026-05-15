@@ -69,18 +69,17 @@ func findingHandler(projectDir string) http.HandlerFunc {
 			return
 		}
 
-		doc, err := rp.LoadFinding(id)
+		entry, err := loadFindingEntry(rp, id)
 		if err != nil {
-			var nf run.FindingNotFoundError
-			if errors.As(err, &nf) {
-				http.NotFound(w, r)
-				return
-			}
 			http.Error(w, fmt.Sprintf("load finding: %v", err), http.StatusInternalServerError)
 			return
 		}
+		if entry == nil {
+			http.NotFound(w, r)
+			return
+		}
 
-		view, err := buildFindingDetail(rp, manifest, doc)
+		view, err := buildFindingDetail(rp, manifest, *entry)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("build finding view: %v", err), http.StatusInternalServerError)
 			return
@@ -106,40 +105,44 @@ func findingHandler(projectDir string) http.HandlerFunc {
 // runHandler (pre-render the right pane on workspace load) so both
 // paths render identical detail.
 //
-// Reviews and outcomes come straight off the doc — they're embedded
-// in the same JSON file the caller already loaded. Effective
-// severity / label resolution walks the same Reviews slice once so
-// the detail header's pills and the InitialLabels editor pre-fill
-// stay in sync without re-reading from disk.
-func buildFindingDetail(_ *run.Path, manifest schema.RunManifest, doc schema.FindingDoc) (templates.FindingView, error) {
-	preview := loadPreview(manifest.TargetRepo, doc.Finding, previewWindow)
+// Reviews and outcomes load from the run's reviews_*.jsonl and
+// outcomes_*.jsonl streams; the resolver computes the effective
+// severity / labels so the detail header's pills and the
+// InitialLabels editor pre-fill stay in sync across every render.
+func buildFindingDetail(rp *run.Path, manifest schema.RunManifest, finding schema.FindingEntry) (templates.FindingView, error) {
+	preview := loadPreview(manifest.TargetRepo, finding.Finding, previewWindow)
 
-	reviewView := buildReviewView(manifest.Name, doc)
-	outcomeView := buildOutcomeView(manifest.Name, doc)
-
-	effective := doc.Severity
-	if override, ok := latestReviewerSeverity(reviewView.Entries); ok {
-		effective = &override
+	reviewView, err := buildReviewView(manifest.Name, rp, finding)
+	if err != nil {
+		return templates.FindingView{}, err
+	}
+	outcomeView, err := buildOutcomeView(manifest.Name, rp, finding.ID)
+	if err != nil {
+		return templates.FindingView{}, err
 	}
 
-	// Effective labels: union of every per-author latest entry that
-	// touched labels; falls back to Finding.Labels when no reviewer
-	// has overridden.
-	effectiveLabels := doc.Labels
-	if union, ok := unionReviewerLabels(reviewView.Entries); ok {
-		effectiveLabels = union
+	// Effective severity / labels: resolve from the same review list
+	// the history feed shows. Loading reviews twice (once in
+	// buildReviewView, once here) is acceptable for the detail view's
+	// single-finding scope; the run-page builder amortises the
+	// cost across all findings via loadEffectiveMaps.
+	subjectReviews, err := loadSubjectReviews(rp, finding.ID)
+	if err != nil {
+		return templates.FindingView{}, err
 	}
+	effectiveSeverity := schema.ResolveSeverity(finding.Severity, subjectReviews)
+	effectiveLabels := schema.ResolveLabels(finding.Labels, subjectReviews)
 
 	return templates.FindingView{
 		Manifest:          manifest,
-		Finding:           doc.Finding,
-		EffectiveSeverity: effective,
+		Finding:           finding.Finding,
+		EffectiveSeverity: effectiveSeverity,
 		EffectiveLabels:   effectiveLabels,
 		Preview: templates.CodePreview{
 			Path:          preview.Path,
 			Error:         preview.Error,
 			Lines:         toTemplateLines(preview.Lines),
-			Target:        doc.Line,
+			Target:        finding.Line,
 			Anchor:        anchorStateToTemplate(preview.Anchor),
 			OriginalLine:  preview.OriginalLine,
 			EffectiveLine: preview.EffectiveLine,
@@ -147,6 +150,44 @@ func buildFindingDetail(_ *run.Path, manifest schema.RunManifest, doc schema.Fin
 		Review:  reviewView,
 		Outcome: outcomeView,
 	}, nil
+}
+
+// loadFindingEntry returns the finding with the given id, or nil if
+// no findings_*.jsonl stream contains it. If two streams contain the
+// same id (rare — would mean two find runs overlapped), the latest
+// `created_at` wins.
+func loadFindingEntry(rp *run.Path, id string) (*schema.FindingEntry, error) {
+	entries, err := rp.LoadFindingEntries()
+	if err != nil {
+		return nil, err
+	}
+	var best *schema.FindingEntry
+	for i, e := range entries {
+		if e.ID != id {
+			continue
+		}
+		if best == nil || e.CreatedAt.After(best.CreatedAt) {
+			best = &entries[i]
+		}
+	}
+	return best, nil
+}
+
+// loadSubjectReviews returns every review entry referencing the
+// given finding id, across all reviewers' JSONL streams. Used by
+// the detail builder to feed the resolver.
+func loadSubjectReviews(rp *run.Path, findingID string) ([]schema.ReviewEntry, error) {
+	all, err := rp.LoadReviewEntries()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]schema.ReviewEntry, 0, len(all))
+	for _, e := range all {
+		if e.Kind == schema.SubjectFinding && e.ID == findingID {
+			out = append(out, e)
+		}
+	}
+	return out, nil
 }
 
 

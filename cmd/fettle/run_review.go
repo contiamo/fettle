@@ -77,7 +77,7 @@ Resume keys on the agent's slug, so switching the model
 On first invocation in --run, the active prompt is snapshotted
 into ` + "`<run>/instructions/review.md`" + `. Subsequent invocations re-
 use the snapshot — editing the project's
-` + "`.fettle/instructions/review.md`" + ` after the run started has no
+` + "`instructions/review.md`" + ` after the run started has no
 effect.
 
 For custom agent scripts via --agent-script, see the contract
@@ -175,13 +175,24 @@ func runRunReview(cmd *cobra.Command, args []string) error {
 // reviewFindings iterates the run's findings and invokes the agent
 // once per pending finding.
 func reviewFindings(ctx context.Context, logger *slog.Logger, in *reviewInputs, promptBody string, done map[string]bool) error {
-	docs, err := in.rp.LoadAllFindings()
+	entries, err := in.rp.LoadFindingEntries()
 	if err != nil {
 		return fmt.Errorf("load findings: %w", err)
 	}
-	findings := make([]schema.Finding, len(docs))
-	for i, d := range docs {
-		findings[i] = d.Finding
+	// Dedupe by id: two findings_*.jsonl files in the same run
+	// (rare — happens only when fettle find runs twice with the
+	// same target) shouldn't make the review harness double-process
+	// a finding. Latest CreatedAt wins.
+	deduped := make(map[string]schema.FindingEntry, len(entries))
+	for _, e := range entries {
+		if existing, ok := deduped[e.ID]; ok && !e.CreatedAt.After(existing.CreatedAt) {
+			continue
+		}
+		deduped[e.ID] = e
+	}
+	findings := make([]schema.Finding, 0, len(deduped))
+	for _, e := range deduped {
+		findings = append(findings, e.Finding)
 	}
 
 	pending := make([]schema.Finding, 0, len(findings))
@@ -376,20 +387,17 @@ func writePromptSidecar(rp *run.Path, id, prompt string) error {
 // loadReviewedSubjects returns the set of finding ids that author
 // has already reviewed in this run. The author argument is the
 // agent slug (FETTLE_AGENT) — a finding counts as "done by author"
-// if any of its reviews[] entries has a matching slug, regardless
-// of model. Switching the agent's model doesn't force re-review.
+// if any review entry has a matching slug, regardless of model.
+// Switching the agent's model doesn't force re-review.
 func loadReviewedSubjects(rp *run.Path, author string) (map[string]bool, error) {
-	docs, err := rp.LoadAllFindings()
+	all, err := rp.LoadReviewEntries()
 	if err != nil {
 		return nil, err
 	}
 	done := map[string]bool{}
-	for _, d := range docs {
-		for _, r := range d.Reviews {
-			if schema.AuthorSlug(r.Author) == author {
-				done[d.ID] = true
-				break
-			}
+	for _, e := range all {
+		if e.Kind == schema.SubjectFinding && schema.AuthorSlug(e.Author) == author {
+			done[e.ID] = true
 		}
 	}
 	return done, nil

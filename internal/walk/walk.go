@@ -25,7 +25,7 @@ import (
 // if it isn't. Use WalkFS for non-git targets.
 func WalkGit(root string, include, exclude []string) ([]string, error) {
 	if !isGitRepo(root) {
-		return nil, fmt.Errorf("walker=git but %s is not a git repository (no .git entry at top level); set walker=fs in .fettle/config.json or `git init` the target", root)
+		return nil, fmt.Errorf("walker=git but %s is not a git repository (no .git entry at top level); set walker=fs in fettle.json or `git init` the target", root)
 	}
 	rels, err := gitListFiles(root)
 	if err != nil {

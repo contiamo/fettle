@@ -26,7 +26,7 @@ example:
 
 ## Labels
 
-If you use `--label`, document the conventions here. For example:
+If your prompt tells the agent to label, document the conventions here. For example:
 
 - Always include one `category:<word>` tag from the set you define.
 - Add `confidence:high` / `confidence:low` when uncertain.

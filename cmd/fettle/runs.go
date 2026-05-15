@@ -16,7 +16,7 @@ import (
 var listRunsCmd = &cobra.Command{
 	Use:   "runs",
 	Short: "List all runs in the project with summary counts",
-	Long: `list runs walks .fettle/runs/ and emits one entry per run
+	Long: `list runs walks <project>/runs/ and emits one entry per run
 folder, sorted by created_at descending (newest first). Each entry
 has the run's identity, provenance, and a counts block.
 

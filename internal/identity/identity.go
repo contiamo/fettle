@@ -38,9 +38,13 @@ const (
 var ErrNoIdentity = errors.New("no author identity configured")
 
 // slugRegex mirrors internal/run.slugRegex — both flow into filesystem
-// paths (run folders and reviews_<author>.jsonl), so the same character
-// class keeps both filename-safe.
-var slugRegex = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+// paths (run folders and the JSONL artifact streams under each run),
+// so the same character class keeps both filename-safe.
+//
+// Underscore is excluded on purpose: the artifact filename format uses
+// `_` as its field separator (`<kind>_<datetime>_<human>[_<agent>].jsonl`),
+// so a slug containing `_` would make `ParseArtifactFilename` ambiguous.
+var slugRegex = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
 
 // ValidateSlug reports whether s is a syntactically valid author slug.
 // Empty is rejected here (a missing slug is the caller's "no identity"
@@ -50,7 +54,7 @@ func ValidateSlug(s string) error {
 		return fmt.Errorf("author slug must not be empty")
 	}
 	if !slugRegex.MatchString(s) {
-		return fmt.Errorf("invalid author slug %q: only [A-Za-z0-9_-] allowed", s)
+		return fmt.Errorf("invalid author slug %q: only [A-Za-z0-9-] allowed", s)
 	}
 	return nil
 }
@@ -144,7 +148,7 @@ func (r Resolved) String() string {
 // Save writes slug to ~/.config/fettle/identity (creating the
 // directory if needed). Validates the slug before persisting. The
 // path is per-user, per-machine — never under the project — so the
-// slug stays out of the repo even when .fettle/config.json is checked in.
+// slug stays out of the repo even when fettle.json is checked in.
 func Save(slug string) error {
 	if err := ValidateSlug(slug); err != nil {
 		return err

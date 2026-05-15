@@ -5,26 +5,36 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/contiamo/fettle/internal/project"
 	"github.com/spf13/cobra"
 )
 
 var rootFlags struct {
-	dir  string
-	json bool
+	projectDir string
+	json       bool
 }
+
+// EnvProjectDir is the project-directory override env var. Same role
+// as --project-dir: tell fettle where the project lives without
+// having to be inside it.
+const EnvProjectDir = "FETTLE_PROJECT_DIR"
 
 var rootCmd = &cobra.Command{
 	Use:   "fettle",
 	Short: "File-oriented LLM audit harness",
 	Long: `fettle runs LLM agents over a codebase to find, review, and
 close issues. Each scan lives in a self-contained run folder under
-.fettle/runs/, with the prompt that produced it snapshotted alongside
-the data.
+<project>/runs/, with the prompt that produced it snapshotted
+alongside the data. The project directory is whatever folder you
+named at ` + "`fettle init`" + ` time; it's marked by a fettle.json
+file at its root.
 
 See FETTLE.md at the repo root for the full design.`,
 	SilenceUsage:  true,
@@ -64,7 +74,7 @@ var showCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVar(&rootFlags.dir, "dir", "", "fettle project directory (default: current directory)")
+	rootCmd.PersistentFlags().StringVar(&rootFlags.projectDir, "project-dir", "", "fettle project directory (overrides $FETTLE_PROJECT_DIR and the upward-walk from cwd)")
 	rootCmd.PersistentFlags().BoolVar(&rootFlags.json, "json", false, "emit structured JSON to stdout (envelope: {\"data\": ...})")
 
 	rootCmd.AddGroup(
@@ -130,17 +140,44 @@ func main() {
 	}
 }
 
-// projectDir returns the resolved project directory: the --dir flag if
-// set, otherwise the current working directory.
+// projectDir resolves an existing fettle project directory via the
+// three-source chain: --project-dir flag → $FETTLE_PROJECT_DIR env →
+// upward walk from cwd looking for fettle.json. Used by every command
+// that reads or writes inside an existing project; `fettle init` does
+// NOT call this — init takes its target as a positional argument so
+// it can create the project wherever the user names.
 func projectDir() (string, error) {
-	if rootFlags.dir != "" {
-		abs, err := filepath.Abs(rootFlags.dir)
+	if rootFlags.projectDir != "" {
+		abs, err := filepath.Abs(rootFlags.projectDir)
 		if err != nil {
-			return "", fmt.Errorf("resolve --dir: %w", err)
+			return "", fmt.Errorf("resolve --project-dir: %w", err)
+		}
+		if _, err := os.Stat(filepath.Join(abs, project.ConfigName)); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return "", fmt.Errorf("--project-dir %s: no %s found", abs, project.ConfigName)
+			}
+			return "", fmt.Errorf("stat %s: %w", filepath.Join(abs, project.ConfigName), err)
 		}
 		return abs, nil
 	}
-	return os.Getwd()
+	if envDir := strings.TrimSpace(os.Getenv(EnvProjectDir)); envDir != "" {
+		abs, err := filepath.Abs(envDir)
+		if err != nil {
+			return "", fmt.Errorf("resolve $%s: %w", EnvProjectDir, err)
+		}
+		if _, err := os.Stat(filepath.Join(abs, project.ConfigName)); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return "", fmt.Errorf("$%s=%s: no %s found", EnvProjectDir, abs, project.ConfigName)
+			}
+			return "", fmt.Errorf("stat %s: %w", filepath.Join(abs, project.ConfigName), err)
+		}
+		return abs, nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("getwd: %w", err)
+	}
+	return project.FindProjectDir(cwd)
 }
 
 // resolvePromptSource returns the absolute path of the prompt to use
@@ -153,7 +190,7 @@ func projectDir() (string, error) {
 // inside the project tree, else as the absolute path.
 //
 // Falling back, configRel is the project-relative path from
-// .fettle/config.json's `instructions.<stage>` field; it's joined with
+// fettle.json's `instructions.<stage>` field; it's joined with
 // projectDir on read. Returns an error if both are empty or if the
 // resolved file doesn't exist.
 func resolvePromptSource(projectDir, override, configRel string) (absPath, recordPath string, err error) {
@@ -172,14 +209,14 @@ func resolvePromptSource(projectDir, override, configRel string) (absPath, recor
 		return abs, rec, nil
 	}
 	if configRel == "" {
-		return "", "", fmt.Errorf("no prompt source: pass --prompt <path> or set the relevant `instructions.*` field in .fettle/config.json")
+		return "", "", fmt.Errorf("no prompt source: pass --prompt <path> or set the relevant `instructions.*` field in fettle.json")
 	}
 	abs := configRel
 	if !filepath.IsAbs(abs) {
 		abs = filepath.Join(projectDir, configRel)
 	}
 	if _, err := os.Stat(abs); err != nil {
-		return "", "", fmt.Errorf("prompt %q (from .fettle/config.json): %w", configRel, err)
+		return "", "", fmt.Errorf("prompt %q (from fettle.json): %w", configRel, err)
 	}
 	return abs, configRel, nil
 }

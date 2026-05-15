@@ -2,7 +2,8 @@
 
 A harness for running LLM agents over a codebase to find and review
 issues. You provide the instructions in markdown; fettle handles the
-orchestration. Output is JSON on disk, one file per finding.
+orchestration. Output is JSONL on disk, append-only, one line per
+record.
 
 Fettle is a **file-oriented** harness: it runs an agent per file matching
 your globs, and a finding's primary anchor is `(file, line)`. That makes it a
@@ -24,52 +25,93 @@ the knowledge is yours.
                     review
 ```
 
-`find` creates a run folder under `.fettle/runs/`. `review` and
+`find` creates a run folder under `<project>/runs/`. `review` and
 `outcome` are operations on existing runs — their results land
 inside the target run, not in their own folders. Stages are
-independent — you can stop after `find` if a report is all you
-need, or hand the run to a human reviewer via the UI without ever
-invoking the review agent.
+independent — you can stop after `find` if a report is all you need,
+or hand the run to a human reviewer via the UI without ever invoking
+the review agent.
 
 ## Project layout
 
-`fettle init` creates a `.fettle/` directory inside the project's
-host directory (typically your repo root). Every fettle artifact
-lives there — config, instructions, runs — so fettle stays out of
-the host repo's root the same way `.git/` does. **`find` creates a
-run folder** under `.fettle/runs/`, named with the stage prefix and
-a UTC timestamp. `review` and `outcome` write into an existing run.
+`fettle init <path>` creates a fettle project at the path you name.
+The project directory's name is up to you; its presence is signalled
+by a `fettle.json` file at its root. That file is both the on-disk
+config and the marker subsequent commands use to discover the
+project.
 
 ```
-my-repo/                        host directory (your repo root)
-  .git/
-  .fettle/                      everything fettle owns lives here
-    config.json                 marker + project config
-    instructions/               editable templates (seed for new runs)
-      find.md
-      review.md
-    runs/
-      find_20260430T145233Z_security-v1/
-        run.json                manifest: who/what/when
-        instructions/find.md    snapshot of the find prompt that ran
-        files.jsonl             per-file scan ledger (find-stage only)
-        raw/                    verbatim agent output, one log per file
-        findings/
-          abc123def456.json     one finding per file (see below)
-          ...
+audits/                         the directory you named at `fettle init` time
+  fettle.json                   project config + discovery marker
+  instructions/                 editable templates (seed for new runs)
+    find.md
+    review.md
+  runs/
+    find_20260430T145233Z_security-v1/
+      run.json                  manifest: who/what/when
+      instructions/find.md      snapshot of the find prompt that ran
+      files.jsonl               per-file scan ledger (find-stage only)
+      raw/                      verbatim agent output, one log per file
+      findings_<ts>_<human>_<agent>.jsonl     emitted findings
+      reviews_<ts>_<human>[_<agent>].jsonl    review entries
+      outcomes_<ts>_<human>[_<agent>].jsonl   outcome events
 ```
 
-`find` creates a new run on each invocation, or continues an
-existing one via `--resume .fettle/runs/<name>/`. There are no
-other agent-driven stages today — `review` runs against a `find`
-run.
+`fettle init` semantics:
 
-**Run folder naming**: `<stage>_<UTC-timestamp>_<slug>/` where
+- The target's parent directory must already exist. Fettle uses
+  `mkdir`, not `mkdir -p`, so a typo can't silently create a chain
+  of nested directories.
+- If the target doesn't exist, fettle creates it (one directory).
+- If the target exists, it must be a directory and it must be empty.
+- If the target already contains a `fettle.json`, init refuses —
+  re-running `fettle init` on a project is rejected, not a silent
+  overwrite.
+
+```sh
+fettle init audits --target ../repo --include '**/*.go'
+fettle init . --target ../repo --include '**/*.go'
+fettle init ../audits/api --target /abs/path/to/repo --include '**/*.go'
+```
+
+`--target` is the repository fettle should scan. If omitted, it
+defaults to the project directory itself — useful only when you
+want to audit fettle's own metadata folder, which is rarely what
+you want. Most projects point `--target` at a separate code repo.
+
+**Run folder naming:** `<stage>_<UTC-timestamp>_<slug>/` where
 `<stage>` is `find` (the only stage today). Timestamp format is
 `YYYYMMDDTHHMMSSZ` so runs sort chronologically and same-day runs
 don't collide. The slug defaults to a short random suffix; `--name
 <slug>` overrides just the slug portion. Resuming a killed `find`
-is `fettle run find --resume .fettle/runs/<name>/`.
+is `fettle run find --resume <project>/runs/<name>/`.
+
+## Discovering the project directory
+
+Project-scoped commands — `fettle run <stage>`, `fettle list runs`,
+`fettle show run`, `fettle list/show <noun> --run ...`, `fettle ui`
+— find the project directory via the following chain (first source
+that resolves wins):
+
+1. `--project-dir <path>` flag.
+2. `$FETTLE_PROJECT_DIR` env var.
+3. Upward walk from the current working directory looking for a
+   `fettle.json`; the directory containing it is the project.
+
+So once you've `fettle init`'d a project, you can run any
+project-scoped command from inside it (or any subdirectory) with no
+flags — same UX as `git`, `hg`, `go`.
+
+The record-write commands target a *run*, not a project, and use
+two different conventions:
+
+- `fettle add finding` and `fettle add review` read `FETTLE_RUN`
+  from the environment. The harness sets it before spawning each
+  agent, so an agent script just calls `fettle add <kind> ...` and
+  the record lands in the right run.
+- `fettle add outcome` takes a `--run <path>` flag instead.
+  Outcomes are usually recorded by humans outside an agent stage
+  (after a PR merges, etc.), so a flag is the natural surface.
 
 ## `run.json` manifest
 
@@ -85,7 +127,7 @@ is `fettle run find --resume .fettle/runs/<name>/`.
   "include": ["**/*.go"],
   "exclude": ["vendor/**", "**/*_generated.go"],
   "agent":  { "name": "claude", "model": "sonnet" },
-  "source_path":   ".fettle/instructions/find.md",
+  "source_path":   "instructions/find.md",
   "snapshot_path": "instructions/find.md",
   "args": { "concurrency": 4, "limit": 0 }
 }
@@ -102,21 +144,22 @@ via `fettle run find --resume`.
 `target_repo_git` is best-effort — populated when the target is a git
 repo, omitted otherwise.
 
-**Review prompt snapshot**: when `fettle run review --run X` runs
+**Review prompt snapshot:** when `fettle run review --run X` runs
 the review agent for the first time, it writes the active prompt
-into `.fettle/runs/X/instructions/review.md`. Subsequent automated reviews
-in X re-use that snapshot — one prompt per run, which is what you
-want when labels from multiple automated reviewers are merged.
+into `<project>/runs/X/instructions/review.md`. Subsequent automated
+reviews in X re-use that snapshot — one prompt per run, which is
+what you want when multiple automated reviewers contribute to the
+same run.
 
 Human reviewers via the UI don't consume the prompt files (they're
 making direct judgments, not following an LLM prompt), so the
 snapshot isn't read for human reviews.
 
-## `.fettle/config.json`
+## `fettle.json`
 
-`.fettle/config.json` confirms the directory is a fettle project
-and records the fettle version that created it. It also holds the
-project's config:
+`fettle.json` confirms the directory is a fettle project and records
+the fettle version that created it. It also holds the project's
+config:
 
 ```json
 {
@@ -128,43 +171,43 @@ project's config:
   "include": ["**/*.go", "**/*.ts"],
   "exclude": ["vendor/**", "**/*_generated.go"],
   "instructions": {
-    "find":   ".fettle/instructions/find.md",
-    "review": ".fettle/instructions/review.md"
+    "find":   "instructions/find.md",
+    "review": "instructions/review.md"
   }
 }
 ```
 
-Paths in this config are resolved relative to the host directory
-(the one containing `.fettle/`). Instructions can live anywhere —
-move them outside `.fettle/` if you'd rather have them tracked
-under your normal docs path. `target_repo` is also relative to the
-host, so `"../.."` portably points two levels up.
+Paths in this config are resolved relative to the project directory.
+Instructions can live anywhere — move them outside the project if
+you'd rather have them tracked under your normal docs path.
+`target_repo` is also relative to the project directory, so
+`"../.."` portably points two levels up.
 
 `walker` chooses how files are enumerated in the target repo:
 
 - `"git"` (default): asks `git ls-files` for the union of tracked
   and untracked-not-ignored files, so `.gitignore` rules are
-  honoured automatically. No need to repeat `node_modules/`,
-  build artifacts, dependency caches, etc. in `exclude`. Requires
-  the target to be a git repo.
-- `"fs"`: walks the filesystem directly; only the user's
-  `include` / `exclude` globs filter. Use for non-git targets or
-  when you explicitly want to scan files that are gitignored.
+  honoured automatically. No need to repeat `node_modules/`, build
+  artifacts, dependency caches, etc. in `exclude`. Requires the
+  target to be a git repo.
+- `"fs"`: walks the filesystem directly; only the user's `include`
+  / `exclude` globs filter. Use for non-git targets or when you
+  explicitly want to scan files that are gitignored.
 
 `include` / `exclude` are doublestar globs evaluated against
-repo-relative paths. `fettle init` requires at least one
-`--include` glob — there's no project-independent default, and a
-permissive one (`**/*`) would pull in lockfiles, vendored
-dependencies, generated code, and binary blobs. Examples:
+repo-relative paths. `fettle init` requires at least one `--include`
+glob — there's no project-independent default, and a permissive one
+(`**/*`) would pull in lockfiles, vendored dependencies, generated
+code, and binary blobs. Examples:
 
 ```sh
-fettle init --include '**/*.go'
-fettle init --include 'src/**/*.{ts,tsx}' --include '**/*.css'
-fettle init --include '**/*.py' --exclude 'tests/**'
+fettle init audits --include '**/*.go'
+fettle init audits --include 'src/**/*.{ts,tsx}' --include '**/*.css'
+fettle init audits --include '**/*.py' --exclude 'tests/**'
 ```
 
-With `walker: "git"`, anything in `.gitignore` is dropped on top
-of your `exclude` patterns.
+With `walker: "git"`, anything in `.gitignore` is dropped on top of
+your `exclude` patterns.
 
 ## Instructions (you write these)
 
@@ -188,9 +231,9 @@ Fettle substitutes a small, fixed set of variables when running each stage:
 | find   | `TARGET_FILE`, `REPO_ROOT`                 |
 | review | `SUBJECT_JSON`, `REPO_ROOT`                |
 
-`SUBJECT_JSON` is the finding doc the agent is being asked to
-review (just the finding fields — prior reviews are deliberately
-*not* surfaced; the review agent makes a fresh judgment per run).
+`SUBJECT_JSON` is the finding the agent is being asked to review
+(just the finding fields — prior reviews are deliberately *not*
+surfaced; the review agent makes a fresh judgment per run).
 
 **No stage gets `OUTPUT_PATH`.** Every stage records its output by
 shelling to `fettle add <kind>` (see the CLI section). This unifies
@@ -211,68 +254,71 @@ The CLI is organized verb-first. Five top-level verbs:
 
 - `fettle run <stage>` — start an agent-driven stage (`find`, `review`).
 - `fettle add <noun>` — append a record (`finding`, `review`,
-  `outcome`). Called by spawned agents (FETTLE_RUN env), or by
+  `outcome`). Called by spawned agents (via `FETTLE_RUN` env), or by
   humans via the UI.
 - `fettle list <noun>` — list records of a kind in a run, or `runs`
   for all runs in the project.
 - `fettle show <noun>` — print one record (or one run's status).
-- `fettle init` — create a new fettle project.
+- `fettle init <path>` — create a new fettle project at `<path>`.
 
-`fettle ui` serves the local web UI. `--dir` and `--json` are
-global flags. Every command emits the `{"data": ...}` envelope when
-`--json` is passed; reads always emit it.
+`fettle ui` serves the local web UI. `--project-dir` and `--json`
+are global flags. `--json` switches read commands, stage runners,
+and add commands to the `{"data": ...}` envelope; `fettle init` and
+`fettle ui` ignore it (init prints a human "initialized in <path>"
+line, ui logs its listen URL to stderr).
 
 ```
-fettle init --include GLOB [--include GLOB ...] [--exclude GLOB ...]
-            [--walker git|fs] [--target REPO] [--agent claude|codex]
-    Create a new fettle project in cwd. Writes .fettle/config.json
-    and a stub .fettle/instructions/ tree. At least one --include
-    glob is required; --walker defaults to git (honour .gitignore).
-    See `fettle init --help` for examples.
+fettle init <path> --include GLOB [--include GLOB ...] [--exclude GLOB ...]
+                   [--walker git|fs] [--target REPO] [--agent claude|codex]
+    Create a new fettle project at <path>. <path> is `.` to init the
+    current directory (which must be empty) or a name to create
+    (whose parent must exist). At least one --include glob is
+    required; --walker defaults to git (honour .gitignore). See
+    `fettle init --help` for examples.
 
 # Stage runners (agent-driven)
 
 fettle run find [--name SLUG] [--include GLOB] [--exclude GLOB] [-c N] [--limit N]
-    Create .fettle/runs/find_<UTC-timestamp>_<slug>/, snapshot the
-    find prompt into it, walk the target repo, and write each
-    finding the agent emits to its own findings/<id>.json. Prints
-    the run path so you can pipe it into the next stage.
+    Create <project>/runs/find_<UTC-timestamp>_<slug>/, snapshot the
+    find prompt into it, walk the target repo, and append each
+    finding the agent emits to a findings_*.jsonl stream in the run.
+    Prints the run path so you can pipe it into the next stage.
 
-fettle run find --resume .fettle/runs/<name>/
+fettle run find --resume <project>/runs/<name>/
     Resume a killed find. Re-uses the snapshotted prompt — editing
-    .fettle/instructions/find.md after the run started has no effect.
-    Flags that would change run identity (--include, --exclude,
-    --limit, --agent, --model, --effort, --agent-script, --name)
-    are rejected; the manifest is authoritative.
+    instructions/find.md after the run started has no effect. Flags
+    that would change run identity (--include, --exclude, --limit,
+    --agent, --model, --effort, --agent-script, --name) are
+    rejected; the manifest is authoritative.
 
-fettle run review --run .fettle/runs/<name>/ [--agent NAME]
+fettle run review --run <project>/runs/<name>/ [--agent NAME]
     For each finding in --run not yet reviewed by this agent, run
-    the review agent. Append the agent's judgment to the finding's
-    reviews[] array via an atomic-rename rewrite of
-    findings/<id>.json. Resume keys on the agent's slug — switching
-    the model (e.g. claude/sonnet → claude/opus) doesn't force
-    re-review.
+    the review agent. Append the agent's judgment to the run's
+    reviews_*.jsonl stream. Resume keys on the agent's slug —
+    switching the model (e.g. claude/sonnet → claude/opus) doesn't
+    force re-review.
 
 # Record writes (called by spawned agents, sometimes by humans)
 
 fettle add finding --file PATH --line N --title T --description D --suggestion S
                    [--severity X] [--label k:v ...] [--reference PATH[:LINE] ...]
-    Write one new finding to FETTLE_RUN's findings/ directory. The
-    new doc is created exclusively (os.Link) so two concurrent
-    writers can't race on the same id.
+    Append one finding to FETTLE_RUN's findings_*.jsonl stream. The
+    finding id is generated server-side.
 
-fettle add review --finding ID --label LABEL ... [--severity X] [--comment TEXT]
-    Append one review entry to the target finding's reviews[]
-    array. Labels and severity follow nil-don't-touch semantics:
-    omitting --label leaves prior labels in effect; --clear-labels
-    explicitly clears; --severity '' (empty) leaves prior severity
-    in effect.
+fettle add review --finding ID [--add-label L ...] [--remove-label L ...]
+                  [--severity X] [--comment TEXT]
+    Append one review entry to FETTLE_RUN's reviews_*.jsonl stream.
+    --add-label / --remove-label name labels to add or drop from the
+    finding's effective set; the same label in both is rejected.
+    --severity overrides the finding's severity from this point
+    forward; --comment is free text. At least one of these must be
+    set.
 
-fettle add outcome --run .fettle/runs/<name>/ --finding ID
+fettle add outcome --run <project>/runs/<name>/ --finding ID
                    --status STATUS [--pr URL]
-    Append an outcome event to the target finding's outcomes[]
-    array. Marks the finding as disposed of (PR merged, won't fix,
-    etc.). Author identity chains FETTLE_AGENT → $FETTLE_AUTHOR →
+    Append an outcome event to the run's outcomes_*.jsonl stream.
+    Marks the finding as disposed of (PR merged, won't fix, etc.).
+    Author identity chains FETTLE_AGENT → $FETTLE_AUTHOR →
     ~/.config/fettle/identity.
 
 # Record reads
@@ -284,24 +330,24 @@ fettle list runs
 fettle show run PATH
     Print one run's summary (status + counts).
 
-fettle list findings  --run .fettle/runs/<name>/
-fettle list reviews   --run .fettle/runs/<name>/
-fettle list outcomes  --run .fettle/runs/<name>/
+fettle list findings  --run <project>/runs/<name>/
+fettle list reviews   --run <project>/runs/<name>/
+fettle list outcomes  --run <project>/runs/<name>/
     Dump every record of that kind in --run as a JSON array.
 
-fettle show finding   --run .fettle/runs/<name>/ ID
-fettle show review    --run .fettle/runs/<name>/ --finding ID [--all]
-fettle show outcome   --run .fettle/runs/<name>/ --finding ID [--all]
+fettle show finding   --run <project>/runs/<name>/ ID
+fettle show review    --run <project>/runs/<name>/ --finding ID [--all]
+fettle show outcome   --run <project>/runs/<name>/ --finding ID [--all]
     Print one record. For review and outcome, default emits the
-    derived current state per finding; --all emits the full
-    chronological history (including superseded entries).
+    resolved current state (effective labels, latest severity,
+    latest outcome); --all emits the full chronological history.
 
 # Output
 
 All read commands emit `{"data": <records>}` unconditionally. Stage
-runners and add commands print plain text to stdout by default
-(path / id) so shell pipelines like `out=$(fettle run find)` keep
-working; pass `--json` to switch them to the same envelope.
+runners and add commands print plain text to stdout by default (path
+/ id) so shell pipelines like `out=$(fettle run find)` keep working;
+pass `--json` to switch them to the same envelope.
 
 # Server-side metadata
 
@@ -313,53 +359,46 @@ fields before writing.
 
 ## Storage shape
 
-Each finding lives in `.fettle/runs/<run>/findings/<id>.json`. Reviews and
-outcomes are embedded inside the same file as `reviews[]` and
-`outcomes[]` arrays — the file path identifies the finding, so the
-inline records don't carry a Subject field.
+Each run's records live in append-only JSONL streams under the run
+directory:
 
-```json
-{
-  "id": "abc123def456",
-  "file": "internal/foo/bar.go",
-  "line": 42,
-  "title": "...",
-  "description": "...",
-  "suggestion": "...",
-  "severity": "medium",
-  "labels": ["category:duplication"],
-  "references": [
-    { "file": "internal/baz/qux.go", "line": 33 }
-  ],
-  "anchor_line": "    return foo(x, y)",
-  "created_by": "agent:claude/sonnet",
-  "created_at": "2026-04-30T15:01:22Z",
-  "reviews": [
-    {
-      "author": "human:michael",
-      "labels": ["confirmed"],
-      "severity": "high",
-      "comment": "Verified",
-      "at": "2026-04-30T16:00:00Z"
-    }
-  ],
-  "outcomes": [
-    {
-      "author": "human:michael",
-      "status": "merged",
-      "pr_url": "https://github.com/.../pull/42",
-      "at": "2026-05-01T10:00:00Z"
-    }
-  ]
-}
+```
+runs/find_<ts>_<slug>/
+  findings_<ts>_<human>_<agent>.jsonl
+  reviews_<ts>_<human>[_<agent>].jsonl
+  outcomes_<ts>_<human>[_<agent>].jsonl
 ```
 
-`severity` is a free-form string (or null). Fettle doesn't enforce
-a scale — your prompt decides whether to use `low`/`medium`/`high`,
-`P1`/`P2`/`P3`, a numeric `7.5`, or none.
+Files are named `<kind>_<UTC-µs>_<human>[_<agent>].jsonl`. Each
+fettle process invocation that writes a stream opens a fresh file on
+first append and keeps appending to it for the lifetime of the
+process. Sharing reviews between teammates is `cp` — drop a review
+file into the run directory and the next read picks it up.
 
-`labels` is a list of plain strings. The convention for structured
-tags is `prefix:value` — e.g. `["cwe:89", "wcag:1.1.1",
+Every JSONL line is self-describing as `{kind, id, ...}`:
+
+```jsonl
+// findings_*.jsonl
+{"kind":"finding","id":"abc123def456","file":"internal/foo/bar.go","line":42,"title":"...","description":"...","suggestion":"...","severity":"medium","labels":["category:duplication"],"references":[{"file":"internal/baz/qux.go","line":33}],"anchor_line":"    return foo(x, y)","created_by":"agent:claude/sonnet","created_at":"2026-04-30T15:01:22Z"}
+
+// reviews_*.jsonl  (kind/id name the subject the entry targets)
+{"kind":"finding","id":"abc123def456","author":"human:michael","at":"2026-04-30T16:00:00Z","add":["confirmed"],"remove":[],"severity":"high","comment":"Verified"}
+
+// outcomes_*.jsonl  (kind/id name the subject)
+{"kind":"finding","id":"abc123def456","author":"human:michael","at":"2026-05-01T10:00:00Z","status":"merged","pr_url":"https://github.com/.../pull/42"}
+```
+
+On a finding entry, `kind`+`id` is the entry's identity. On a
+review or outcome entry, `kind`+`id` names the subject the entry
+references. Today both resolve to the same finding identity; the
+symmetry is forward-compat for additional subject kinds.
+
+`severity` on a finding is a free-form string (or null). Fettle
+doesn't enforce a scale — your prompt decides whether to use
+`low`/`medium`/`high`, `P1`/`P2`/`P3`, a numeric `7.5`, or none.
+
+`labels` on a finding is a list of plain strings. The convention for
+structured tags is `prefix:value` — e.g. `["cwe:89", "wcag:1.1.1",
 "category:duplication", "confidence:high"]`. The UI treats prefixes
 as facets so you can filter by "all `cwe:` labels" or "all
 `category:` labels."
@@ -376,40 +415,32 @@ changed, the same content may have shifted to a different line, or
 disappeared entirely. `null` means "no anchor was captured" (no
 target_repo at find-time, capture failure, etc.).
 
-### Review entry semantics
+### Resolution
 
-Each review entry is an *update* to the finding from a single
-author at a single moment. Three fields use **nil-don't-touch**
-semantics:
+Reviews and outcomes are a chronological event log; the *effective*
+state of a finding at any moment is what the resolver computes when
+reads ask for "current."
 
-- `labels`: `null` → this entry didn't touch labels, the author's
-  prior override (if any) carries forward; `[]` → explicit clear;
-  `[...]` → this is the author's new full label set, replacing any
-  earlier override they made.
-- `severity`: `null` → this entry didn't touch severity, prior
-  override carries forward; non-null → this is the author's
-  override.
-- `comment`: free text or empty.
+- **Labels.** Start from the finding's `labels` seed. Walk every
+  review entry targeting that finding in `at` order; for each entry
+  apply `remove` then `add`. The result is the effective label set.
+  The same label cannot appear in `add` and `remove` on one
+  entry — that's rejected at write time, so order doesn't matter
+  inside an entry.
+- **Severity.** The latest review entry whose `severity` is non-null
+  wins. Falls back to the finding's `severity` seed if no review
+  asserted one.
+- **Outcome.** The latest entry across all outcome files wins for
+  "current state" display.
 
-When merging across authors for display, fettle takes the latest
-non-nil entry per `(author, axis)` and unions the label sets. So
-"label X is set" means at least one author has it set right now —
-and a comment-only edit doesn't accidentally wipe a prior override
-on the other axis.
-
-### Outcome entry semantics
-
-Each outcome entry is one event recording disposition. Append-only;
-the latest entry wins for "current state" display. `status` is one
-of `merged`, `closed`, `wontfix`, or whatever your project agrees
-on. Re-marking is allowed; humans drive that, fettle just records
-it.
+Identical timestamps tie-break by author slug, so the resolved
+state is deterministic across machines.
 
 ### `files.jsonl`
 
 Per-file scan ledger. One entry per file `find` has processed in
-this run. Files with zero findings still get a row, so resume
-knows to skip them.
+this run. Files with zero findings still get a row, so resume knows
+to skip them.
 
 ```json
 {
@@ -427,39 +458,40 @@ retried.
 
 ### Atomicity and concurrency
 
-`add finding` writes a brand-new doc via `os.Link(2)` (atomic
-create-only on POSIX). Two concurrent writers on the same id can't
-both succeed — the loser sees `fs.ErrExist`.
+Writes are append-only JSONL: `os.OpenFile(..., O_APPEND, ...)` plus
+`json.Encoder.Encode`. Coherence comes from two layers that
+together cover every actual write path:
 
-`add review` / `add outcome` mutate an existing doc via
-read-modify-write: read `findings/<id>.json` → patch the relevant
-array → write `<id>.json.<random>.tmp` → fsync → atomic-rename
-over the target → fsync the parent dir.
+- **Same `run.Path` (one process, one open stream):** writes
+  serialise through an in-process mutex on the Path, so two
+  goroutines sharing the same opened stream can't race on the JSON
+  encoder. This is the case the UI server and any in-process
+  parallelism would otherwise hit.
+- **Different processes / different `run.Path` opens:** each
+  invocation lazily opens a fresh stream file. The
+  microsecond-precision timestamp in the filename keeps the files
+  distinct, so two writers never share a file to contend on in the
+  first place — and the reader gathers entries from every file in
+  the run on load.
 
-There is **no flock** on the read-modify-write path. The race
-window is sub-millisecond and fettle is intended for single-user
-laptop use — two concurrent reviewers on the same finding could
-silently lose one append. If you ever run multiple writers in
-parallel against the same finding, wrap UpdateFinding in a flock
-helper.
-
-Stale `<id>.json.<random>.tmp` files from a crash are filtered out
-by the read path; no explicit cleanup pass is needed.
+A torn final line from a crashed writer is skipped silently by the
+read path — the malformed line is logged to stderr and the rest of
+the file parses normally.
 
 ## Web UI
 
 `fettle ui` serves a small server-rendered web app on localhost —
 Go binary with embedded assets (templ + Tailwind v4 + HTMX, no
 separate build step at runtime). It opens on a run picker (one row
-per `.fettle/runs/<name>/`), and once you pick a run it reads that run's
-finding docs and writes back to the same docs for actions a human
-takes:
+per `<project>/runs/<name>/`) and once you pick a run it loads that
+run's findings, reviews, and outcomes from disk and writes new
+entries back to the same streams for actions a human takes:
 
 - Browse the run's findings by file, label, severity, or outcome.
-- Add labels, severity, and comments — written as a new entry in
-  the finding's `reviews[]` array.
-- Mark findings closed — written as a new entry in the finding's
-  `outcomes[]` array.
+- Add or remove labels, change severity, add comments — written as
+  a new entry in the run's reviews stream.
+- Mark findings closed — written as a new entry in the outcomes
+  stream.
 
 **Author identity (UI):** on the first edit in a fresh install,
 the UI prompts once for a slug, prefilled with `git config
@@ -467,8 +499,8 @@ user.name` (or `$USER` if git isn't configured). The chosen slug is
 persisted to `~/.config/fettle/identity` and used for every
 subsequent UI session. A small "Reviewing as: <slug>" indicator
 shows the active identity with a way to change it. Identity is
-per-user, per-machine — never stored in `.fettle/config.json`,
-since the project directory may be shared or checked in.
+per-user, per-machine — never stored in `fettle.json`, since the
+project directory may be shared or checked in.
 
 **Author identity (CLI):** non-interactive contexts can't prompt,
 so the CLI uses the standard chain: `FETTLE_AGENT` (set by the
@@ -489,8 +521,8 @@ Agents that fettle spawns share a unified contract:
 2. The agent reads its inputs, decides what to record, and shells
    to `fettle add finding` or `fettle add review` for each output
    record. The harness assigns `id` / `created_by` / `created_at`
-   on findings, and `at` on review entries (deriving the author
-   from `FETTLE_AGENT`).
+   on findings, and `at` on review/outcome entries (deriving the
+   author from `FETTLE_AGENT`).
 3. Environment passed to the agent: `FETTLE_RUN` points at the run
    folder the output should land in; `FETTLE_AGENT` carries the
    agent label used for the source identity; `FETTLE_MODEL` and
@@ -518,7 +550,7 @@ start a new run to pick up template edits.
   already reviewed by `codex` (any review entry whose author slug
   matches).
 
-**Caveats**: resume assumes the target repo snapshot hasn't changed
+**Caveats:** resume assumes the target repo snapshot hasn't changed
 since the run started. If a file's contents move under `find`, the
 `ok`/`empty` ledger entry will still cause it to be skipped —
 re-scan by deleting the matching row from the run's `files.jsonl`.
@@ -529,9 +561,9 @@ automatically.
 
 - **No auto-merge.** Outcomes are a tracking log, not a shipping
   pipeline. Humans drive the actual fix-and-merge step.
-- **No build/lint/test integration.** If you want a stage that
-  runs your test suite, write a prompt that tells the agent to do
-  so — fettle won't invoke `task test` on your behalf.
+- **No build/lint/test integration.** If you want a stage that runs
+  your test suite, write a prompt that tells the agent to do so —
+  fettle won't invoke `task test` on your behalf.
 - **No language awareness.** Fettle treats everything as text +
   globs. If your analysis depends on AST inspection, your prompt
   tells the agent how to do it (or pre-extracts the data outside
@@ -539,9 +571,10 @@ automatically.
 
 ## Versioning and the project marker
 
-`.fettle/config.json` carries `fettle_version`, which fettle checks on
-every run for compatibility. If the file is missing or malformed,
-fettle refuses to write to the directory — protection against
-accidentally clobbering an unrelated folder. Migrations between
-schema versions will be added once there's a second version to
-migrate from.
+`fettle.json` carries `fettle_version`, stamped at `fettle init`
+time. The field is informational today — fettle doesn't gate runs
+on it — but the presence of `fettle.json` itself is the protection
+against accidentally writing into an unrelated folder: every
+project-scoped command looks for that file before doing any work.
+Migrations between schema versions and an explicit version-gate
+will be added once there's a second version to migrate from.
