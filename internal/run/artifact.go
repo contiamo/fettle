@@ -7,10 +7,15 @@ import (
 	"time"
 )
 
-// ArtifactKind names the three JSONL streams fettle writes into a run
-// directory. Files are named `<kind>_<datetime>_<human>[_<agent>].jsonl`
-// — one file per CLI / UI process invocation that writes the stream,
-// opened lazily on first append.
+// ArtifactKind names the three JSONL streams fettle writes into a
+// run directory. Filenames embed the run's slug + start timestamp so
+// every artifact is self-identifying when copied out of its run.
+//
+// Findings carry no author segment — there is one findings file per
+// run, written by whichever agent the find stage spawned. Reviews
+// and outcomes carry the writer's author slug at the end of the
+// filename so multiple reviewers' files coexist in the same run dir
+// and can be shared individually via `cp`.
 type ArtifactKind string
 
 const (
@@ -28,75 +33,91 @@ func (k ArtifactKind) IsValid() bool {
 	return false
 }
 
-// ArtifactTimeFormat is the timestamp layout used in artifact
-// filenames: extended date + basic time + microsecond fraction + Z,
-// in UTC. Chosen so directory listings sort chronologically by name
-// alone, no `:` appears (which several filesystems reject), and two
-// CLI invocations launched in the same second still get distinct
-// filenames — second-precision would collide under bulk scripted use.
-const ArtifactTimeFormat = "2006-01-02T150405.000000Z"
-
-// artifactSlugRe is the character class allowed inside the human /
-// agent segments of an artifact filename. Underscore is excluded
-// because `_` is the field separator; everything else from the
-// fettle slug class is allowed. The agent segment additionally
-// holds the agent's `name-model` form (the `/` in `name/model` is
-// rendered as `-` in filenames — lossy on parse, but the
-// authoritative stamp lives inside each JSONL entry).
+// artifactSlugRe is the character class allowed inside the author
+// segment of an artifact filename. Mirrors the same rule used for
+// run slugs and identity slugs — `_` is excluded because it's the
+// field separator in the filename format.
 var artifactSlugRe = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
 
+// runStartTsRe matches the compact basic-ISO timestamp embedded in
+// both run folder names and artifact filenames.
+var runStartTsRe = regexp.MustCompile(`^\d{8}T\d{6}Z$`)
+
 // artifactNameRe parses an artifact filename back into its parts.
-// The regex enforces the format end-to-end so callers can rely on a
-// match to mean "every field is well-formed" without re-validating.
+// The regex enforces the format end-to-end so a successful match
+// guarantees every field is well-formed. Author is optional —
+// findings filenames don't have one; reviews / outcomes do.
 var artifactNameRe = regexp.MustCompile(
 	`^(?P<kind>findings|reviews|outcomes)` +
-		`_(?P<at>\d{4}-\d{2}-\d{2}T\d{6}\.\d{6}Z)` +
-		`_(?P<human>[A-Za-z0-9-]+)` +
-		`(?:_(?P<agent>[A-Za-z0-9-]+))?` +
+		`_(?P<slug>[A-Za-z0-9-]+)` +
+		`_(?P<ts>\d{8}T\d{6}Z)` +
+		`(?:_(?P<author>[A-Za-z0-9-]+))?` +
 		`\.jsonl$`)
 
-// ArtifactFilename builds a per-session JSONL filename for one of
-// the three streams. The human segment is always present (someone
-// launched the process); the agent segment is appended only when
-// the writer is an agent invocation.
+// ArtifactFilename builds a per-run JSONL filename. slug is the run
+// slug (the `<slug>` in `run_<slug>_<ts>`); runStartTs is the
+// timestamp embedded in the same run folder name; author is the
+// AuthorSlug of the writer's identity stamp (`michael` for a human,
+// `claude` for an agent stamp `agent:claude/sonnet`).
 //
-//	findings_2026-05-15T103022.123456Z_michael_claude-sonnet.jsonl
-//	reviews_2026-05-15T103022.123456Z_michael.jsonl
-//	outcomes_2026-05-15T103022.123456Z_michael.jsonl
+// Findings always get an empty author — there's one findings file
+// per run regardless of how many writers contributed. Reviews and
+// outcomes require a non-empty author so different reviewers'
+// streams stay distinct (and shareable by `cp`).
 //
-// Returns an error rather than producing a malformed filename when
-// any input fails validation, so the caller can surface "won't write
-// a file I can't read back" at the boundary instead of leaving an
+//	findings_3cdf6f_20260519T110354Z.jsonl
+//	reviews_3cdf6f_20260519T110354Z_michael.jsonl
+//	outcomes_3cdf6f_20260519T110354Z_claude.jsonl
+//
+// Returns an error rather than emitting a malformed name when any
+// input fails validation; the caller surfaces "won't write a file
+// I can't read back" at the boundary instead of leaving an
 // untraceable artifact on disk.
-func ArtifactFilename(kind ArtifactKind, at time.Time, human, agent string) (string, error) {
+func ArtifactFilename(kind ArtifactKind, slug, runStartTs, author string) (string, error) {
 	if !kind.IsValid() {
 		return "", fmt.Errorf("artifact: unknown kind %q", kind)
 	}
-	if human == "" {
-		return "", fmt.Errorf("artifact: human segment must not be empty")
+	if slug == "" {
+		return "", fmt.Errorf("artifact: slug must not be empty")
 	}
-	if !artifactSlugRe.MatchString(human) {
-		return "", fmt.Errorf("artifact: invalid human slug %q: only [A-Za-z0-9-] allowed", human)
+	if !artifactSlugRe.MatchString(slug) {
+		return "", fmt.Errorf("artifact: invalid slug %q: only [A-Za-z0-9-] allowed", slug)
 	}
-	if agent != "" && !artifactSlugRe.MatchString(agent) {
-		return "", fmt.Errorf("artifact: invalid agent slug %q: only [A-Za-z0-9-] allowed", agent)
+	if !runStartTsRe.MatchString(runStartTs) {
+		return "", fmt.Errorf("artifact: invalid run-start ts %q: want YYYYMMDDTHHMMSSZ", runStartTs)
 	}
-	ts := at.UTC().Format(ArtifactTimeFormat)
-	if agent == "" {
-		return fmt.Sprintf("%s_%s_%s.jsonl", kind, ts, human), nil
+	switch kind {
+	case ArtifactFindings:
+		if author != "" {
+			return "", fmt.Errorf("artifact: findings filenames don't carry an author segment, got %q", author)
+		}
+		return fmt.Sprintf("%s_%s_%s.jsonl", kind, slug, runStartTs), nil
+	case ArtifactReviews, ArtifactOutcomes:
+		if author == "" {
+			return "", fmt.Errorf("artifact: %s filenames require an author segment", kind)
+		}
+		if !artifactSlugRe.MatchString(author) {
+			return "", fmt.Errorf("artifact: invalid author slug %q: only [A-Za-z0-9-] allowed", author)
+		}
+		return fmt.Sprintf("%s_%s_%s_%s.jsonl", kind, slug, runStartTs, author), nil
 	}
-	return fmt.Sprintf("%s_%s_%s_%s.jsonl", kind, ts, human, agent), nil
+	return "", fmt.Errorf("artifact: unhandled kind %q", kind)
+}
+
+// FormatRunStartTs renders a time.Time in the compact form embedded
+// in run folder names and artifact filenames. Used by tests and any
+// caller building an artifact name from a wall-clock time rather
+// than an existing run folder.
+func FormatRunStartTs(t time.Time) string {
+	return t.UTC().Format("20060102T150405Z")
 }
 
 // SanitizeAgentSlug converts the canonical agent identity
-// (`<name>` or `<name>/<model>`) into the filename-safe form used
-// in the agent segment of an artifact filename. The `/` becomes `-`
-// — lossy on parse, but that's fine because the authoritative stamp
-// lives inside each JSONL entry's `author` field.
-//
-// Returns an error if either piece contains characters outside the
-// artifact slug class. Empty input returns "" with no error so the
-// caller can blindly forward an "unset agent" through.
+// (`<name>` or `<name>/<model>`) into the filename-safe form. The
+// `/` becomes `-` so `claude/sonnet` → `claude-sonnet`. Used at the
+// boundary when an agent's stamp flows into a filename segment.
+// Empty input returns "" with no error so callers can blindly
+// forward an unset agent through.
 func SanitizeAgentSlug(s string) (string, error) {
 	if s == "" {
 		return "", nil
@@ -110,31 +131,36 @@ func SanitizeAgentSlug(s string) (string, error) {
 
 // ArtifactMeta is the parsed form of an artifact filename.
 type ArtifactMeta struct {
-	Kind  ArtifactKind
-	At    time.Time
-	Human string
-	Agent string // "" if absent
+	Kind   ArtifactKind
+	Slug   string
+	StartTime string
+	Author string // "" for findings; non-empty for reviews / outcomes
 }
 
-// ParseArtifactFilename returns the structured form of name. Returns
-// (_, false) for any filename that doesn't match the artifact
-// format — callers iterating a run directory can skip unrelated
-// files without an error path. A genuinely malformed artifact
-// filename (matching shape but unparseable datetime) also returns
-// false; logging that case is the caller's choice.
+// ParseArtifactFilename returns the structured form of name.
+// Returns (_, false) for any filename that doesn't match the
+// artifact format — callers iterating a run directory can skip
+// unrelated files without an error path.
 func ParseArtifactFilename(name string) (ArtifactMeta, bool) {
 	m := artifactNameRe.FindStringSubmatch(name)
 	if m == nil {
 		return ArtifactMeta{}, false
 	}
-	at, err := time.Parse(ArtifactTimeFormat, m[artifactNameRe.SubexpIndex("at")])
-	if err != nil {
+	kind := ArtifactKind(m[artifactNameRe.SubexpIndex("kind")])
+	author := m[artifactNameRe.SubexpIndex("author")]
+	// Findings filenames must not carry an author; reviews and
+	// outcomes must. Reject the shape mismatch so a hand-renamed
+	// file can't sneak through the parser.
+	if kind == ArtifactFindings && author != "" {
+		return ArtifactMeta{}, false
+	}
+	if (kind == ArtifactReviews || kind == ArtifactOutcomes) && author == "" {
 		return ArtifactMeta{}, false
 	}
 	return ArtifactMeta{
-		Kind:  ArtifactKind(m[artifactNameRe.SubexpIndex("kind")]),
-		At:    at,
-		Human: m[artifactNameRe.SubexpIndex("human")],
-		Agent: m[artifactNameRe.SubexpIndex("agent")],
+		Kind:      kind,
+		Slug:      m[artifactNameRe.SubexpIndex("slug")],
+		StartTime: m[artifactNameRe.SubexpIndex("ts")],
+		Author:    author,
 	}, true
 }

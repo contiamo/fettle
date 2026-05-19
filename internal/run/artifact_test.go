@@ -2,81 +2,90 @@ package run
 
 import (
 	"testing"
-	"time"
 )
 
 func TestArtifactFilename(t *testing.T) {
-	at := time.Date(2026, 5, 15, 10, 30, 22, 0, time.UTC)
+	const slug = "3cdf6f"
+	const ts = "20260515T103022Z"
 
 	cases := []struct {
 		name    string
 		kind    ArtifactKind
-		human   string
-		agent   string
+		slug    string
+		ts      string
+		author  string
 		want    string
 		wantErr bool
 	}{
 		{
-			name:  "human-only review",
-			kind:  ArtifactReviews,
-			human: "michael",
-			want:  "reviews_2026-05-15T103022.000000Z_michael.jsonl",
+			name: "findings — no author",
+			kind: ArtifactFindings, slug: slug, ts: ts,
+			want: "findings_3cdf6f_20260515T103022Z.jsonl",
 		},
 		{
-			name:  "agent-driven find",
-			kind:  ArtifactFindings,
-			human: "michael",
-			agent: "claude-sonnet",
-			want:  "findings_2026-05-15T103022.000000Z_michael_claude-sonnet.jsonl",
+			name: "reviews — with author",
+			kind: ArtifactReviews, slug: slug, ts: ts, author: "michael",
+			want: "reviews_3cdf6f_20260515T103022Z_michael.jsonl",
 		},
 		{
-			name:  "outcomes",
-			kind:  ArtifactOutcomes,
-			human: "michael",
-			want:  "outcomes_2026-05-15T103022.000000Z_michael.jsonl",
+			name: "outcomes — with author",
+			kind: ArtifactOutcomes, slug: slug, ts: ts, author: "claude",
+			want: "outcomes_3cdf6f_20260515T103022Z_claude.jsonl",
 		},
 		{
-			name:  "hyphenated human slug",
-			kind:  ArtifactReviews,
-			human: "michael-dietze",
-			want:  "reviews_2026-05-15T103022.000000Z_michael-dietze.jsonl",
+			name: "agent author with model hyphenated",
+			kind: ArtifactReviews, slug: slug, ts: ts, author: "claude-sonnet",
+			want: "reviews_3cdf6f_20260515T103022Z_claude-sonnet.jsonl",
 		},
 		{
-			name:    "unknown kind",
-			kind:    ArtifactKind("rumours"),
-			human:   "michael",
+			name: "findings with author rejected",
+			kind: ArtifactFindings, slug: slug, ts: ts, author: "michael",
 			wantErr: true,
 		},
 		{
-			name:    "empty human",
-			kind:    ArtifactReviews,
-			human:   "",
+			name: "reviews without author rejected",
+			kind: ArtifactReviews, slug: slug, ts: ts,
 			wantErr: true,
 		},
 		{
-			name:    "underscore in human",
-			kind:    ArtifactReviews,
-			human:   "michael_d",
+			name: "unknown kind",
+			kind: ArtifactKind("rumours"), slug: slug, ts: ts,
 			wantErr: true,
 		},
 		{
-			name:    "underscore in agent",
-			kind:    ArtifactReviews,
-			human:   "michael",
-			agent:   "bad_agent",
+			name: "empty slug",
+			kind: ArtifactFindings, slug: "", ts: ts,
 			wantErr: true,
 		},
 		{
-			name:    "slash in agent",
-			kind:    ArtifactReviews,
-			human:   "michael",
-			agent:   "claude/sonnet",
+			name: "underscore in slug",
+			kind: ArtifactFindings, slug: "bad_slug", ts: ts,
+			wantErr: true,
+		},
+		{
+			name: "underscore in author",
+			kind: ArtifactReviews, slug: slug, ts: ts, author: "bad_author",
+			wantErr: true,
+		},
+		{
+			name: "slash in author",
+			kind: ArtifactReviews, slug: slug, ts: ts, author: "claude/sonnet",
+			wantErr: true,
+		},
+		{
+			name: "malformed ts (with colons)",
+			kind: ArtifactFindings, slug: slug, ts: "2026-05-15T10:30:22Z",
+			wantErr: true,
+		},
+		{
+			name: "malformed ts (missing Z)",
+			kind: ArtifactFindings, slug: slug, ts: "20260515T103022",
 			wantErr: true,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := ArtifactFilename(tc.kind, at, tc.human, tc.agent)
+			got, err := ArtifactFilename(tc.kind, tc.slug, tc.ts, tc.author)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("want error, got filename %q", got)
@@ -93,75 +102,52 @@ func TestArtifactFilename(t *testing.T) {
 	}
 }
 
-func TestArtifactFilenameLocalTimeNormalisedToUTC(t *testing.T) {
-	// 09:30 in a +03:00 zone is 06:30 UTC. The filename must reflect
-	// the UTC normalisation so directory listings across writers in
-	// different timezones still sort chronologically.
-	loc := time.FixedZone("+03", 3*60*60)
-	at := time.Date(2026, 5, 15, 9, 30, 22, 0, loc)
-	got, err := ArtifactFilename(ArtifactReviews, at, "michael", "")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	want := "reviews_2026-05-15T063022.000000Z_michael.jsonl"
-	if got != want {
-		t.Fatalf("filename mismatch:\n  got:  %s\n  want: %s", got, want)
-	}
-}
-
 func TestParseArtifactFilename(t *testing.T) {
-	at := time.Date(2026, 5, 15, 10, 30, 22, 0, time.UTC)
+	const slug = "3cdf6f"
+	const ts = "20260515T103022Z"
 
 	cases := []struct {
-		name      string
-		filename  string
-		wantOk    bool
-		wantKind  ArtifactKind
-		wantHuman string
-		wantAgent string
+		name        string
+		filename    string
+		wantOk      bool
+		wantKind    ArtifactKind
+		wantAuthor  string
 	}{
 		{
-			name:      "human-only review",
-			filename:  "reviews_2026-05-15T103022.000000Z_michael.jsonl",
-			wantOk:    true,
-			wantKind:  ArtifactReviews,
-			wantHuman: "michael",
+			name:     "findings",
+			filename: "findings_3cdf6f_20260515T103022Z.jsonl",
+			wantOk:   true,
+			wantKind: ArtifactFindings,
 		},
 		{
-			name:      "agent-driven find",
-			filename:  "findings_2026-05-15T103022.000000Z_michael_claude-sonnet.jsonl",
-			wantOk:    true,
-			wantKind:  ArtifactFindings,
-			wantHuman: "michael",
-			wantAgent: "claude-sonnet",
+			name:       "reviews with author",
+			filename:   "reviews_3cdf6f_20260515T103022Z_michael.jsonl",
+			wantOk:     true,
+			wantKind:   ArtifactReviews,
+			wantAuthor: "michael",
 		},
 		{
-			name:      "hyphenated human, no agent",
-			filename:  "reviews_2026-05-15T103022.000000Z_michael-dietze.jsonl",
-			wantOk:    true,
-			wantKind:  ArtifactReviews,
-			wantHuman: "michael-dietze",
+			name:       "outcomes with author",
+			filename:   "outcomes_3cdf6f_20260515T103022Z_claude.jsonl",
+			wantOk:     true,
+			wantKind:   ArtifactOutcomes,
+			wantAuthor: "claude",
 		},
 		{
-			name:      "hyphenated human and agent",
-			filename:  "outcomes_2026-05-15T103022.000000Z_michael-dietze_claude-sonnet.jsonl",
-			wantOk:    true,
-			wantKind:  ArtifactOutcomes,
-			wantHuman: "michael-dietze",
-			wantAgent: "claude-sonnet",
+			name:       "hyphenated author",
+			filename:   "reviews_3cdf6f_20260515T103022Z_claude-sonnet.jsonl",
+			wantOk:     true,
+			wantKind:   ArtifactReviews,
+			wantAuthor: "claude-sonnet",
 		},
-		// Non-artifact filenames in the run dir must be skipped silently.
+		// Non-artifact filenames should be skipped silently.
 		{name: "not an artifact", filename: "run.json"},
-		{name: "wrong kind", filename: "rumours_2026-05-15T103022.000000Z_michael.jsonl"},
-		{name: "missing datetime", filename: "reviews_michael.jsonl"},
-		{name: "datetime missing Z", filename: "reviews_2026-05-15T103022.000000_michael.jsonl"},
-		{name: "datetime missing fraction", filename: "reviews_2026-05-15T103022Z_michael.jsonl"},
-		{name: "datetime with colons", filename: "reviews_2026-05-15T10:30:22.000000Z_michael.jsonl"},
-		{name: "trailing junk", filename: "reviews_2026-05-15T103022.000000Z_michael.jsonl.bak"},
-		{name: "empty human", filename: "reviews_2026-05-15T103022.000000Z_.jsonl"},
-		{name: "empty agent (trailing underscore)", filename: "reviews_2026-05-15T103022.000000Z_michael_.jsonl"},
-		{name: "underscore in slug", filename: "reviews_2026-05-15T103022.000000Z_michael_d.jsonl_unused.jsonl"},
-		{name: "impossible date", filename: "reviews_2026-13-15T103022.000000Z_michael.jsonl"},
+		{name: "wrong kind", filename: "rumours_3cdf6f_20260515T103022Z.jsonl"},
+		{name: "missing ts", filename: "reviews_3cdf6f_michael.jsonl"},
+		{name: "ts with colons", filename: "findings_3cdf6f_2026-05-15T10:30:22Z.jsonl"},
+		{name: "trailing junk", filename: "findings_3cdf6f_20260515T103022Z.jsonl.bak"},
+		{name: "findings WITH author rejected", filename: "findings_3cdf6f_20260515T103022Z_michael.jsonl"},
+		{name: "reviews WITHOUT author rejected", filename: "reviews_3cdf6f_20260515T103022Z.jsonl"},
 	}
 
 	for _, tc := range cases {
@@ -176,42 +162,41 @@ func TestParseArtifactFilename(t *testing.T) {
 			if got.Kind != tc.wantKind {
 				t.Errorf("kind: got %q, want %q", got.Kind, tc.wantKind)
 			}
-			if !got.At.Equal(at) {
-				t.Errorf("at: got %v, want %v", got.At, at)
+			if got.Slug != slug {
+				t.Errorf("slug: got %q, want %q", got.Slug, slug)
 			}
-			if got.Human != tc.wantHuman {
-				t.Errorf("human: got %q, want %q", got.Human, tc.wantHuman)
+			if got.StartTime != ts {
+				t.Errorf("ts: got %q, want %q", got.StartTime, ts)
 			}
-			if got.Agent != tc.wantAgent {
-				t.Errorf("agent: got %q, want %q", got.Agent, tc.wantAgent)
+			if got.Author != tc.wantAuthor {
+				t.Errorf("author: got %q, want %q", got.Author, tc.wantAuthor)
 			}
 		})
 	}
 }
 
 func TestArtifactFilenameRoundTrip(t *testing.T) {
-	at := time.Date(2026, 5, 15, 10, 30, 22, 0, time.UTC)
 	cases := []struct {
-		kind  ArtifactKind
-		human string
-		agent string
+		kind   ArtifactKind
+		slug   string
+		ts     string
+		author string
 	}{
-		{ArtifactReviews, "michael", ""},
-		{ArtifactReviews, "michael", "claude-sonnet"},
-		{ArtifactFindings, "michael-dietze", "codex-gpt-5"},
-		{ArtifactOutcomes, "ci-bot", ""},
+		{ArtifactFindings, "3cdf6f", "20260515T103022Z", ""},
+		{ArtifactReviews, "abcdef", "20260101T000000Z", "michael"},
+		{ArtifactOutcomes, "ffffff", "20260519T235959Z", "claude-sonnet"},
 	}
 	for _, tc := range cases {
-		name, err := ArtifactFilename(tc.kind, at, tc.human, tc.agent)
+		name, err := ArtifactFilename(tc.kind, tc.slug, tc.ts, tc.author)
 		if err != nil {
-			t.Fatalf("build %v: %v", tc, err)
+			t.Fatalf("build %+v: %v", tc, err)
 		}
 		got, ok := ParseArtifactFilename(name)
 		if !ok {
 			t.Fatalf("parse %q: not ok", name)
 		}
-		if got.Kind != tc.kind || got.Human != tc.human || got.Agent != tc.agent || !got.At.Equal(at) {
-			t.Fatalf("roundtrip mismatch:\n  in:  %+v at %v\n  out: %+v", tc, at, got)
+		if got.Kind != tc.kind || got.Slug != tc.slug || got.StartTime != tc.ts || got.Author != tc.author {
+			t.Fatalf("roundtrip mismatch:\n  in:  %+v\n  out: %+v", tc, got)
 		}
 	}
 }
@@ -244,6 +229,39 @@ func TestSanitizeAgentSlug(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseRunName(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    string
+		wantOk   bool
+		wantSlug string
+		wantTs   string
+	}{
+		{name: "canonical", input: "run_3cdf6f_20260515T103022Z", wantOk: true, wantSlug: "3cdf6f", wantTs: "20260515T103022Z"},
+		{name: "longer slug accepted", input: "run_security-v1_20260515T103022Z", wantOk: true, wantSlug: "security-v1", wantTs: "20260515T103022Z"},
+		{name: "missing prefix", input: "find_3cdf6f_20260515T103022Z"},
+		{name: "missing ts", input: "run_3cdf6f"},
+		{name: "underscore in slug", input: "run_bad_slug_20260515T103022Z"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			slug, ts, ok := ParseRunName(tc.input)
+			if ok != tc.wantOk {
+				t.Fatalf("ok mismatch: got %v, want %v", ok, tc.wantOk)
+			}
+			if !tc.wantOk {
+				return
+			}
+			if slug != tc.wantSlug {
+				t.Errorf("slug: got %q, want %q", slug, tc.wantSlug)
+			}
+			if ts != tc.wantTs {
+				t.Errorf("ts: got %q, want %q", ts, tc.wantTs)
 			}
 		})
 	}

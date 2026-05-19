@@ -91,12 +91,6 @@ func bulkReviewHandler(projectDir string) http.HandlerFunc {
 			return
 		}
 
-		human, agent, err := uiWriterIdentity(ident)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("resolve writer identity: %v", err), http.StatusInternalServerError)
-			return
-		}
-
 		now := time.Now().UTC()
 		stamp := ident.String()
 		defer rp.Close()
@@ -125,7 +119,7 @@ func bulkReviewHandler(projectDir string) http.HandlerFunc {
 				Severity: severity,
 				Comment:  comment,
 			}
-			if err := rp.AppendReviewEntry(entry, human, agent); err != nil {
+			if err := rp.AppendReviewEntry(entry); err != nil {
 				http.Error(w, fmt.Sprintf("save review for %s: %v", id, err), http.StatusInternalServerError)
 				return
 			}

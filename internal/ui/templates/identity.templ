@@ -47,14 +47,16 @@ templ Identity(v IdentityView) {
 						HasError:    v.Error != "",
 						Class:       "font-mono",
 						Attributes: templ.Attributes{
-							"pattern":      "[A-Za-z0-9_\\-]+",
+							"pattern":      "[A-Za-z0-9\\-]+",
 							"autocomplete": "off",
 							"autofocus":    true,
 						},
 					})
 					@form.Description() {
-						Letters, digits, hyphens, underscores. Becomes part of
-						@DataCode(DataCodeID, "reviews_<slug>.jsonl")
+						Letters, digits, hyphens. Becomes the
+						@DataCode(DataCodeID, "<author>")
+						segment in
+						@DataCode(DataCodeID, "reviews_<run>_<ts>_<author>.jsonl")
 						.
 					}
 					if v.Error != "" {

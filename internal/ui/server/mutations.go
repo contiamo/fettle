@@ -87,12 +87,7 @@ func reviewPostHandler(projectDir, subjectKind string) http.HandlerFunc {
 			renderReviewSwap(w, r, rp, runName, subject, err.Error(), http.StatusBadRequest)
 			return
 		}
-		human, agent, err := uiWriterIdentity(ident)
-		if err != nil {
-			renderReviewSwap(w, r, rp, runName, subject, fmt.Sprintf("resolve writer identity: %v", err), http.StatusInternalServerError)
-			return
-		}
-		if err := rp.AppendReviewEntry(entry, human, agent); err != nil {
+		if err := rp.AppendReviewEntry(entry); err != nil {
 			renderReviewSwap(w, r, rp, runName, subject, fmt.Sprintf("save failed: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -136,12 +131,7 @@ func outcomePostHandler(projectDir, subjectKind string) http.HandlerFunc {
 			renderOutcomeSwap(w, r, rp, runName, subject, err.Error(), http.StatusBadRequest)
 			return
 		}
-		human, agent, err := uiWriterIdentity(ident)
-		if err != nil {
-			renderOutcomeSwap(w, r, rp, runName, subject, fmt.Sprintf("resolve writer identity: %v", err), http.StatusInternalServerError)
-			return
-		}
-		if err := rp.AppendOutcomeEntry(entry, human, agent); err != nil {
+		if err := rp.AppendOutcomeEntry(entry); err != nil {
 			renderOutcomeSwap(w, r, rp, runName, subject, fmt.Sprintf("save failed: %v", err), http.StatusInternalServerError)
 			return
 		}

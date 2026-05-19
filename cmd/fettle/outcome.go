@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -136,11 +135,7 @@ func runAddOutcome(cmd *cobra.Command, args []string) error {
 	if err := schema.ValidateOutcomeEntry(entry); err != nil {
 		return validationError([]string{err.Error()})
 	}
-	human, agent, err := writerIdentity()
-	if err != nil {
-		return validationError([]string{err.Error()})
-	}
-	if err := rp.AppendOutcomeEntry(entry, human, agent); err != nil {
+	if err := rp.AppendOutcomeEntry(entry); err != nil {
 		return internalError(fmt.Errorf("save outcome: %w", err))
 	}
 	if err := rp.Close(); err != nil {
@@ -237,21 +232,16 @@ func runShowOutcome(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// openRunWithManifest resolves --run (relative or absolute), opens
-// the run folder, and reads its manifest. Used by every command
-// that needs the manifest (add outcome, show outcome / review,
-// list outcomes / etc.).
+// openRunWithManifest resolves --run via run.LookupRun (accepting
+// absolute / relative paths, full run names, or slug prefixes) and
+// returns the opened path plus its manifest.
 func openRunWithManifest(rawRun string) (*run.Path, schema.RunManifest, error) {
 	if rawRun == "" {
 		return nil, schema.RunManifest{}, validationError([]string{"--run is required"})
 	}
-	abs := rawRun
-	if !filepath.IsAbs(abs) {
-		dir, err := projectDir()
-		if err != nil {
-			return nil, schema.RunManifest{}, internalError(err)
-		}
-		abs = filepath.Join(dir, rawRun)
+	abs, err := run.LookupRun(rawRun, projectDir)
+	if err != nil {
+		return nil, schema.RunManifest{}, validationError([]string{fmt.Sprintf("--run %s: %v", rawRun, err)})
 	}
 	rp, err := run.Open(abs)
 	if err != nil {

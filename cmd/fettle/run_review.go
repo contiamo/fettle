@@ -281,9 +281,9 @@ func resolveReviewInputs(projectDir string) (*reviewInputs, error) {
 		}
 	}
 
-	abs := runReviewFlags.run
-	if !filepath.IsAbs(abs) {
-		abs = filepath.Join(projectDir, abs)
+	abs, err := run.LookupRun(runReviewFlags.run, func() (string, error) { return projectDir, nil })
+	if err != nil {
+		return nil, fmt.Errorf("--run %s: %w", runReviewFlags.run, err)
 	}
 	rp, err := run.Open(abs)
 	if err != nil {

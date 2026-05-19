@@ -303,9 +303,9 @@ func resolveFindInputs(projectDir string) (*findInputs, error) {
 			return nil, fmt.Errorf("cannot combine --resume with %s; the run's manifest is authoritative", strings.Join(conflicts, ", "))
 		}
 
-		abs := findFlags.resume
-		if !filepath.IsAbs(abs) {
-			abs = filepath.Join(projectDir, abs)
+		abs, err := run.LookupRun(findFlags.resume, func() (string, error) { return projectDir, nil })
+		if err != nil {
+			return nil, fmt.Errorf("--resume %s: %w", findFlags.resume, err)
 		}
 		rp, err := run.Open(abs)
 		if err != nil {

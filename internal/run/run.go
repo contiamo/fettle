@@ -50,6 +50,33 @@ type Path struct {
 // Dir returns the absolute path of the run folder.
 func (p *Path) Dir() string { return p.dir }
 
+// Slug returns the 6-char hex identifier embedded in the run
+// folder name (the `<slug>` in `run_<slug>_<ts>`). Used to key
+// artifact filenames and to reference the run from the CLI by a
+// short form (`--run <slug>`).
+//
+// Returns empty string for runs whose folder name doesn't match
+// the canonical format — defensive against hand-renames and
+// pre-canonical run folders.
+func (p *Path) Slug() string {
+	slug, _, ok := ParseRunName(filepath.Base(p.dir))
+	if !ok {
+		return ""
+	}
+	return slug
+}
+
+// StartTime returns the run-start timestamp string embedded in the
+// run folder name (the `<ts>` in `run_<slug>_<ts>`). Same caveat as
+// Slug for non-canonical folder names.
+func (p *Path) StartTime() string {
+	_, ts, ok := ParseRunName(filepath.Base(p.dir))
+	if !ok {
+		return ""
+	}
+	return ts
+}
+
 // CreateFindOpts configures Create when the first stage is `find`.
 type CreateFindOpts struct {
 	ProjectDir     string
@@ -68,7 +95,7 @@ type CreateFindOpts struct {
 // the find prompt snapshotted, run.json populated, and the empty
 // findings/ directory ready for per-finding writes.
 func CreateForFind(opts CreateFindOpts) (*Path, error) {
-	name, err := generateName("find", opts.Slug)
+	name, err := generateName(opts.Slug)
 	if err != nil {
 		return nil, err
 	}
@@ -208,22 +235,57 @@ func agentInfoFromSpec(s agent.Spec) *schema.AgentInfo {
 	}
 }
 
+// RunSlugLen is the byte length of the random hex slug embedded in
+// each run dir name. Six characters of hex give 16.7M possibilities,
+// far above the collision rate any single project would ever hit,
+// and short enough to be readable as a reference (`fettle list
+// reviews --run 3cdf6f`).
+const RunSlugLen = 6
+
 // generateName builds a run folder name like
-// `find_20260430T145233Z_<slug>`. The slug must match [A-Za-z0-9_-]+;
-// when empty, a 4-byte random hex suffix is used.
-func generateName(stage, slug string) (string, error) {
+// `run_<slug>_20260430T145233Z`. The slug must match slugRegex;
+// when empty, a random hex string of RunSlugLen characters is used.
+// The slug appears before the timestamp so the eye lands on the
+// identity-bearing part first when scanning a directory listing.
+//
+// Stage isn't encoded in the directory name — it lives only in
+// run.json's `stage` field. Runs are uniform on disk regardless of
+// what kind of work they hold.
+func generateName(slug string) (string, error) {
 	if err := validateSlug(slug); err != nil {
 		return "", err
 	}
 	ts := time.Now().UTC().Format("20060102T150405Z")
 	if slug == "" {
-		var b [4]byte
-		if _, err := rand.Read(b[:]); err != nil {
+		// RunSlugLen hex chars come from RunSlugLen/2 random bytes.
+		// Round up for an odd RunSlugLen so we have at least the
+		// requested length.
+		bytes := (RunSlugLen + 1) / 2
+		b := make([]byte, bytes)
+		if _, err := rand.Read(b); err != nil {
 			return "", fmt.Errorf("random slug: %w", err)
 		}
-		slug = hex.EncodeToString(b[:])
+		slug = hex.EncodeToString(b)[:RunSlugLen]
 	}
-	return fmt.Sprintf("%s_%s_%s", stage, ts, slug), nil
+	return fmt.Sprintf("run_%s_%s", slug, ts), nil
+}
+
+// runNameRe parses `run_<slug>_<ts>` into its slug and timestamp
+// pieces. Both are captured into named groups for clear field
+// extraction by callers; the timestamp matches the same compact
+// basic-ISO form generateName emits.
+var runNameRe = regexp.MustCompile(`^run_(?P<slug>[A-Za-z0-9-]+)_(?P<ts>\d{8}T\d{6}Z)$`)
+
+// ParseRunName splits a run folder name into its slug and start
+// timestamp. Returns ok=false when the name doesn't match the run
+// folder format — callers iterating a project's runs/ directory
+// can skip unrelated entries silently.
+func ParseRunName(name string) (slug, ts string, ok bool) {
+	m := runNameRe.FindStringSubmatch(name)
+	if m == nil {
+		return "", "", false
+	}
+	return m[runNameRe.SubexpIndex("slug")], m[runNameRe.SubexpIndex("ts")], true
 }
 
 // slugRegex is the shared validity check for run slugs and finding ids.

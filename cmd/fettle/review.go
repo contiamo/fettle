@@ -165,11 +165,7 @@ func runAddReview(cmd *cobra.Command, args []string) error {
 	if err := schema.ValidateReviewEntry(entry); err != nil {
 		return validationError([]string{err.Error()})
 	}
-	human, agent, err := writerIdentity()
-	if err != nil {
-		return validationError([]string{err.Error()})
-	}
-	if err := rp.AppendReviewEntry(entry, human, agent); err != nil {
+	if err := rp.AppendReviewEntry(entry); err != nil {
 		return internalError(fmt.Errorf("save review: %w", err))
 	}
 	if err := rp.Close(); err != nil {

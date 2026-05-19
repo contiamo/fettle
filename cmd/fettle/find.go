@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -164,19 +163,17 @@ func runListFindings(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// openRunForRead resolves a --run flag (relative to the project dir
-// or absolute) and opens it. Used by every read command (show / list).
+// openRunForRead resolves a --run flag and opens the run. The flag
+// accepts any of: an absolute or relative path, a full run dir
+// name, or a short slug; ambiguous slugs error with the list of
+// candidates. See run.LookupRun for the exact resolution rules.
 func openRunForRead(rawRun string) (*run.Path, error) {
 	if rawRun == "" {
 		return nil, validationError([]string{"--run is required"})
 	}
-	abs := rawRun
-	if !filepath.IsAbs(abs) {
-		dir, err := projectDir()
-		if err != nil {
-			return nil, internalError(err)
-		}
-		abs = filepath.Join(dir, rawRun)
+	abs, err := run.LookupRun(rawRun, projectDir)
+	if err != nil {
+		return nil, validationError([]string{fmt.Sprintf("--run %s: %v", rawRun, err)})
 	}
 	rp, err := run.Open(abs)
 	if err != nil {
@@ -278,11 +275,7 @@ func runAddFinding(cmd *cobra.Command, args []string) error {
 			CreatedAt:   time.Now().UTC(),
 		},
 	}
-	human, agent, err := writerIdentity()
-	if err != nil {
-		return validationError([]string{err.Error()})
-	}
-	if err := rp.AppendFindingEntry(entry, human, agent); err != nil {
+	if err := rp.AppendFindingEntry(entry); err != nil {
 		return internalError(fmt.Errorf("write finding: %w", err))
 	}
 	if err := rp.Close(); err != nil {
@@ -291,13 +284,13 @@ func runAddFinding(cmd *cobra.Command, args []string) error {
 	return printAddResult(map[string]any{"id": entry.ID}, addFindingFlags.verbose, entry.ID)
 }
 
-// writerIdentity returns the (human, agent) slug pair the writer
-// should stamp into the artifact filename. agent is "" for purely
-// human-driven invocations. The human comes from
-// identity.ResolveOperator (its chain falls through to the OS user
-// so brand-new installs work without prior setup); the agent comes
-// from $FETTLE_AGENT (+ $FETTLE_MODEL when set), sanitised through
-// run.SanitizeAgentSlug.
+// writerIdentity returns the (human, agent) slug pair callers need
+// when they have to compose filename segments outside the artifact
+// helpers (none today; kept for callers that may want to attribute
+// a side-channel artifact like a log file to its writer). The
+// human comes from identity.ResolveOperator; the agent comes from
+// $FETTLE_AGENT (+ $FETTLE_MODEL when set), sanitised through
+// run.SanitizeAgentSlug. Returns ("", "", nil) for unset agent.
 func writerIdentity() (human, agent string, err error) {
 	human, err = identity.ResolveOperator()
 	if err != nil {

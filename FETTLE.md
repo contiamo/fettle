@@ -47,14 +47,14 @@ audits/                         the directory you named at `fettle init` time
     find.md
     review.md
   runs/
-    find_20260430T145233Z_security-v1/
+    run_3cdf6f_20260430T145233Z/
       run.json                  manifest: who/what/when
       instructions/find.md      snapshot of the find prompt that ran
       files.jsonl               per-file scan ledger (find-stage only)
       raw/                      verbatim agent output, one log per file
-      findings_<ts>_<human>_<agent>.jsonl     emitted findings
-      reviews_<ts>_<human>[_<agent>].jsonl    review entries
-      outcomes_<ts>_<human>[_<agent>].jsonl   outcome events
+      findings_3cdf6f_20260430T145233Z.jsonl           emitted findings (one file per run)
+      reviews_3cdf6f_20260430T145233Z_<author>.jsonl   review entries (one file per author)
+      outcomes_3cdf6f_20260430T145233Z_<author>.jsonl  outcome events (one file per author)
 ```
 
 `fettle init` semantics:
@@ -79,12 +79,21 @@ defaults to the project directory itself — useful only when you
 want to audit fettle's own metadata folder, which is rarely what
 you want. Most projects point `--target` at a separate code repo.
 
-**Run folder naming:** `<stage>_<UTC-timestamp>_<slug>/` where
-`<stage>` is `find` (the only stage today). Timestamp format is
-`YYYYMMDDTHHMMSSZ` so runs sort chronologically and same-day runs
-don't collide. The slug defaults to a short random suffix; `--name
-<slug>` overrides just the slug portion. Resuming a killed `find`
-is `fettle run find --resume <project>/runs/<name>/`.
+**Run folder naming:** `run_<slug>_<UTC-timestamp>/`. The slug is
+6 random hex characters by default (16M possibilities — collisions
+within one project are effectively impossible) or a name you pass
+via `--name <slug>`. Timestamp format is `YYYYMMDDTHHMMSSZ` so
+runs sort chronologically.
+
+Run dirs are uniform regardless of stage — what kind of work a run
+holds lives in `run.json`'s `stage` field, not the folder name.
+
+**Reference runs by slug.** Anywhere a `--run` / `--resume` flag
+is accepted, you can pass the run's short slug instead of the full
+path: `fettle run find --resume 3cdf6f` finds the run whose slug
+is `3cdf6f`. Prefix matches work too (`3cd`, `3cdf`, …) as long as
+they're unambiguous; otherwise the CLI errors with the candidate
+list, same UX as `git`.
 
 ## Discovering the project directory
 
@@ -117,7 +126,7 @@ two different conventions:
 
 ```json
 {
-  "name": "find_20260430T145233Z_security-v1",
+  "name": "run_3cdf6f_20260430T145233Z",
   "stage": "find",
   "fettle_version": "0.1.0",
   "created_at":   "2026-04-30T14:52:33Z",
@@ -279,10 +288,11 @@ fettle init <path> --include GLOB [--include GLOB ...] [--exclude GLOB ...]
 # Stage runners (agent-driven)
 
 fettle run find [--name SLUG] [--include GLOB] [--exclude GLOB] [-c N] [--limit N]
-    Create <project>/runs/find_<UTC-timestamp>_<slug>/, snapshot the
-    find prompt into it, walk the target repo, and append each
-    finding the agent emits to a findings_*.jsonl stream in the run.
-    Prints the run path so you can pipe it into the next stage.
+    Create <project>/runs/run_<slug>_<UTC-timestamp>/, snapshot the
+    find prompt into it, walk the target repo, and append every
+    finding the agent emits to the run's single findings_*.jsonl
+    stream. Prints the run path so you can pipe it into the next
+    stage.
 
 fettle run find --resume <project>/runs/<name>/
     Resume a killed find. Re-uses the snapshotted prompt — editing
@@ -363,17 +373,19 @@ Each run's records live in append-only JSONL streams under the run
 directory:
 
 ```
-runs/find_<ts>_<slug>/
-  findings_<ts>_<human>_<agent>.jsonl
-  reviews_<ts>_<human>[_<agent>].jsonl
-  outcomes_<ts>_<human>[_<agent>].jsonl
+runs/run_<slug>_<ts>/
+  findings_<slug>_<ts>.jsonl                # one file per run
+  reviews_<slug>_<ts>_<author>.jsonl        # one file per (run, author)
+  outcomes_<slug>_<ts>_<author>.jsonl       # one file per (run, author)
 ```
 
-Files are named `<kind>_<UTC-µs>_<human>[_<agent>].jsonl`. Each
-fettle process invocation that writes a stream opens a fresh file on
-first append and keeps appending to it for the lifetime of the
-process. Sharing reviews between teammates is `cp` — drop a review
-file into the run directory and the next read picks it up.
+The slug + timestamp embedded in every filename come from the run
+folder itself — every artifact is self-identifying when copied out.
+Findings carry no author segment because there's one findings file
+per run regardless of which writer contributed; reviews and outcomes
+carry the writer's author slug so each reviewer's file stays
+distinct and shareable individually (`cp alice's reviews.jsonl`
+into another teammate's checkout, the next read picks it up).
 
 Every JSONL line is self-describing as `{kind, id, ...}`:
 
@@ -459,24 +471,35 @@ retried.
 ### Atomicity and concurrency
 
 Writes are append-only JSONL: `os.OpenFile(..., O_APPEND, ...)` plus
-`json.Encoder.Encode`. Coherence comes from two layers that
-together cover every actual write path:
+`json.Encoder.Encode`. The filename for each (run, kind, author)
+combination is deterministic — every writer in the same run for the
+same author resolves to the same file — so multiple processes (e.g.
+the harness spawning N parallel `find` agents that each shell out
+to `fettle add finding`) all append to the same on-disk stream.
+
+Coherence comes from two layers:
 
 - **Same `run.Path` (one process, one open stream):** writes
   serialise through an in-process mutex on the Path, so two
   goroutines sharing the same opened stream can't race on the JSON
-  encoder. This is the case the UI server and any in-process
-  parallelism would otherwise hit.
-- **Different processes / different `run.Path` opens:** each
-  invocation lazily opens a fresh stream file. The
-  microsecond-precision timestamp in the filename keeps the files
-  distinct, so two writers never share a file to contend on in the
-  first place — and the reader gathers entries from every file in
-  the run on load.
+  encoder. This covers the UI server and any in-process
+  parallelism.
+- **Across processes:** each write is one `write(2)` to a file
+  opened with `O_APPEND`. POSIX guarantees the offset is atomically
+  advanced to end-of-file before each write, so concurrent writers
+  can't overwrite each other's bytes. POSIX does *not* strictly
+  guarantee that one write's buffer is atomic against a concurrent
+  writer's; on Linux and macOS that interleaving doesn't happen for
+  entry-sized buffers in practice, but the design doesn't rely on
+  it as an invariant.
 
-A torn final line from a crashed writer is skipped silently by the
-read path — the malformed line is logged to stderr and the rest of
-the file parses normally.
+The read path is the backstop that makes the whole story safe
+regardless: a torn or interleaved line is skipped silently — the
+malformed line is logged to stderr and the rest of the file
+parses normally. So multi-writer correctness rests on two things
+fettle does control (the `O_APPEND` offset guarantee + the
+tolerant reader), not on platform-specific buffer-atomicity
+promises.
 
 ## Web UI
 

@@ -54,7 +54,7 @@ func envSet(t *testing.T, k, v string) {
 // returns (projectDir, runName, findingID).
 func makeFindRun(t *testing.T) (string, string, string) {
 	t.Helper()
-	projectDir, runName := makeRunDir(t, "find_20260101T000000Z_test")
+	projectDir, runName := makeRunDir(t, "run_test01_20260101T000000Z")
 	findingID := "abc123"
 	writeFindingEntry(t, projectDir, runName, findingID, "")
 	return projectDir, runName, findingID
@@ -64,7 +64,7 @@ func makeFindRun(t *testing.T) (string, string, string) {
 // bulk-action tests. Returns (projectDir, runName, ids).
 func makeFindRunMulti(t *testing.T, ids ...string) (string, string, []string) {
 	t.Helper()
-	projectDir, runName := makeRunDir(t, "find_20260101T000000Z_bulk")
+	projectDir, runName := makeRunDir(t, "run_bulk01_20260101T000000Z")
 	for _, id := range ids {
 		writeFindingEntry(t, projectDir, runName, id, "medium")
 	}
@@ -124,7 +124,7 @@ func writeFindingEntry(t *testing.T, projectDir, runName, id, severity string) {
 			CreatedAt:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		},
 	}
-	if err := rp.AppendFindingEntry(entry, "test-fixture", "claude"); err != nil {
+	if err := rp.AppendFindingEntry(entry); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -433,7 +433,7 @@ func mustAppendReviewEntry(t *testing.T, rp *run.Path, e schema.ReviewEntry) {
 	if human == "" {
 		human = "test"
 	}
-	if err := rp.AppendReviewEntry(e, human, ""); err != nil {
+	if err := rp.AppendReviewEntry(e); err != nil {
 		t.Fatalf("AppendReviewEntry: %v", err)
 	}
 }

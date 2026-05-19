@@ -13,12 +13,26 @@ import (
 	"github.com/contiamo/fettle/internal/schema"
 )
 
+// testRunSlug / testRunTs are the canonical slug + timestamp used
+// for every test fixture run directory in this package. Hard-coded
+// so the expected artifact filenames in assertions don't move when
+// the random slug or wall-clock time changes.
+const (
+	testRunSlug = "aaa111"
+	testRunTs   = "20260101T000000Z"
+)
+
 // newTestRun creates a bare run directory layout sufficient for the
-// appenders to write into. Real runs are created via CreateForFind,
-// but the append paths only need the directory to exist.
+// appenders to write into. The directory name matches the canonical
+// `run_<slug>_<ts>` shape so `Path.Slug()` / `Path.StartTime()`
+// resolve correctly without needing a manifest.
 func newTestRun(t *testing.T) *Path {
 	t.Helper()
-	dir := t.TempDir()
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "run_"+testRunSlug+"_"+testRunTs)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	return &Path{dir: dir}
 }
 
@@ -34,7 +48,7 @@ func TestAppendReviewEntry_RoundTrip(t *testing.T) {
 		Add:    []string{"priority:p1"},
 		Remove: []string{},
 	}
-	if err := rp.AppendReviewEntry(e, "michael", ""); err != nil {
+	if err := rp.AppendReviewEntry(e); err != nil {
 		t.Fatalf("append: %v", err)
 	}
 	if err := rp.Close(); err != nil {
@@ -49,14 +63,15 @@ func TestAppendReviewEntry_RoundTrip(t *testing.T) {
 		t.Fatalf("want 1 file, got %d", len(files))
 	}
 	name := files[0].Name()
-	if !strings.HasPrefix(name, "reviews_") || !strings.HasSuffix(name, "_michael.jsonl") {
-		t.Errorf("filename %q doesn't match shape", name)
+	wantName := "reviews_" + testRunSlug + "_" + testRunTs + "_michael.jsonl"
+	if name != wantName {
+		t.Errorf("filename mismatch:\n  got:  %s\n  want: %s", name, wantName)
 	}
 	meta, ok := ParseArtifactFilename(name)
 	if !ok {
 		t.Fatalf("file %q doesn't parse as artifact", name)
 	}
-	if meta.Kind != ArtifactReviews || meta.Human != "michael" || meta.Agent != "" {
+	if meta.Kind != ArtifactReviews || meta.Slug != testRunSlug || meta.Author != "michael" {
 		t.Errorf("metadata mismatch: %+v", meta)
 	}
 
@@ -71,7 +86,6 @@ func TestAppendReviewEntry_RoundTrip(t *testing.T) {
 	if got.ID != "abc" || got.Author != "human:michael" {
 		t.Errorf("entry round-trip mismatch: %+v", got)
 	}
-	// Empty arrays must marshal as `[]`, not `null`.
 	if !strings.Contains(string(data), `"add":["priority:p1"]`) {
 		t.Errorf("add not marshalled as array: %s", data)
 	}
@@ -92,10 +106,9 @@ func TestAppendReviewEntry_RejectsInvalid(t *testing.T) {
 		Add:    nil, // nil triggers validator
 		Remove: []string{},
 	}
-	if err := rp.AppendReviewEntry(bad, "michael", ""); err == nil {
+	if err := rp.AppendReviewEntry(bad); err == nil {
 		t.Fatalf("want error for nil add")
 	}
-	// And no file should have been created on disk.
 	files, _ := os.ReadDir(rp.dir)
 	for _, f := range files {
 		if strings.HasPrefix(f.Name(), "reviews_") {
@@ -117,7 +130,7 @@ func TestAppendEntry_MultipleAppendsShareOneFile(t *testing.T) {
 			Add:    []string{"x"},
 			Remove: []string{},
 		}
-		if err := rp.AppendReviewEntry(e, "michael", ""); err != nil {
+		if err := rp.AppendReviewEntry(e); err != nil {
 			t.Fatalf("append: %v", err)
 		}
 	}
@@ -136,7 +149,6 @@ func TestAppendEntry_MultipleAppendsShareOneFile(t *testing.T) {
 		t.Fatalf("want 1 file, got %d: %v", len(reviewFiles), reviewFiles)
 	}
 
-	// Five entries, five lines.
 	data, _ := os.ReadFile(filepath.Join(rp.dir, reviewFiles[0]))
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	lines := 0
@@ -148,25 +160,21 @@ func TestAppendEntry_MultipleAppendsShareOneFile(t *testing.T) {
 	}
 }
 
-func TestAppendEntry_DifferentIdentitiesGetDifferentFiles(t *testing.T) {
+func TestAppendEntry_DifferentAuthorsGetDifferentFiles(t *testing.T) {
 	rp := newTestRun(t)
 	t.Cleanup(func() { _ = rp.Close() })
 
-	for _, who := range []struct{ human, agent string }{
-		{"michael", ""},
-		{"michael", "claude-sonnet"},
-		{"alice", ""},
-	} {
+	for _, author := range []string{"human:michael", "agent:claude/sonnet", "human:alice"} {
 		e := schema.ReviewEntry{
 			Kind:   schema.SubjectFinding,
 			ID:     "abc",
-			Author: "human:" + who.human,
+			Author: author,
 			At:     time.Now().UTC(),
 			Add:    []string{"x"},
 			Remove: []string{},
 		}
-		if err := rp.AppendReviewEntry(e, who.human, who.agent); err != nil {
-			t.Fatalf("append for %+v: %v", who, err)
+		if err := rp.AppendReviewEntry(e); err != nil {
+			t.Fatalf("append for %s: %v", author, err)
 		}
 	}
 	if err := rp.Close(); err != nil {
@@ -180,7 +188,7 @@ func TestAppendEntry_DifferentIdentitiesGetDifferentFiles(t *testing.T) {
 		}
 	}
 	if len(reviews) != 3 {
-		t.Errorf("want 3 distinct files, got %d: %v", len(reviews), reviews)
+		t.Errorf("want 3 distinct files (one per author slug), got %d: %v", len(reviews), reviews)
 	}
 }
 
@@ -203,7 +211,7 @@ func TestAppendEntry_ConcurrentWritesSerialised(t *testing.T) {
 				Add:    []string{"x"},
 				Remove: []string{},
 			}
-			if err := rp.AppendReviewEntry(e, "michael", ""); err != nil {
+			if err := rp.AppendReviewEntry(e); err != nil {
 				errs <- err
 			}
 		}()
@@ -241,7 +249,7 @@ func TestAppendEntry_ConcurrentWritesSerialised(t *testing.T) {
 	}
 }
 
-func TestAppendFindingEntry_FlatJSON(t *testing.T) {
+func TestAppendFindingEntry_FlatJSONOneFilePerRun(t *testing.T) {
 	rp := newTestRun(t)
 	t.Cleanup(func() { _ = rp.Close() })
 
@@ -262,27 +270,35 @@ func TestAppendFindingEntry_FlatJSON(t *testing.T) {
 			CreatedAt:   time.Now().UTC(),
 		},
 	}
-	if err := rp.AppendFindingEntry(e, "michael", "claude-sonnet"); err != nil {
-		t.Fatalf("append: %v", err)
+	// Two appends — should share one file, since findings is one per run.
+	if err := rp.AppendFindingEntry(e); err != nil {
+		t.Fatalf("append 1: %v", err)
+	}
+	e.ID = "def"
+	if err := rp.AppendFindingEntry(e); err != nil {
+		t.Fatalf("append 2: %v", err)
 	}
 	if err := rp.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	var name string
+	var findingFiles []string
 	files, _ := os.ReadDir(rp.dir)
 	for _, f := range files {
 		if strings.HasPrefix(f.Name(), "findings_") {
-			name = f.Name()
+			findingFiles = append(findingFiles, f.Name())
 		}
 	}
-	if name == "" {
-		t.Fatalf("no findings file written")
+	if len(findingFiles) != 1 {
+		t.Fatalf("want 1 findings file (one-per-run), got %d", len(findingFiles))
 	}
-	data, _ := os.ReadFile(filepath.Join(rp.dir, name))
-	// JSON should be flat: `kind` and `id` at top level.
+	wantName := "findings_" + testRunSlug + "_" + testRunTs + ".jsonl"
+	if findingFiles[0] != wantName {
+		t.Errorf("filename: got %q, want %q", findingFiles[0], wantName)
+	}
+	data, _ := os.ReadFile(filepath.Join(rp.dir, wantName))
 	s := string(data)
-	if !strings.Contains(s, `"kind":"finding"`) || !strings.Contains(s, `"id":"abc"`) {
-		t.Errorf("flat JSON shape missing: %s", s)
+	if !strings.Contains(s, `"id":"abc"`) || !strings.Contains(s, `"id":"def"`) {
+		t.Errorf("file missing one of the appended entries: %s", s)
 	}
 }
 
@@ -296,7 +312,30 @@ func TestAppendOutcomeEntry_RejectsInvalid(t *testing.T) {
 		At:     time.Now().UTC(),
 		Status: "",
 	}
-	if err := rp.AppendOutcomeEntry(bad, "michael", ""); err == nil {
+	if err := rp.AppendOutcomeEntry(bad); err == nil {
 		t.Fatalf("want error for empty status")
+	}
+}
+
+func TestAppendEntry_RejectsBadRunDir(t *testing.T) {
+	// Path whose dir name doesn't match `run_<slug>_<ts>` should
+	// surface a clear error from the appender, since the filename
+	// derivation relies on parsing the dir.
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "not-a-canonical-name")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rp := &Path{dir: dir}
+	e := schema.FindingEntry{
+		Kind: schema.SubjectFinding,
+		Finding: schema.Finding{
+			ID: "x", File: "y.go", Line: 1, Title: "t",
+			CreatedAt: time.Now().UTC(),
+			Labels:    []string{}, References: []schema.Reference{},
+		},
+	}
+	if err := rp.AppendFindingEntry(e); err == nil {
+		t.Fatalf("want error for non-canonical run dir, got nil")
 	}
 }

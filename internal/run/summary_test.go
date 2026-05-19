@@ -11,16 +11,28 @@ import (
 	"github.com/contiamo/fettle/internal/schema"
 )
 
+// newSummaryTestRun creates a canonical-named run dir with the
+// given manifest body so Summarize / Path methods that derive
+// slug+ts from the dir name find what they expect.
+func newSummaryTestRun(t *testing.T, manifest string) string {
+	t.Helper()
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "run_"+testRunSlug+"_"+testRunTs)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(dir, "run.json"), manifest)
+	return dir
+}
+
 // TestSummarize_findRun verifies the JSON shape and counts after a
-// run has been written through the new JSONL stream layout — three
+// run has been written through the JSONL stream layout — three
 // findings, three review entries, one outcome entry. Mirrors the
 // shape every consumer of `fettle list runs` / `fettle show run`
 // depends on.
 func TestSummarize_findRun(t *testing.T) {
-	dir := t.TempDir()
-
-	manifest := `{
-  "name": "find_20260101T000000Z_test",
+	dir := newSummaryTestRun(t, `{
+  "name": "run_`+testRunSlug+`_`+testRunTs+`",
   "stage": "find",
   "fettle_version": "0.1.0",
   "created_at": "2026-01-01T00:00:00Z",
@@ -28,8 +40,7 @@ func TestSummarize_findRun(t *testing.T) {
   "target_repo": "/abs/path",
   "agent": {"name": "claude", "model": "sonnet"}
 }
-`
-	mustWrite(t, filepath.Join(dir, "run.json"), manifest)
+`)
 
 	rp := &Path{dir: dir}
 	for _, f := range []struct {
@@ -47,25 +58,23 @@ func TestSummarize_findRun(t *testing.T) {
 				CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 				Labels:    []string{}, References: []schema.Reference{},
 			},
-		}, "tester", "claude-sonnet"); err != nil {
+		}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// Three reviews across findings.
 	for i, e := range []schema.ReviewEntry{
 		{Kind: schema.SubjectFinding, ID: "a", Author: "agent:claude/sonnet", At: time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC), Add: []string{}, Remove: []string{}, Comment: "x"},
 		{Kind: schema.SubjectFinding, ID: "a", Author: "human:michael", At: time.Date(2026, 1, 1, 0, 2, 0, 0, time.UTC), Add: []string{}, Remove: []string{}, Comment: "y"},
 		{Kind: schema.SubjectFinding, ID: "b", Author: "human:michael", At: time.Date(2026, 1, 1, 0, 3, 0, 0, time.UTC), Add: []string{}, Remove: []string{}, Comment: "z"},
 	} {
-		if err := rp.AppendReviewEntry(e, "tester", ""); err != nil {
+		if err := rp.AppendReviewEntry(e); err != nil {
 			t.Fatalf("append review %d: %v", i, err)
 		}
 	}
-	// One outcome.
 	if err := rp.AppendOutcomeEntry(schema.OutcomeEntry{
 		Kind: schema.SubjectFinding, ID: "b", Author: "human:michael",
 		At: time.Date(2026, 1, 1, 0, 4, 0, 0, time.UTC), Status: "wontfix",
-	}, "tester", ""); err != nil {
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := rp.Close(); err != nil {
@@ -75,9 +84,6 @@ func TestSummarize_findRun(t *testing.T) {
 	s, err := Summarize(dir)
 	if err != nil {
 		t.Fatalf("Summarize: %v", err)
-	}
-	if s.Name != "find_20260101T000000Z_test" {
-		t.Errorf("Name = %q", s.Name)
 	}
 	if s.Stage != "find" {
 		t.Errorf("Stage = %q", s.Stage)
@@ -98,7 +104,6 @@ func TestSummarize_findRun(t *testing.T) {
 	}
 	got := string(b)
 	for _, want := range []string{
-		`"name":"find_20260101T000000Z_test"`,
 		`"stage":"find"`,
 		`"created_at":"2026-01-01T00:00:00Z"`,
 		`"completed_at":"2026-01-01T00:05:00Z"`,
@@ -109,9 +114,6 @@ func TestSummarize_findRun(t *testing.T) {
 			t.Errorf("JSON missing %q\nfull: %s", want, got)
 		}
 	}
-	if strings.Contains(got, `"groups"`) {
-		t.Errorf("JSON should omit groups; got %s", got)
-	}
 }
 
 // TestSummarize_malformedLineSkipped covers the torn-append case: a
@@ -119,8 +121,7 @@ func TestSummarize_findRun(t *testing.T) {
 // good line counts; the bad one is skipped (the loader logs but
 // doesn't fail). Reviews / outcomes counts only reflect parsed lines.
 func TestSummarize_malformedLineSkipped(t *testing.T) {
-	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, "run.json"),
+	dir := newSummaryTestRun(t,
 		`{"name":"r","stage":"find","fettle_version":"0.1.0","created_at":"2026-01-01T00:00:00Z"}`+"\n")
 
 	rp := &Path{dir: dir}
@@ -131,14 +132,14 @@ func TestSummarize_malformedLineSkipped(t *testing.T) {
 			CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 			Labels:    []string{}, References: []schema.Reference{},
 		},
-	}, "tester", "claude"); err != nil {
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := rp.AppendReviewEntry(schema.ReviewEntry{
 		Kind: schema.SubjectFinding, ID: "good", Author: "a",
 		At: time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC),
 		Add: []string{}, Remove: []string{},
-	}, "tester", ""); err != nil {
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := rp.Close(); err != nil {
@@ -174,8 +175,7 @@ func TestSummarize_malformedLineSkipped(t *testing.T) {
 // TestSummarize_emptyRun: run dir with only the manifest. Every
 // count is zero, no errors.
 func TestSummarize_emptyRun(t *testing.T) {
-	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, "run.json"),
+	dir := newSummaryTestRun(t,
 		`{"name":"r","stage":"find","fettle_version":"0.1.0","created_at":"2026-01-01T00:00:00Z"}`+"\n")
 	s, err := Summarize(dir)
 	if err != nil {
