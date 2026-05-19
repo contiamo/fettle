@@ -1,50 +1,98 @@
 <!--
   This file is the "what to evaluate" half of fettle's review-stage
-  prompt. fettle wraps it in a frozen frame that handles the agent
-  contract — variable values, the `fettle add review` recording
-  protocol, and exit-code handling. You only describe the rubric.
+  prompt. fettle wraps it in a frozen frame that handles variables
+  and the agent contract — you describe the rubric.
 
-  Replace everything below with your domain.
+  Replace the placeholders below with your domain.
 -->
 
-For each subject (a finding from a find / merge / dedupe run),
-decide which labels to apply and whether to write a comment.
+For each subject (one finding from the find stage), read the
+finding's title, description, suggestion, and the referenced
+code. Decide the triage outcome, optionally adjust severity, and
+optionally leave a comment. Record everything via one
+`fettle add review` call. After recording, stop.
 
-## Label vocabulary
+A review agent's superpower over the find agent is **dropping
+noise**. The find stage is tuned to over-report; the review stage
+is tuned to be skeptical. If a finding doesn't hold up, label it
+out — don't just rubber-stamp.
 
-Define what each label means. For example:
+## Triage outcomes
 
-- `confirmed` — the issue is real and worth fixing.
-- `false-positive` — the upstream agent misread the code; nothing
-  to fix.
-- `out-of-scope` — real issue, but explicitly not in scope for this
-  audit (legacy module, generated code, deprecated path).
-- `needs-human` — the call requires reviewer judgment beyond the
-  rubric here; flag for human review in the UI.
+Pick a small fixed vocabulary of labels that describe what should
+happen with each finding. Document each one here so the agent
+applies them consistently. Example shape (steal or replace):
 
-Add domain-specific labels as needed (e.g.
-`security-impact:exploitable`, `effort:trivial`).
+- `verdict:ship` — confirmed, worth fixing. The fix should go
+  through normal code review.
+- `verdict:ship-auto` — confirmed AND obviously safe (pure rename,
+  dead-code removal, mechanical refactor with no behavior change).
+  A future automation step could ship these without review.
+- `verdict:drop` — false positive, out of scope, or not worth
+  fixing. Explain in `--comment`.
+- `verdict:needs-human` — the call requires human judgment beyond
+  the rubric here. Flag for human review in the UI.
+
+Apply exactly one verdict label per finding. Add a `--comment`
+when the verdict isn't self-explanatory.
+
+## Adjusting severity
+
+The find agent's severity is a starting point, not a verdict. Use
+`--severity` to overwrite when you disagree:
+
+- The finding is real but the find agent overstated impact →
+  downgrade.
+- The finding is real and the find agent undersold a bug or unsafe
+  assumption → upgrade.
+
+Leave severity unset when you agree with the find agent.
+
+## Adding / removing labels
+
+Beyond your verdict vocabulary, use `--add-label` for cross-cutting
+attributes that affect what the UI surfaces:
+
+- `confidence:high` / `confidence:low` — how sure you are.
+- `effort:trivial` / `effort:medium` / `effort:large` — to help
+  the human prioritise.
+- Domain-specific things your project tracks.
+
+Use `--remove-label` to drop a label the find agent added that
+you disagree with (e.g. find said `category:convention` but you
+think it's `category:smell`).
 
 ## When to write a comment
 
-The review entry's `--comment` is free-form. Use it when:
+Free-form `--comment` is useful when:
 
-- You're applying `false-positive` and want to explain why (the
-  source agent will see it on the next run if the same issue
-  resurfaces).
-- The label needs context — `needs-human` is much more useful with
-  a sentence on what specifically needs the reviewer's eye.
-- The fix should differ from the upstream agent's `suggestion`.
+- Applying `verdict:drop` — explain why so the find agent learns
+  on the next run.
+- Applying `verdict:needs-human` — say specifically what the human
+  needs to look at.
+- The fix differs from the find agent's `suggestion` — say what
+  the actual fix is.
+- Severity changed — one-sentence justification.
 
-Skip it when the label is self-explanatory.
+Skip the comment when the verdict label is self-explanatory.
 
-## What NOT to do
+## Recording protocol
 
-- Don't relabel things that already have a confident label from
-  another reviewer — pick your own opinion only if you disagree.
-- Don't review out-of-scope subjects with `confirmed`. Use
-  `out-of-scope` so downstream stages can drop them.
-- Don't write a comment alone if no label change applies — at least
-  one of `--add-label`, `--remove-label`, `--severity`, or
-  `--comment` is required by the harness, so a comment-only entry
-  is fine; an empty submit is rejected.
+For each subject, run one shell command:
+
+```bash
+fettle add review \
+  --finding '{{.SubjectID}}' \
+  --add-label 'verdict:ship' \
+  --add-label 'confidence:high' \
+  --severity medium \
+  --comment 'Confirmed. Fix as proposed.'
+```
+
+Required: `--finding <id>` plus at least one of `--add-label`,
+`--remove-label`, `--severity`, or `--comment`. An empty submit is
+rejected. Same single-quote rules as the find stage.
+
+## When done
+
+Stop. Don't summarise, don't explain.
