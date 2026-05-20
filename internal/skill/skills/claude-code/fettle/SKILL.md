@@ -78,19 +78,13 @@ Whatever they pick is `<project>` for the rest of this skill — an absolute pat
 
 ### 2. Decide include / exclude globs
 
-Auto-propose based on language. Show the list to the user and let them refine. **Defaults below.**
+Auto-propose `--include` / `--exclude` based on the languages you detected in step 0 (source globs in, generated / vendored / build output out). Show the proposed list to the user and let them refine.
 
 **Don't reflexively exclude tests** (`**/*_test.go`, `**/*.test.ts`, `test_*.py`, etc.). Tests are first-class scan targets — the default find prompt has a test-quality section that catches duplicate tests, trivial tests, and over-complex tests. Only exclude them if the user explicitly says they want test files out of scope (e.g. "I only care about production code right now"). If a *specific* test directory is genuinely out of scope, prefer excluding that directory by name over excluding the whole `_test.*` class.
 
 With the default git walker (the one you usually want), a common `.gitignore` already drops `node_modules`, `dist`, `vendor` (if ignored), `__pycache__`, etc. You usually only need fettle-specific excludes: vendored UI components, generated code that's checked in.
 
-| Language   | Suggested `--include`                       | Common `--exclude` (only what's not in `.gitignore`) |
-|------------|---------------------------------------------|------------------------------------------------------|
-| Go         | `**/*.go`                                   | `**/*_templ.go`, `**/*.pb.go`, `**/mock_*.go`, `**/mocks/**`, `vendor/**` |
-| TypeScript | `src/**/*.{ts,tsx}`                         | `**/*.d.ts`, `**/__generated__/**`                   |
-| Python     | `**/*.py`                                   | `**/migrations/**`, `**/_pb2.py`                     |
-
-For mixed-language repos, pass `--include` multiple times. For anything not in the table, read the repo (Glob for the dominant extensions) and improvise the same shape: include the source globs, exclude generated and vendored code.
+**Scan the repo for generated code before locking the exclude list.** Generated-file patterns are framework-specific — proto, OpenAPI, GraphQL, sqlc, templ, etc. Look for generator config files, "DO NOT EDIT" markers, and framework-specific naming, then surface what you find to the user before adding to `--exclude`. They may want some categories scanned anyway (e.g. an OpenAPI-spec audit).
 
 **Broad or non-code includes** (e.g. `**/*.md` for a documentation audit, `**/*` for a general pass): always exclude the fettle project directory so fettle doesn't scan its own config, prompts, and run output. Use the project's path *relative to* `<repo>`:
 
