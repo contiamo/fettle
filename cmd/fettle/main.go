@@ -37,6 +37,7 @@ named at ` + "`fettle init`" + ` time; it's marked by a fettle.json
 file at its root.
 
 See FETTLE.md at the repo root for the full design.`,
+	Version:       project.Version,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 }
