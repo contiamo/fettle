@@ -12,7 +12,7 @@ Fettle is a file-oriented LLM audit harness: it runs an agent per file matching 
    go install github.com/contiamo/fettle/cmd/fettle@latest
    ```
 
-   Confirm with `which fettle`. Requires Go 1.22+.
+   `@latest` resolves to the most recent tagged release. For the development tip (unreleased work on `main`) use `@main` instead. Confirm with `which fettle && fettle --version`. Requires Go 1.22+.
 
 2. **Ask the user whether to install the skill globally or just for this project** (recommend global unless they have a reason to scope it). Then run the matching command:
 

@@ -15,7 +15,16 @@ Then walk me through setting up fettle on this project.
 
 Each finding lands as one JSONL line — `file`, `line`, `title`, `description`, `suggestion`, `severity`, `labels`. Append-only on disk, browsable in the UI, re-runnable.
 
-The agent will install fettle, install the fettle skill into its own skill directory, then walk you through choosing what to scan, tailoring the find prompt to your domain, doing a smoke test, running the real find pass, and launching the UI. You don't type a fettle command yourself. If you'd rather drive manually, see [`FETTLE.md`](FETTLE.md) for the full CLI.
+The agent will install fettle, install the fettle skill into its own skill directory, then walk you through choosing what to scan, tailoring the find prompt to your domain, doing a smoke test, running the real find pass, and launching the UI. You don't type a fettle command yourself.
+
+If you'd rather drive manually, see [`FETTLE.md`](FETTLE.md) for the full CLI. Quick install:
+
+```bash
+go install github.com/contiamo/fettle/cmd/fettle@latest   # latest tagged release
+go install github.com/contiamo/fettle/cmd/fettle@main     # development tip
+```
+
+`fettle --version` reports the version, git commit, and dirty state of the binary you built.
 
 ## Key concepts
 

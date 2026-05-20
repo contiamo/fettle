@@ -37,7 +37,9 @@ named at ` + "`fettle init`" + ` time; it's marked by a fettle.json
 file at its root.
 
 See FETTLE.md at the repo root for the full design.`,
-	Version:       project.Version,
+	// Version is populated in init() from runtime build info so the
+	// printed value reflects how the binary was actually built
+	// (tagged release, pseudo-version, or local devel).
 	SilenceUsage:  true,
 	SilenceErrors: true,
 }
@@ -75,6 +77,7 @@ var showCmd = &cobra.Command{
 }
 
 func init() {
+	rootCmd.Version = versionDetails()
 	rootCmd.PersistentFlags().StringVar(&rootFlags.projectDir, "project-dir", "", "fettle project directory (overrides $FETTLE_PROJECT_DIR and the upward-walk from cwd)")
 	rootCmd.PersistentFlags().BoolVar(&rootFlags.json, "json", false, "emit structured JSON to stdout (envelope: {\"data\": ...})")
 
