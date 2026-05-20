@@ -45,7 +45,7 @@ The skill below has three points where you **must** send a message and wait for 
 2. **Find categories + prompt diff** (step 4) — which categories to scan for, and explicit acknowledgment of the rewritten `find.md` before any run. Two sub-gates.
 3. **Smoke-test verdict** (step 5) — paste findings (or a "zero findings" note with a raw-log excerpt) and ask whether they match what the user wanted. Don't self-diagnose past the user.
 
-A fourth conditional gate applies in step 6: if the real run is **large** (500+ files), STOP and confirm before kicking off — and never silently rescope the run to dodge it. Don't quote dollar figures as a fact; most users are on subscriptions where dollars aren't the right unit.
+A fourth conditional gate applies in step 6: if the real run is **large** (500+ files), STOP and confirm before kicking off — and never silently rescope the run to dodge it. Surface dollar estimates as an *indication of scale*, not as a literal bill — most users are on subscriptions where dollars aren't the actual unit.
 
 At each gate: send your message, then **stop calling tools** until the user responds. **Do not pre-create a todo list that spans multiple gates** — each gate's outcome may invalidate the rest of the plan, and momentum from a pre-built list is the most reliable way to skip stops.
 
@@ -188,11 +188,13 @@ Before starting the real find run, estimate **size and duration** and surface bo
 - **File count:** use the `Glob` tool with `<repo>` as the base and one of your `--include` patterns; it overcounts vs. fettle's git walker (no `.gitignore` filtering), so present it as an upper bound.
 - **Duration:** roughly `(file_count × 60s) / concurrency`.
 
-**Budget gate.** A real find run consumes meaningful agent budget — subscription quota for most users (Claude Code, Codex, Gemini), pay-as-you-go API spend for the rest. Don't quote a hard dollar figure as if it's a bill; subscription users will read it as a literal charge and panic. Instead frame the gate around scale and impact:
+**Budget gate.** Tell the user three numbers when you're about to start a real run: **file count, estimated duration, and a rough dollar indication** (roughly `file_count × $0.30` at Sonnet API pricing — varies with file size). The dollar number is genuinely useful as a sense of scale, but **always frame it as an indication, not a bill**: most users are on subscriptions (Claude Code, Codex, Gemini) where it isn't a real charge, just a proxy for how much agent quota the run will eat. Phrase it like *"~$X at Sonnet API pricing — for subscription users, that's a sense of scale, not a charge; for pay-as-you-go API users, a rough actual estimate."*
 
-- **Small (≤50 files):** kick off without asking.
-- **Medium (50–500 files):** mention the scale and duration when starting, no explicit ask.
-- **Large (500+ files):** **STOP and confirm**. Say something like *"This is ~N files, roughly ~M minutes — a substantial run that will use noticeable agent quota. Proceed, or scope to a subtree?"* and wait. If the user asks for a dollar estimate, you can offer "if you're on direct API billing, roughly file_count × $0.20–$0.40 at Sonnet pricing — meaningless on a subscription." Don't volunteer the dollar number; let the user ask.
+Gate by run size:
+
+- **Small (≤50 files):** mention file count and duration, kick off. Dollar indication is optional.
+- **Medium (50–500 files):** include the three-number summary when starting, no explicit ask.
+- **Large (500+ files):** **STOP and confirm**. Surface the three numbers, then ask *"Proceed, or scope to a subtree?"* and wait for the answer.
 
 **Never silently rescope** to dodge a large run — that hides the trade-off. If the user wants to scope down, override `--include` at run time and give the run a recognizable name:
 
