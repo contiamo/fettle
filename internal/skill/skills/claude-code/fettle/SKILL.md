@@ -144,11 +144,18 @@ Once the user has picked, **edit `<project>/instructions/find.md` directly** (us
 
 ### 5. Smoke test
 
+**Pick the smoke files deliberately.** `--limit 3` on its own scans whatever the walker yields first — often trivial files (`__init__.py`, stubs, generated headers) that exercise none of the prompt's categories and give the smoke run no signal. Use `Glob` / `Grep` / `Read` to pick 3 substantial files that actually exercise the categories you pinned in `find.md` — ideally one per category, or a "rich" file that touches several. For a "test quality" category pick a non-trivial test; for "conventions" pick a file you suspect violates them; for "duplication" pick a file you suspect has cousins elsewhere.
+
+Pass them as explicit `--include`s alongside `--limit 3 -c 1`:
+
 ```bash
-fettle --project-dir <project> run find --limit 3 -c 1
+fettle --project-dir <project> run find --limit 3 -c 1 \
+  --include 'path/to/service.py' \
+  --include 'path/to/service_test.py' \
+  --include 'path/to/route.py'
 ```
 
-This runs the find agent on 3 files with concurrency 1. Takes ~60–180s. Run it in the foreground and surface progress. When it finishes, the command prints a full run path like `<project>/runs/run_3cdf6f_20260519T120000Z` — **capture that path**; you'll need it to inspect raw logs. The slug (`3cdf6f`) is what `--run` flags accept.
+This runs the find agent on those 3 files with concurrency 1. Takes ~60–180s. Run it in the foreground and surface progress. When it finishes, the command prints a full run path like `<project>/runs/run_3cdf6f_20260519T120000Z` — **capture that path**; you'll need it to inspect raw logs. The slug (`3cdf6f`) is what `--run` flags accept.
 
 Show the findings:
 
@@ -288,7 +295,8 @@ fettle init <project> --target <repo> --agent claude --model sonnet --walker fs 
 
 # Stages
 fettle --project-dir <project> run find -c 4                            # real find pass
-fettle --project-dir <project> run find --limit 3 -c 1                  # smoke test
+fettle --project-dir <project> run find --limit 3 -c 1 \
+  --include '<file1>' --include '<file2>' --include '<file3>'           # smoke test (pick files deliberately)
 fettle --project-dir <project> run find --resume <slug> -c 4            # resume interrupted run
 fettle --project-dir <project> run find -c 4 \
   --include '<subtree>/**' --name <slug>                                # scoped real run with named slug
