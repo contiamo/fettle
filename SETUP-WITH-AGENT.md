@@ -14,13 +14,17 @@ Fettle is a file-oriented LLM audit harness: it runs an agent per file matching 
 
    Confirm with `which fettle`. Requires Go 1.22+.
 
-2. **Install the fettle skill into your skill directory** (one-time, per machine; idempotent — re-run to upgrade after a `go install`):
+2. **Ask the user whether to install the skill globally or just for this project** (recommend global unless they have a reason to scope it). Then run the matching command:
 
    ```bash
-   fettle install-skill claude-code
+   fettle install-skill claude-code                    # global: ~/.claude/skills/fettle/ — recommended
+   fettle install-skill claude-code --scope project    # project-local: ./.claude/skills/fettle/
    ```
 
-   This writes the bundled skill to `~/.claude/skills/fettle/`. The skill is embedded in the fettle binary, so it's always in sync with the installed version. List other supported agents with `fettle install-skill --list`.
+   - **Global (recommended):** available across every repo, no extra setup per project. The right default for solo use.
+   - **Project-local:** writes `.claude/skills/fettle/` under the cwd. Useful when the team wants the skill checked into the repo so everyone is locked to the same fettle version.
+
+   The skill is embedded in the fettle binary, so it's always in sync with the installed version. Re-run with `--force` to upgrade after a `go install`. List other supported agents with `fettle install-skill --list`.
 
 3. **Follow the now-installed skill.** Re-read your skill list (the fettle skill should now appear) and follow its instructions to walk the user through setup, prompt tailoring, smoke testing, the real find run, and launching the UI.
 

@@ -34,8 +34,23 @@ type Agent string
 
 const (
 	// AgentClaudeCode is Anthropic's Claude Code CLI. Skills live
-	// under ~/.claude/skills/<name>/.
+	// under ~/.claude/skills/<name>/ (user scope) or
+	// <cwd>/.claude/skills/<name>/ (project scope).
 	AgentClaudeCode Agent = "claude-code"
+)
+
+// Scope determines where a skill bundle is installed.
+//
+// ScopeUser writes to the user's home skill directory and makes the
+// skill available across every Claude Code session on the machine.
+// ScopeProject writes to .claude/skills/<name>/ under the cwd so the
+// skill can be checked into a repo and shared with teammates, locked
+// to the fettle version that produced it.
+type Scope string
+
+const (
+	ScopeUser    Scope = "user"
+	ScopeProject Scope = "project"
 )
 
 // SkillName is the name the bundle installs under — always "fettle"
@@ -47,6 +62,11 @@ const SkillName = "fettle"
 // `fettle install-skill --list`.
 func Agents() []Agent {
 	return []Agent{AgentClaudeCode}
+}
+
+// Scopes returns the supported install scopes.
+func Scopes() []Scope {
+	return []Scope{ScopeUser, ScopeProject}
 }
 
 // ErrAgentMissingHome is returned when the target agent's home
@@ -63,21 +83,36 @@ var ErrAlreadyInstalled = errors.New("skill already installed")
 // binary doesn't ship.
 var ErrUnknownAgent = errors.New("unknown agent")
 
+// ErrUnknownScope is returned when the caller passes a scope value
+// outside the closed set in Scopes().
+var ErrUnknownScope = errors.New("unknown scope")
+
 // DefaultDest returns the conventional install path for an agent's
-// skill bundle. For Claude Code that's $HOME/.claude/skills/fettle/.
+// skill bundle at the requested scope. For Claude Code:
+//   - ScopeUser:    $HOME/.claude/skills/fettle/
+//   - ScopeProject: <cwd>/.claude/skills/fettle/
 //
 // DefaultDest does NOT validate that the path's parents exist — that's
 // Install's job, so we can return a precise error from one place.
-func DefaultDest(agent Agent) (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve user home: %w", err)
-	}
-	switch agent {
-	case AgentClaudeCode:
-		return filepath.Join(home, ".claude", "skills", SkillName), nil
-	default:
+func DefaultDest(agent Agent, scope Scope) (string, error) {
+	if agent != AgentClaudeCode {
 		return "", fmt.Errorf("%w: %q", ErrUnknownAgent, agent)
+	}
+	switch scope {
+	case ScopeUser:
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve user home: %w", err)
+		}
+		return filepath.Join(home, ".claude", "skills", SkillName), nil
+	case ScopeProject:
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("resolve cwd: %w", err)
+		}
+		return filepath.Join(cwd, ".claude", "skills", SkillName), nil
+	default:
+		return "", fmt.Errorf("%w: %q", ErrUnknownScope, scope)
 	}
 }
 
@@ -98,17 +133,19 @@ func agentHome(agent Agent) (string, error) {
 }
 
 // Install writes the embedded skill bundle for the named agent into
-// dest. Pass dest = "" to use DefaultDest(agent).
+// dest at the requested scope. Pass dest = "" to use
+// DefaultDest(agent, scope).
 //
 // If overwrite is false and dest exists, Install returns
 // ErrAlreadyInstalled — protecting a user who has edited their copy.
-// If the agent's home dir doesn't exist (e.g. $HOME/.claude/ when
-// installing for Claude Code), returns ErrAgentMissingHome so the
-// caller can suggest "is Claude Code installed?"; the agent's
-// `skills/` subdirectory is created if missing.
+// For ScopeUser on the default path, if the agent's home dir doesn't
+// exist (e.g. $HOME/.claude/ for Claude Code), returns
+// ErrAgentMissingHome so the caller can suggest "is Claude Code
+// installed?". ScopeProject skips this check — we're just creating
+// directories under cwd, no agent-install assumption.
 //
 // Returns the absolute destination path on success.
-func Install(agent Agent, dest string, overwrite bool) (string, error) {
+func Install(agent Agent, scope Scope, dest string, overwrite bool) (string, error) {
 	bundleRoot := filepath.ToSlash(filepath.Join("skills", string(agent), SkillName))
 	if _, err := fs.Stat(skillFS, bundleRoot); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -120,7 +157,7 @@ func Install(agent Agent, dest string, overwrite bool) (string, error) {
 	usingDefault := dest == ""
 	if usingDefault {
 		var err error
-		dest, err = DefaultDest(agent)
+		dest, err = DefaultDest(agent, scope)
 		if err != nil {
 			return "", err
 		}
@@ -132,10 +169,10 @@ func Install(agent Agent, dest string, overwrite bool) (string, error) {
 		dest = abs
 	}
 
-	// For the default path only: refuse if the agent home doesn't
-	// exist (almost certainly means the agent isn't installed). When
-	// the user passed an explicit --output, trust them.
-	if usingDefault {
+	// User-scope default path: refuse if the agent home doesn't exist
+	// (almost certainly means the agent isn't installed). Project-
+	// scope or explicit --output: trust the caller.
+	if usingDefault && scope == ScopeUser {
 		home, err := agentHome(agent)
 		if err != nil {
 			return "", err
