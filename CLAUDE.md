@@ -13,10 +13,12 @@ Fettle is an agent-driven LLM audit harness. The agent-led setup flow (`README.m
 
 `task` is the entry point. Common targets:
 
-- `task go:install` — install the binary to `$GOBIN/fettle` (default `~/go/bin/`). Chains `go:templ` and `go:tailwind`.
+- `task go:install` — install the binary to `$GOBIN/fettle` (default `~/go/bin/`). Chains `go:templ`, `go:tailwind`, and `ts:build`.
 - `task go:test` — Go test suite.
-- `task go:templ` / `task go:tailwind` — regenerate templ output / Tailwind CSS. Must run after touching `*.templ` files or `internal/ui/styles/*.css` (or just use `task go:install`).
-- `task setup:check` — verify tool prerequisites (templ, tailwindcss, etc.).
+- `task go:templ` / `task go:tailwind` / `task ts:build` — regenerate templ output / Tailwind CSS / bundled JS. Must run after touching `*.templ` files, `internal/ui/static/input.css`, or `internal/ui/ts/*.ts` (or just use `task go:install`, which chains all three).
+- `task setup:check` — verify tool prerequisites (templ, tailwindcss, esbuild, etc.).
+
+**The generated UI artifacts under `internal/ui/static/dist/` (`styles.css`, `app.js`) are committed** — `go install ...@latest` builds from the module proxy, which only includes what's in git, so excluding generated assets would ship a styles-less UI to users. Run `task go:install` before committing any change to templ / input.css / ts sources to keep the committed artifacts in sync. (No CI guardrail yet; consider adding a `task go:install && git diff --exit-code` job.)
 
 ## Contributing
 
