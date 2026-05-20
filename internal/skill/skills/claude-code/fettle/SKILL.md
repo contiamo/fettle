@@ -37,6 +37,18 @@ Fettle runs an LLM agent over every file in a target repo and records findings a
 
 **Exception: include/exclude globs are patterns, not paths.** They're matched against repo-relative paths inside fettle — e.g. `**/*.go`, `vendor/**`. Never put an absolute path in `--include` or `--exclude`.
 
+## Must-ask gates — STOP and wait for the user
+
+The skill below has three points where you **must** send a message and wait for the user's reply before doing anything else. These aren't advice; the user's judgment is load-bearing for the rest of the run.
+
+1. **Project structure** (step 1) — which area to set up first; never decide alone for a monorepo.
+2. **Find categories + prompt diff** (step 4) — which categories to scan for, and explicit acknowledgment of the rewritten `find.md` before any run. Two sub-gates.
+3. **Smoke-test verdict** (step 5) — paste findings (or a "zero findings" note with a raw-log excerpt) and ask whether they match what the user wanted. Don't self-diagnose past the user.
+
+A fourth conditional gate applies in step 6: if the estimated cost of the real run is high (~$50+), STOP and confirm before kicking off — and never silently rescope the run to dodge it.
+
+At each gate: send your message, then **stop calling tools** until the user responds. **Do not pre-create a todo list that spans multiple gates** — each gate's outcome may invalidate the rest of the plan, and momentum from a pre-built list is the most reliable way to skip stops.
+
 ## Step 0 — orient
 
 First, capture `<repo>` (you need it for the rest of the checks):
@@ -54,7 +66,9 @@ Then run these in parallel:
 
 ### 1. Decide on one project or several, and where it lives
 
-**Monorepo / mixed-language case first.** If step 0 found distinct language ecosystems or service trees (e.g. Go backend + React frontend, or several services under one root), separate fettle projects per area usually give better results — find prompts diverge (Go conventions vs. React component patterns), severity scales differ, and you'll often run them on different cadences. Use a nested layout that mirrors the repo's component names: `audits/backend/`, `audits/frontend/`, `audits/<service>/`, etc. Propose this based on what you saw in the repo, then ask the user which area to set up first; this skill walks one project at a time. Mention that the others can be set up later by re-running the skill.
+**Monorepo / mixed-language case first.** If step 0 found distinct language ecosystems or service trees (e.g. Go backend + React frontend, or several services under one root), separate fettle projects per area usually give better results — find prompts diverge (Go conventions vs. React component patterns), severity scales differ, and you'll often run them on different cadences. Use a nested layout that mirrors the repo's component names: `audits/backend/`, `audits/frontend/`, `audits/<service>/`, etc.
+
+**STOP and ask** the user which area to set up first. Send a message like *"I see a Python backend and a TypeScript frontend — which should I set up first?"* and wait for their answer. Do not run `fettle init` until they reply. Mention that the others can be set up later by re-running the skill.
 
 For nested layouts, `audits/` itself must exist before `fettle init audits/backend` runs — fettle init requires the parent directory. Run `mkdir -p <repo>/audits` once before the first nested init.
 
@@ -112,7 +126,7 @@ If init fails, offer the user one of these concrete options based on the error:
 
 `fettle init` wrote a stub at `<project>/instructions/find.md` with placeholder sections. The stub is generic; the user's real value comes from rewriting it to their domain.
 
-Find out what the user wants fettle to look for. Give them concrete categories to react to rather than an open-ended question — most users don't have a precise answer in mind until they see options:
+**STOP.** Before editing `find.md`, send the user the category menu below and ask which ones they want (multi-select is fine). Wait for their reply. **Don't pick categories on their behalf**, even if you're confident from reading the repo — pinning the wrong categories now means the whole run finds the wrong things and the user has to redo it.
 
 - Convention enforcement (matches a conventions doc — you'll point the prompt at it)
 - Refactoring opportunities (duplication, dead code, over-complex functions)
@@ -121,14 +135,14 @@ Find out what the user wants fettle to look for. Give them concrete categories t
 - Test quality (duplicate / trivial / over-complex tests)
 - Some combination
 
-Once the user picks, **edit `<project>/instructions/find.md` directly** (use the `Edit` tool — the stub is yours to rewrite):
+Once the user has picked, **edit `<project>/instructions/find.md` directly** (use the `Edit` tool — the stub is yours to rewrite):
 
 1. **Rewrite `## Patterns to flag`.** Replace the example categories (`Category A — category:convention`, etc.) with the user's chosen categories. **Pin the category label names here.** The find agent should not invent new ones at run time. Use the `category:<bucket>` convention from the stub.
 2. **Rewrite `## Severity scale`.** State what `high`/`medium`/`low` mean *in this project*. If the user uses a different scale (`P1`/`P2`/`P3`, numeric), use that — fettle doesn't enforce a scale.
 3. **Fill in `## Required reading`** if the repo has a conventions doc. Point at it explicitly: `REPO_ROOT/conventions/go.md`, or wherever.
 4. **Keep `## What NOT to flag`.** Tighten the language to the user's domain but don't drop the section — it's load-bearing for keeping noise out.
 
-Show the user the diff of your edit before moving on and check whether it matches what they had in mind. Apply at most **one** round of revisions here. After that, commit to a run and iterate from real findings — abstract prompt review without data has diminishing returns.
+**STOP.** Show the user the diff of your edit and ask explicitly: *"Does this match what you had in mind?"* Wait for their reply before any run. Apply at most **one** round of revisions here; after that, commit to a run and iterate from real findings — abstract prompt review without data has diminishing returns.
 
 ### 5. Smoke test
 
@@ -144,14 +158,16 @@ Show the findings:
 fettle --project-dir <project> list findings --run <slug>
 ```
 
-Walk the user through what came back and check whether it matches what they hoped fettle would catch. Branch on the answer:
+**STOP.** Paste the findings (or, if zero, a "zero findings — here's what the agent reasoned about one file" note with a short excerpt from a raw log) and ask the user explicitly: *"Are these the kinds of findings you want?"* Wait for their reply. **Branch on what they tell you, not on your own read of the raw logs** — the whole point of the smoke test is to get the user's "yes/no" before spending real money on the full run.
 
-- **Yes, looks right** → proceed to the real run.
-- **No, the prompt is fundamentally wrong** → revise `<project>/instructions/find.md` once more, then commit to a real run regardless. Don't loop on smoke tests.
-- **No findings at all** — try one of these in order, then **stop and commit to a real run regardless**:
+After the user weighs in, branch on the answer:
+
+- **Yes, looks right** → proceed to the real run (step 6).
+- **No, the prompt is fundamentally wrong** → revise `<project>/instructions/find.md` once more (re-checking with the user via the step-4 diff gate), then commit to a real run regardless. Don't loop on smoke tests.
+- **No findings at all** — the diagnostic options below help you give the user better context for *their* decision; they don't replace the ask-gate:
   1. Re-run with `--limit 10 -c 1` (more files might surface something).
-  2. Read `<project>/runs/run_<slug>_<ts>/raw/` (use the full path you captured) to see what the agent actually said per file. If the agent reasoned correctly and concluded "nothing to flag," your prompt's bar is fine — the smoke set just happened to be clean files. Proceed to real run.
-  3. If raw logs show the agent didn't engage with the prompt (e.g. it summarized the file instead of judging it), revise the prompt once and go straight to the real run.
+  2. Read `<project>/runs/run_<slug>_<ts>/raw/` (use the full path you captured) to see what the agent actually said per file. If the agent reasoned correctly and concluded "nothing to flag," tell the user the prompt's bar looks right — the smoke set may just be clean files.
+  3. If raw logs show the agent didn't engage with the prompt (e.g. it summarized the file instead of judging it), tell the user and offer to revise the prompt.
 
 ### 6. Launch the UI, then run the real find pass
 
@@ -163,7 +179,22 @@ fettle --project-dir <project> ui
 
 Run with `run_in_background: true` on the Bash tool. The process logs its listen URL (typically `http://localhost:8765` or similar) to stderr — read it with `BashOutput` and share the URL with the user. Tell them they can pick the in-progress run from the run picker once it appears, and refresh as findings arrive.
 
-Then start the real find run. Estimate duration first — roughly `(file_count × 60s) / concurrency` — so the user knows what to expect. File count: use the `Glob` tool with `<repo>` as the base and one of your `--include` patterns; it overcounts vs. fettle's git walker (no `.gitignore` filtering), so present it as an upper bound.
+Before starting the real find run, estimate **duration and cost** and surface both to the user:
+
+- **File count:** use the `Glob` tool with `<repo>` as the base and one of your `--include` patterns; it overcounts vs. fettle's git walker (no `.gitignore` filtering), so present it as an upper bound.
+- **Duration:** roughly `(file_count × 60s) / concurrency`.
+- **Cost:** roughly `file_count × ~$0.30` at current Sonnet pricing (varies with file size and model).
+
+**Cost gate.** If the estimated cost is over ~$50, **STOP and confirm** with the user before kicking off. Present the estimate plainly: *"~N files × ~$0.30 = ~$X. Proceed, or scope to a subtree?"* and wait for their answer. **Never silently rescope** to dodge the price — that hides the trade-off from the user. If the user wants to scope down, override `--include` at run time and give the run a recognizable name:
+
+```bash
+fettle --project-dir <project> run find -c 4 \
+  --include 'backend/src/services/**/*.py' --name services
+```
+
+`--include` at run time overrides what's in `fettle.json` for this run only. `--name <slug>` replaces the random hex with a meaningful slug — useful when the user is running several scoped passes (`--name services`, `--name api`, etc.). Without `--name`, the slug is 6 random hex characters.
+
+Once the user OKs the cost, kick off the full run:
 
 ```bash
 fettle --project-dir <project> run find -c 4
@@ -230,6 +261,8 @@ You arrived here because step 0 found a `<project>/fettle.json`. Don't re-init. 
 - **Don't omit `--walker fs`** for a non-git target at `fettle init` time. `--walker` is an init-only flag; later runs inherit it from `fettle.json`. The default `--walker git` shells to `git ls-files` and will fail on non-git targets.
 - **Don't run `fettle ui` in the foreground.** It blocks until killed; the user needs to keep talking to you.
 - **Don't run `fettle run find` without `-c N`** on real (non-smoke) runs — be explicit about the concurrency the user wants, including on `--resume` (it isn't inferred from the original run).
+- **Don't silently rescope a run** to make it cheaper or faster (e.g. quietly overriding `--include` to a subtree). If the cost or duration estimate worries you, present the number to the user and let them decide. They may accept the price; they may pick a different scope than you'd guess.
+- **Don't pre-create a multi-step todo list** that spans the must-ask gates. Each gate's outcome may invalidate the rest of the plan, and todo-list momentum is the most reliable way to skip stops. Track the next step only; let the user's answer shape the one after.
 - **Don't expect prompt edits to retroactively affect a running or resumed run.** Each run snapshots its prompt at start time. Edit the template, then start a *new* run to pick up changes.
 - **Don't write long prose summaries** of the run. A short stats summary (counts, severity/category breakdown, 1–2 representative findings) is helpful and expected — see step 7. Beyond that the user reads the UI.
 - **Don't edit `<project>/runs/`.** Run output is append-only and self-identifying. If something looks wrong, diagnose, don't rewrite.
@@ -247,6 +280,8 @@ fettle init <project> --target <repo> --walker fs --include '...' --exclude '...
 fettle --project-dir <project> run find -c 4                          # real find pass
 fettle --project-dir <project> run find --limit 3 -c 1                # smoke test
 fettle --project-dir <project> run find --resume <slug> -c 4          # resume interrupted run
+fettle --project-dir <project> run find -c 4 \
+  --include '<subtree>/**' --name <slug>                              # scoped real run with named slug
 fettle --project-dir <project> run review --run <slug> --agent <name> # review pass
 
 # Reads
