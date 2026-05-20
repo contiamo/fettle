@@ -6,6 +6,7 @@ allowed-tools:
   - Bash(which:*)
   - Bash(ls:*)
   - Bash(pwd:*)
+  - Bash(mkdir:*)
   - Bash(git rev-parse:*)
   - Bash(git ls-files:*)
   - Bash(cat:*)
@@ -46,26 +47,28 @@ First, capture `<repo>` (you need it for the rest of the checks):
 Then run these in parallel:
 
 1. `which fettle` — is it installed? If not, tell the user `go install github.com/contiamo/fettle/cmd/fettle@latest` and wait for them.
-2. **Look for an existing project.** Glob both `fettle.json` and `*/fettle.json` rooted at `<repo>` (catches a project at the repo root, plus `audits/`, `fettle/`, and any non-default name the user picked). If exactly one match appears, set `<project>` to the absolute path of that match's directory and jump to **§ Existing project flow** below. If multiple match, ask the user which one — you've discovered they keep more than one fettle project in this repo.
-3. Identify the primary language(s): look for `<repo>/go.mod`, `<repo>/package.json`, `<repo>/pyproject.toml` / `requirements.txt` / `setup.py`, `<repo>/Cargo.toml`, etc. Note whether the repo has a `conventions/` or `docs/conventions.md` style file — you'll point the find prompt at it later.
+2. **Look for an existing project.** Glob `fettle.json`, `*/fettle.json`, and `*/*/fettle.json` rooted at `<repo>` (catches a project at the repo root, a flat `audits/fettle.json`, and the nested monorepo layout `audits/backend/fettle.json`). If exactly one match appears, set `<project>` to the absolute path of that match's directory and jump to **§ Existing project flow** below. If multiple match, ask the user which one to work with — you've discovered a monorepo with several fettle projects, and this skill walks one at a time.
+3. Identify the primary language(s): look for `<repo>/go.mod`, `<repo>/package.json`, `<repo>/pyproject.toml` / `requirements.txt` / `setup.py`, `<repo>/Cargo.toml`, etc. Also note conventions / best-practices sources you might point the find prompt at later: `CLAUDE.md`, `AGENTS.md`, a `conventions/` folder, `docs/conventions.md`, `STYLE.md`, `CONTRIBUTING.md`, language-specific style guides, etc.
 
 ## Setup flow (fresh project)
 
-### 1. Decide where the project lives
+### 1. Decide on one project or several, and where it lives
 
-Default: a directory named `audits/` at the repo root. Use this unless the user names something else. (Why `audits/`: matches `FETTLE.md`'s canonical examples, neutral about content — works for refactors, doc audits, convention enforcement, security passes — and short.)
+**Monorepo / mixed-language case first.** If step 0 found distinct language ecosystems or service trees (e.g. Go backend + React frontend, or several services under one root), separate fettle projects per area usually give better results — find prompts diverge (Go conventions vs. React component patterns), severity scales differ, and you'll often run them on different cadences. Use a nested layout that mirrors the repo's component names: `audits/backend/`, `audits/frontend/`, `audits/<service>/`, etc. Propose this based on what you saw in the repo, then ask the user which area to set up first; this skill walks one project at a time. Mention that the others can be set up later by re-running the skill.
 
-Tell the user: "I'll create `audits/` at the repo root. That's where the scan config, prompts, and run results will live. OK, or do you want a different name?"
+For nested layouts, `audits/` itself must exist before `fettle init audits/backend` runs — fettle init requires the parent directory. Run `mkdir -p <repo>/audits` once before the first nested init.
 
-Whatever they pick is `<project>` for the rest of this skill — substitute it for `audits` in every command below.
+For a single-language repo, default to a flat `audits/` at the repo root. (Why `audits/`: matches `FETTLE.md`'s canonical examples, neutral about content — works for refactors, doc audits, convention enforcement, security passes — and short.) Explain to the user what this directory will hold (scan config, prompts, run results) and let them rename it if they want.
+
+Whatever they pick is `<project>` for the rest of this skill — an absolute path, e.g. `<repo>/audits` (flat) or `<repo>/audits/backend` (nested).
 
 ### 2. Decide include / exclude globs
 
 Auto-propose based on language. Show the list to the user and let them refine. **Defaults below.**
 
-You **must not** add `**/*_test.go`, `**/*.test.ts`, `test_*.py`, etc. to the exclude list. Tests are first-class scan targets — the find prompt has a test-quality section that catches duplicate tests, trivial tests, and over-complex tests. If a *specific* test directory is genuinely out of scope, exclude that directory by name, never the whole `_test.*` class.
+**Don't reflexively exclude tests** (`**/*_test.go`, `**/*.test.ts`, `test_*.py`, etc.). Tests are first-class scan targets — the default find prompt has a test-quality section that catches duplicate tests, trivial tests, and over-complex tests. Only exclude them if the user explicitly says they want test files out of scope (e.g. "I only care about production code right now"). If a *specific* test directory is genuinely out of scope, prefer excluding that directory by name over excluding the whole `_test.*` class.
 
-With the default git walker (the one you want), `.gitignore` already drops `node_modules`, `dist`, `vendor` (if ignored), `__pycache__`, etc. You usually only need fettle-specific excludes: vendored UI components, generated code that's checked in.
+With the default git walker (the one you usually want), a common `.gitignore` already drops `node_modules`, `dist`, `vendor` (if ignored), `__pycache__`, etc. You usually only need fettle-specific excludes: vendored UI components, generated code that's checked in.
 
 | Language   | Suggested `--include`                       | Common `--exclude` (only what's not in `.gitignore`) |
 |------------|---------------------------------------------|------------------------------------------------------|
@@ -75,7 +78,12 @@ With the default git walker (the one you want), `.gitignore` already drops `node
 
 For mixed-language repos, pass `--include` multiple times. For anything not in the table, read the repo (Glob for the dominant extensions) and improvise the same shape: include the source globs, exclude generated and vendored code.
 
-**Broad or non-code includes** (e.g. `**/*.md` for a documentation audit, `**/*` for a general pass): always add `--exclude '<project-basename>/**'` so fettle doesn't scan its own project directory (`fettle.json`, the stub instructions, your run output). `<project-basename>` is the last component of `<project>` — e.g. for the default `<repo>/audits`, the exclude is `--exclude 'audits/**'`. Code-only includes like `**/*.go` don't need this exclude because `<project>/` holds no Go files.
+**Broad or non-code includes** (e.g. `**/*.md` for a documentation audit, `**/*` for a general pass): always exclude the fettle project directory so fettle doesn't scan its own config, prompts, and run output. Use the project's path *relative to* `<repo>`:
+
+- Flat layout (`<repo>/audits`) → `--exclude 'audits/**'`.
+- Nested layout (`<repo>/audits/backend`) → `--exclude 'audits/**'` covers all sibling projects under `audits/` and is usually what you want.
+
+Code-only includes like `**/*.go` don't need this exclude because `<project>/` holds no Go files.
 
 **Non-git target.** If step 0's `git rev-parse` failed, the user's repo isn't a git repo. You must add `--walker fs` to the init command — the default git walker shells to `git ls-files` and fails on non-git targets. Without git's `.gitignore` filter, also be more aggressive in `--exclude` (add `node_modules/**`, `dist/**`, `build/**`, `__pycache__/**`, etc. explicitly).
 
@@ -104,9 +112,9 @@ If init fails, offer the user one of these concrete options based on the error:
 
 `fettle init` wrote a stub at `<project>/instructions/find.md` with placeholder sections. The stub is generic; the user's real value comes from rewriting it to their domain.
 
-Ask the user: **"What do you want fettle to find?"** Give them concrete options to react to, not an open question:
+Find out what the user wants fettle to look for. Give them concrete categories to react to rather than an open-ended question — most users don't have a precise answer in mind until they see options:
 
-- Convention enforcement (matches a `conventions/` doc — you'll point the prompt at it)
+- Convention enforcement (matches a conventions doc — you'll point the prompt at it)
 - Refactoring opportunities (duplication, dead code, over-complex functions)
 - Documentation audits (missing or stale comments on public APIs)
 - Security smells (lint-shaped — concatenated SQL, unescaped exec, hardcoded creds)
@@ -120,7 +128,7 @@ Once the user picks, **edit `<project>/instructions/find.md` directly** (use the
 3. **Fill in `## Required reading`** if the repo has a conventions doc. Point at it explicitly: `REPO_ROOT/conventions/go.md`, or wherever.
 4. **Keep `## What NOT to flag`.** Tighten the language to the user's domain but don't drop the section — it's load-bearing for keeping noise out.
 
-Show the user the diff of your edit before moving on. Ask: "Does this match what you want to find?" Apply at most **one** round of revisions here. After that, commit to a run and iterate from real findings — abstract prompt review without data has diminishing returns.
+Show the user the diff of your edit before moving on and check whether it matches what they had in mind. Apply at most **one** round of revisions here. After that, commit to a run and iterate from real findings — abstract prompt review without data has diminishing returns.
 
 ### 5. Smoke test
 
@@ -136,18 +144,26 @@ Show the findings:
 fettle --project-dir <project> list findings --run <slug>
 ```
 
-Walk the user through what came back. Ask: **"Are these the kinds of things you want to find?"**
+Walk the user through what came back and check whether it matches what they hoped fettle would catch. Branch on the answer:
 
-- **Yes** → proceed to the real run.
+- **Yes, looks right** → proceed to the real run.
 - **No, the prompt is fundamentally wrong** → revise `<project>/instructions/find.md` once more, then commit to a real run regardless. Don't loop on smoke tests.
 - **No findings at all** — try one of these in order, then **stop and commit to a real run regardless**:
   1. Re-run with `--limit 10 -c 1` (more files might surface something).
   2. Read `<project>/runs/run_<slug>_<ts>/raw/` (use the full path you captured) to see what the agent actually said per file. If the agent reasoned correctly and concluded "nothing to flag," your prompt's bar is fine — the smoke set just happened to be clean files. Proceed to real run.
   3. If raw logs show the agent didn't engage with the prompt (e.g. it summarized the file instead of judging it), revise the prompt once and go straight to the real run.
 
-### 6. Real find run
+### 6. Launch the UI, then run the real find pass
 
-Estimate duration: roughly `(file_count × 60s) / concurrency`. Tell the user the estimate. File count: use the `Glob` tool with `<repo>` as the base and one of your `--include` patterns (e.g. `**/*.go`). It overcounts vs. fettle's git walker (no `.gitignore` filtering), so present the number as an upper bound.
+Launch the UI *before* the real run so the user can watch findings stream in as files complete. Fettle writes findings to JSONL on disk as each file finishes; the UI reads from the same files.
+
+```bash
+fettle --project-dir <project> ui
+```
+
+Run with `run_in_background: true` on the Bash tool. The process logs its listen URL (typically `http://localhost:8765` or similar) to stderr — read it with `BashOutput` and share the URL with the user. Tell them they can pick the in-progress run from the run picker once it appears, and refresh as findings arrive.
+
+Then start the real find run. Estimate duration first — roughly `(file_count × 60s) / concurrency` — so the user knows what to expect. File count: use the `Glob` tool with `<repo>` as the base and one of your `--include` patterns; it overcounts vs. fettle's git walker (no `.gitignore` filtering), so present it as an upper bound.
 
 ```bash
 fettle --project-dir <project> run find -c 4
@@ -161,40 +177,46 @@ If the run is interrupted, resume with concurrency still set (resume doesn't inf
 fettle --project-dir <project> run find --resume <slug> -c 4
 ```
 
-### 7. Launch the UI in the background
+### 7. Brief summary, then introduce review
 
-Once the run completes, launch the UI as a backgrounded process:
+When the run completes, give a short summary so the user has a sense of scale before opening the UI in detail. Read findings with `fettle --project-dir <project> list findings --run <slug>` and report:
 
-```bash
-fettle --project-dir <project> ui
-```
+- Total finding count.
+- Breakdown by `severity` (and by `category:*` label if categories are pinned).
+- A couple of representative or surprising findings — file paths and titles, not full descriptions.
 
-Run this with `run_in_background: true` on the Bash tool. The process logs its listen URL (typically `http://localhost:8765` or similar) to stderr — read it back with `BashOutput` and tell the user the URL to open.
+Keep it tight (≤5 bullet points). The findings live in the UI; you're orienting, not narrating.
 
-The UI stays running while you and the user keep talking. The user reviews findings in the browser; you stay available for follow-ups ("add a label to all findings in `internal/foo/`", "what does this category mean?", etc.).
-
-### 8. Introduce the review stage (don't run yet)
-
-Once findings are in the UI, tell the user:
-
-> You can run an adversarial review pass with a different agent — if your find run used Claude, run review with Codex; if it used Codex, run review with Claude. A second model reading the same findings catches false positives the first model rubber-stamped.
-
-Show the command but **don't run it yet** — review takes time and the user may want to look at findings first:
+Then mention the review stage as a follow-up the user can run when they're ready. Explain (in your own words) that running review with a *different* agent than the find pass (Claude for finds → Codex for review, or vice versa) catches false positives the first model rubber-stamped. Show the command but don't run it automatically — review takes time and the user usually wants to skim findings first:
 
 ```bash
 fettle --project-dir <project> run review --run <slug> --agent codex
 ```
 
-If the user wants the review pass, **tailor `<project>/instructions/review.md` first** using the same logic as step 4: edit it to pin the triage vocabulary (`verdict:ship`, `verdict:drop`, `verdict:needs-human` are the stub defaults — keep them unless the user has a specific scheme). Then run the review command.
+If the user wants the review pass, **tailor `<project>/instructions/review.md` first** using the same approach as step 4: edit it to pin the triage vocabulary (`verdict:ship`, `verdict:drop`, `verdict:needs-human` are the stub defaults — keep them unless the user has a specific scheme). Then run the review command.
+
+### 8. Recording outcomes as the user fixes findings
+
+After the user reviews findings in the UI, they'll often ask you to fix some. Whenever you act on a finding — apply the fix, open a PR, or confirm it's not actionable — record an outcome so the run's status reflects what happened:
+
+```bash
+FETTLE_AUTHOR=agent:claude fettle --project-dir <project> add outcome \
+  --run <slug> --finding <id> --status <status> [--pr <url>]
+```
+
+`<status>` is free-form. Common values: `fixed` (change applied locally), `merged` (PR/MR shipped), `wont-fix` (user decided not to), `not-applicable` (false positive, confirmed). Pass `--pr <url>` whenever there's an upstream change-request URL — GitHub PR, GitLab MR, Gerrit, etc.
+
+**Author identity.** Outcomes carry an author. The CLI chains `FETTLE_AGENT` → `$FETTLE_AUTHOR` → `~/.config/fettle/identity` → error. Set `FETTLE_AUTHOR=agent:<model>` (e.g. `agent:claude`) before the call so outcomes you record are distinguishable from outcomes the user records directly in the UI. If neither env var nor identity file is set, the command errors — surface that and have the user set their identity once in the UI (or `export FETTLE_AUTHOR=<their-slug>` for the session).
 
 ## Existing project flow
 
-You arrived here because step 0 found a `<project>/fettle.json`. Don't re-init. Ask the user what they want to do — give them options, not an open question:
+You arrived here because step 0 found a `<project>/fettle.json`. Don't re-init. Offer the user concrete options, not an open question:
 
-- **Run a new find pass** → `fettle --project-dir <project> run find -c 4` (or `--resume <slug> -c 4` for an interrupted run). Reuses the existing `instructions/find.md`. Prompt edits made after the run starts have no effect on that run — they apply to the next one.
+- **Run a new find pass** → `fettle --project-dir <project> run find -c 4` (or `--resume <slug> -c 4` for an interrupted run). Reuses the existing `instructions/find.md`. Prompt edits after a run starts only apply to the *next* run.
 - **Edit the find prompt then run a new pass** → edit `<project>/instructions/find.md`, then run find as above.
-- **Run a review pass on an existing find run** → `fettle --project-dir <project> list runs` to see slugs, then `fettle --project-dir <project> run review --run <slug> --agent <other-agent>`. Tailor `<project>/instructions/review.md` first if you haven't (same logic as step 4 in the setup flow).
+- **Run a review pass on an existing find run** → `fettle --project-dir <project> list runs` to see slugs, then `fettle --project-dir <project> run review --run <slug> --agent <other-agent>`. Tailor `<project>/instructions/review.md` first if you haven't (same approach as step 4 in the setup flow).
 - **Launch the UI** → `fettle --project-dir <project> ui` in the background; share the URL.
+- **Fix findings and record outcomes** → see step 8 of the setup flow for the `add outcome` shape.
 - **List or inspect findings from the CLI** → `fettle --project-dir <project> list findings --run <slug>`, `fettle --project-dir <project> show finding --run <slug> <id>`.
 
 `fettle list runs` prints a JSON envelope: `{"data": [{...}, ...]}`. If `data` is empty, the project has been init'd but never run — jump back to step 4 (tailor the find prompt) of the setup flow.
@@ -202,14 +224,14 @@ You arrived here because step 0 found a `<project>/fettle.json`. Don't re-init. 
 ## Things to never do
 
 - **Don't invent fettle CLI commands or flags.** Stick to what's in `fettle --help` and what this skill shows. If something you need seems missing, tell the user — that's a fettle-side gap, not something to work around with shell glue.
-- **Don't exclude tests** from `--include`/`--exclude` configs. See the include/exclude table above.
+- **Don't reflexively exclude tests** from `--include`/`--exclude` configs — only when the user explicitly asks. See the include/exclude section above.
 - **Don't re-init an existing project.** `fettle init` refuses, and re-running would be a sign you didn't check.
 - **Don't run project-scoped commands (`run find`, `run review`, `list`, `show`, `ui`) without `--project-dir <project>`**. Without it, fettle upward-walks from cwd for a `fettle.json` — fragile and cwd-dependent. Always be explicit.
 - **Don't omit `--walker fs`** for a non-git target at `fettle init` time. `--walker` is an init-only flag; later runs inherit it from `fettle.json`. The default `--walker git` shells to `git ls-files` and will fail on non-git targets.
 - **Don't run `fettle ui` in the foreground.** It blocks until killed; the user needs to keep talking to you.
 - **Don't run `fettle run find` without `-c N`** on real (non-smoke) runs — be explicit about the concurrency the user wants, including on `--resume` (it isn't inferred from the original run).
 - **Don't expect prompt edits to retroactively affect a running or resumed run.** Each run snapshots its prompt at start time. Edit the template, then start a *new* run to pick up changes.
-- **Don't summarise the run at the end** unless the user asks. They can read the findings themselves in the UI; you're not narrating.
+- **Don't write long prose summaries** of the run. A short stats summary (counts, severity/category breakdown, 1–2 representative findings) is helpful and expected — see step 7. Beyond that the user reads the UI.
 - **Don't edit `<project>/runs/`.** Run output is append-only and self-identifying. If something looks wrong, diagnose, don't rewrite.
 
 ## Reference: command shapes
@@ -233,6 +255,10 @@ fettle --project-dir <project> list findings --run <slug>             # findings
 fettle --project-dir <project> show finding --run <slug> <id>         # one finding
 fettle --project-dir <project> show run <slug>                        # run status
 
+# Outcomes (when the user fixes a finding)
+FETTLE_AUTHOR=agent:claude fettle --project-dir <project> add outcome \
+  --run <slug> --finding <id> --status <fixed|merged|wont-fix|...> [--pr <url>]
+
 # UI (background!)
 fettle --project-dir <project> ui                                     # serves localhost, prints URL
 ```
@@ -241,4 +267,4 @@ All `--run <slug>` flags accept the short hex slug from the run dir name, or a u
 
 ## When done
 
-The user has a running scan, findings in the UI, and knows how to come back for review or a new run. Hand control back. Don't summarise unless asked.
+The user has a running scan, findings in the UI, the brief stats summary from step 7, and knows how to come back for review, a new run, or recording outcomes. Hand control back and stay available for follow-ups — labelling questions, "fix this finding for me" requests (record an outcome when you do), or running a review pass when the user is ready.
