@@ -45,7 +45,7 @@ The skill below has three points where you **must** send a message and wait for 
 2. **Find categories + prompt diff** (step 4) — which categories to scan for, and explicit acknowledgment of the rewritten `find.md` before any run. Two sub-gates.
 3. **Smoke-test verdict** (step 5) — paste findings (or a "zero findings" note with a raw-log excerpt) and ask whether they match what the user wanted. Don't self-diagnose past the user.
 
-A fourth conditional gate applies in step 6: if the estimated cost of the real run is high (~$50+), STOP and confirm before kicking off — and never silently rescope the run to dodge it.
+A fourth conditional gate applies in step 6: if the real run is **large** (500+ files), STOP and confirm before kicking off — and never silently rescope the run to dodge it. Don't quote dollar figures as a fact; most users are on subscriptions where dollars aren't the right unit.
 
 At each gate: send your message, then **stop calling tools** until the user responds. **Do not pre-create a todo list that spans multiple gates** — each gate's outcome may invalidate the rest of the plan, and momentum from a pre-built list is the most reliable way to skip stops.
 
@@ -104,16 +104,20 @@ Code-only includes like `**/*.go` don't need this exclude because `<project>/` h
 ### 3. Run `fettle init`
 
 ```bash
-fettle init <project> --target <repo> --include '<glob>' [--include '<glob>'...] [--exclude '<glob>'...]
+fettle init <project> --target <repo> --agent claude --model sonnet \
+  --include '<glob>' [--include '<glob>'...] [--exclude '<glob>'...]
 ```
 
 Non-git target — add `--walker fs`:
 
 ```bash
-fettle init <project> --target <repo> --walker fs --include '<glob>' --exclude '...'
+fettle init <project> --target <repo> --agent claude --model sonnet --walker fs \
+  --include '<glob>' --exclude '...'
 ```
 
 Both `<project>` and `<repo>` are absolute paths captured in step 0 / step 1. Don't substitute `.` or `..` — fettle resolves them relative to the cwd of the Bash invocation, which is unreliable.
+
+**Why `--model sonnet`.** Claude Code's CLI defaults to Opus, which is overkill for per-file analysis — slower per file and burns more quota for marginal gain. Sonnet is the right default: fast enough to scan a typical repo in tens of minutes, capable enough to make the judgment calls the find prompt asks for. Order of preference if Sonnet isn't an option: **sonnet > opus > haiku** (haiku misses too many nuance findings). Pin this at init time so every run in this project inherits it; don't ask the user to pick a model unless they raise the question themselves.
 
 If init fails, offer the user one of these concrete options based on the error:
 
@@ -179,13 +183,18 @@ fettle --project-dir <project> ui
 
 Run with `run_in_background: true` on the Bash tool. The process logs its listen URL (typically `http://localhost:8765` or similar) to stderr — read it with `BashOutput` and share the URL with the user. Tell them they can pick the in-progress run from the run picker once it appears, and refresh as findings arrive.
 
-Before starting the real find run, estimate **duration and cost** and surface both to the user:
+Before starting the real find run, estimate **size and duration** and surface both to the user:
 
 - **File count:** use the `Glob` tool with `<repo>` as the base and one of your `--include` patterns; it overcounts vs. fettle's git walker (no `.gitignore` filtering), so present it as an upper bound.
 - **Duration:** roughly `(file_count × 60s) / concurrency`.
-- **Cost:** roughly `file_count × ~$0.30` at current Sonnet pricing (varies with file size and model).
 
-**Cost gate.** If the estimated cost is over ~$50, **STOP and confirm** with the user before kicking off. Present the estimate plainly: *"~N files × ~$0.30 = ~$X. Proceed, or scope to a subtree?"* and wait for their answer. **Never silently rescope** to dodge the price — that hides the trade-off from the user. If the user wants to scope down, override `--include` at run time and give the run a recognizable name:
+**Budget gate.** A real find run consumes meaningful agent budget — subscription quota for most users (Claude Code, Codex, Gemini), pay-as-you-go API spend for the rest. Don't quote a hard dollar figure as if it's a bill; subscription users will read it as a literal charge and panic. Instead frame the gate around scale and impact:
+
+- **Small (≤50 files):** kick off without asking.
+- **Medium (50–500 files):** mention the scale and duration when starting, no explicit ask.
+- **Large (500+ files):** **STOP and confirm**. Say something like *"This is ~N files, roughly ~M minutes — a substantial run that will use noticeable agent quota. Proceed, or scope to a subtree?"* and wait. If the user asks for a dollar estimate, you can offer "if you're on direct API billing, roughly file_count × $0.20–$0.40 at Sonnet pricing — meaningless on a subscription." Don't volunteer the dollar number; let the user ask.
+
+**Never silently rescope** to dodge a large run — that hides the trade-off. If the user wants to scope down, override `--include` at run time and give the run a recognizable name:
 
 ```bash
 fettle --project-dir <project> run find -c 4 \
@@ -221,8 +230,10 @@ Keep it tight (≤5 bullet points). The findings live in the UI; you're orientin
 Then mention the review stage as a follow-up the user can run when they're ready. Explain (in your own words) that running review with a *different* agent than the find pass (Claude for finds → Codex for review, or vice versa) catches false positives the first model rubber-stamped. Show the command but don't run it automatically — review takes time and the user usually wants to skim findings first:
 
 ```bash
-fettle --project-dir <project> run review --run <slug> --agent codex
+fettle --project-dir <project> run review --run <slug> --agent codex --effort medium
 ```
+
+**Why `--effort medium` for codex.** Medium is the right default for the triage task — it's a labelling pass over already-stated findings, not deep reasoning from scratch. High effort is slower without notably improving the verdict and burns much more quota. For Claude review (if the find pass used Codex), stick with sonnet here too.
 
 If the user wants the review pass, **tailor `<project>/instructions/review.md` first** using the same approach as step 4: edit it to pin the triage vocabulary (`verdict:ship`, `verdict:drop`, `verdict:needs-human` are the stub defaults — keep them unless the user has a specific scheme). Then run the review command.
 
@@ -272,17 +283,21 @@ You arrived here because step 0 found a `<project>/fettle.json`. Don't re-init. 
 All paths are absolute (`<repo>` and `<project>` captured in step 0 / step 1). Cwd doesn't matter.
 
 ```bash
-# Setup
-fettle init <project> --target <repo> --include '**/*.go' [--exclude '...'...]
-fettle init <project> --target <repo> --walker fs --include '...' --exclude '...'   # non-git target
+# Setup — always pin --agent and --model so per-file scans don't fall
+# back to the Claude Code CLI's default (Opus).
+fettle init <project> --target <repo> --agent claude --model sonnet \
+  --include '**/*.go' [--exclude '...'...]
+fettle init <project> --target <repo> --agent claude --model sonnet --walker fs \
+  --include '...' --exclude '...'                                       # non-git target
 
 # Stages
-fettle --project-dir <project> run find -c 4                          # real find pass
-fettle --project-dir <project> run find --limit 3 -c 1                # smoke test
-fettle --project-dir <project> run find --resume <slug> -c 4          # resume interrupted run
+fettle --project-dir <project> run find -c 4                            # real find pass
+fettle --project-dir <project> run find --limit 3 -c 1                  # smoke test
+fettle --project-dir <project> run find --resume <slug> -c 4            # resume interrupted run
 fettle --project-dir <project> run find -c 4 \
-  --include '<subtree>/**' --name <slug>                              # scoped real run with named slug
-fettle --project-dir <project> run review --run <slug> --agent <name> # review pass
+  --include '<subtree>/**' --name <slug>                                # scoped real run with named slug
+fettle --project-dir <project> run review --run <slug> \
+  --agent codex --effort medium                                         # review pass (medium effort, not high)
 
 # Reads
 fettle --project-dir <project> list runs                              # all runs in the project
