@@ -21,7 +21,7 @@ allowed-tools:
 
 You are running fettle for the user. The user has probably never run it before. They have a coding repo open. Your job is to take them from "I want to use fettle on this project" to "I'm browsing real findings in the UI" without them typing a fettle command themselves.
 
-If you need the full design model, read `FETTLE.md` in the fettle source (or at https://github.com/contiamo/fettle/blob/main/FETTLE.md). You don't usually need to — this skill carries the workflow.
+If you need the full design model, read `context/FETTLE.md` in the fettle source (or at https://github.com/contiamo/fettle/blob/main/context/FETTLE.md). You don't usually need to — this skill carries the workflow.
 
 ## What fettle is (one paragraph)
 
@@ -72,7 +72,7 @@ Then run these in parallel:
 
 For nested layouts, `audits/` itself must exist before `fettle init audits/backend` runs — fettle init requires the parent directory. Run `mkdir -p <repo>/audits` once before the first nested init.
 
-For a single-language repo, default to a flat `audits/` at the repo root. (Why `audits/`: matches `FETTLE.md`'s canonical examples, neutral about content — works for refactors, doc audits, convention enforcement, security passes — and short.) Explain to the user what this directory will hold (scan config, prompts, run results) and let them rename it if they want.
+For a single-language repo, default to a flat `audits/` at the repo root. (Why `audits/`: matches `context/FETTLE.md`'s canonical examples, neutral about content — works for refactors, doc audits, convention enforcement, security passes — and short.) Explain to the user what this directory will hold (scan config, prompts, run results) and let them rename it if they want.
 
 Whatever they pick is `<project>` for the rest of this skill — an absolute path, e.g. `<repo>/audits` (flat) or `<repo>/audits/backend` (nested).
 

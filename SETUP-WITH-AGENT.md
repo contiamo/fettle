@@ -2,7 +2,7 @@
 
 **This file is written for a coding agent to read on the user's behalf.** If you are a human, hand the URL of this file to your coding agent and ask it to follow these instructions.
 
-Fettle is a file-oriented LLM audit harness: it runs an agent per file matching the user's globs and records findings to JSONL, with a local web UI for triage. See `FETTLE.md` in this repo for the full design.
+Fettle is a file-oriented LLM audit harness: it runs an agent per file matching the user's globs and records findings to JSONL, with a local web UI for triage. See `context/FETTLE.md` in this repo for the full design.
 
 ## Instructions for the agent
 

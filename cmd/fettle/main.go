@@ -1,6 +1,6 @@
 // Command fettle is the CLI for the fettle audit harness.
 //
-// See FETTLE.md at the repo root for the design.
+// See context/FETTLE.md for the design.
 package main
 
 import (
@@ -36,7 +36,7 @@ alongside the data. The project directory is whatever folder you
 named at ` + "`fettle init`" + ` time; it's marked by a fettle.json
 file at its root.
 
-See FETTLE.md at the repo root for the full design.`,
+See context/FETTLE.md for the full design.`,
 	// Version is populated in init() from runtime build info so the
 	// printed value reflects how the binary was actually built
 	// (tagged release, pseudo-version, or local devel).

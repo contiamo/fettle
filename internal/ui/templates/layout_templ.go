@@ -596,7 +596,7 @@ func themeMenu() templ.Component {
 // reviewerIndicator renders a small "Reviewing as: <slug>" pill in
 // the header. The slug links to /identity so the user can change it,
 // passing the current page as ?next= so save-and-continue lands them
-// back where they were. With no identity configured (FETTLE.md:732
+// back where they were. With no identity configured (context/FETTLE.md
 // first-edit state) it renders a "Set identity" prompt instead.
 func reviewerIndicator() templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {

@@ -17,7 +17,7 @@ Each finding lands as one JSONL line — `file`, `line`, `title`, `description`,
 
 The agent will install fettle, install the fettle skill into its own skill directory, then walk you through choosing what to scan, tailoring the find prompt to your domain, doing a smoke test, running the real find pass, and launching the UI. You don't type a fettle command yourself.
 
-If you'd rather drive manually, see [`FETTLE.md`](FETTLE.md) for the full CLI. Quick install:
+If you'd rather drive manually, see [`FETTLE.md`](context/FETTLE.md) for the full CLI. Quick install:
 
 ```bash
 go install github.com/contiamo/fettle/cmd/fettle@latest   # latest tagged release
@@ -59,7 +59,7 @@ No service, no database. Every run is a folder under `<project>/runs/`. JSONL fi
 
 ## See also
 
-- [`FETTLE.md`](FETTLE.md) — full design doc: project layout, CLI reference, manifest shape, resolution rules, atomicity model.
+- [`FETTLE.md`](context/FETTLE.md) — full design doc: project layout, CLI reference, manifest shape, resolution rules, atomicity model.
 - [`SETUP-WITH-AGENT.md`](SETUP-WITH-AGENT.md) — the bootstrap markdown your agent reads to drive setup.
 
 ## Status
