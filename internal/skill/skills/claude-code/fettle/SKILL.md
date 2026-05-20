@@ -144,9 +144,7 @@ Once the user has picked, **edit `<project>/instructions/find.md` directly** (us
 
 ### 5. Smoke test
 
-**Pick the smoke files deliberately.** `--limit 3` on its own scans whatever the walker yields first — often trivial files (`__init__.py`, stubs, generated headers) that exercise none of the prompt's categories and give the smoke run no signal. Use `Glob` / `Grep` / `Read` to pick 3 substantial files that actually exercise the categories you pinned in `find.md` — ideally one per category, or a "rich" file that touches several. For a "test quality" category pick a non-trivial test; for "conventions" pick a file you suspect violates them; for "duplication" pick a file you suspect has cousins elsewhere.
-
-Pass them as explicit `--include`s alongside `--limit 3 -c 1`:
+**Pick 3 files that exercise the categories you pinned in `find.md`** — not whatever the walker yields first (often trivial: `__init__.py`, stubs, generated headers). Pass them as explicit `--include`s:
 
 ```bash
 fettle --project-dir <project> run find --limit 3 -c 1 \
